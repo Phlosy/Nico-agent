@@ -39,6 +39,12 @@ flowchart LR
 
 第一版采用模块化单体控制面而不是微服务。API 与 Worker 是不同进程，共享同一领域包和数据库事务约束，未来可按负载拆分。
 
+## Goal B 已实现切片
+
+当前可运行实现包含 FastAPI API、独立基础设施监督 Worker、React/Vite Web，以及由 Compose 管理的 PostgreSQL/pgvector、Redis、MinIO。API 的 liveness/readiness 与 Web 状态页是第一个真实垂直切片。
+
+Worker 目前只验证独立部署与共享包边界并监督依赖，不领取业务任务；持久化 Run 租约从 Goal C/D 实现。数据库首个 Alembic revision 只启用 `pgcrypto` 和 `vector`，除 `alembic_version` 外不创建业务表。
+
 ## 代码拓扑目标
 
 ```text

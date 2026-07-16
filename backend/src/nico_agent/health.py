@@ -40,18 +40,9 @@ class ReadinessReport(BaseModel):
     @classmethod
     def from_components(cls, components: Mapping[str, ComponentHealth]) -> ReadinessReport:
         values = dict(components)
-        all_up = values and all(item.status == "up" for item in values.values())
+        all_up = bool(values) and all(item.status == "up" for item in values.values())
         status = "ready" if all_up else "not_ready"
         return cls(status=status, components=values)
-
-    @classmethod
-    def ready_for_testing(cls) -> ReadinessReport:
-        return cls.from_components(
-            {
-                name: ComponentHealth(status="up", latency_ms=0)
-                for name in ("postgres", "redis", "minio")
-            }
-        )
 
 
 class HealthServiceProtocol(Protocol):
@@ -79,7 +70,7 @@ class HealthService:
             detail = f"TimeoutError: dependency check exceeded {self._timeout_seconds:g}s"
             result = ComponentHealth(status="down", latency_ms=_elapsed_ms(started), detail=detail)
         except Exception as exc:  # noqa: BLE001 - health endpoints must aggregate all failures
-            detail = f"{type(exc).__name__}: {str(exc)[:200]}"
+            detail = f"{type(exc).__name__}: dependency check failed"
             result = ComponentHealth(status="down", latency_ms=_elapsed_ms(started), detail=detail)
         else:
             result = ComponentHealth(status="up", latency_ms=_elapsed_ms(started))
@@ -99,7 +90,7 @@ class InfrastructureResources:
     @classmethod
     def create(cls, settings: Settings) -> InfrastructureResources:
         return cls(
-            engine=create_async_engine(settings.database_url, pool_pre_ping=True),
+            engine=create_async_engine(settings.resolved_database_url, pool_pre_ping=True),
             redis=Redis.from_url(settings.redis_url, decode_responses=True),
             http=httpx.AsyncClient(),
         )

@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
 
 
 class Settings(BaseSettings):
@@ -26,7 +27,12 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, ge=1, le=65535)
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
 
-    database_url: str = "postgresql+asyncpg://nico:nico@localhost:5432/nico_agent"
+    database_url: str | None = None
+    database_host: str = "localhost"
+    database_port: int = Field(default=5432, ge=1, le=65535)
+    database_name: str = "nico_agent"
+    database_user: str = "nico"
+    database_password: str = "nico"
     redis_url: str = "redis://localhost:6379/0"
     minio_url: str = "http://localhost:9000"
     dependency_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
@@ -41,6 +47,19 @@ class Settings(BaseSettings):
     @classmethod
     def remove_minio_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @property
+    def resolved_database_url(self) -> str:
+        if self.database_url is not None:
+            return self.database_url
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.database_user,
+            password=self.database_password,
+            host=self.database_host,
+            port=self.database_port,
+            database=self.database_name,
+        ).render_as_string(hide_password=False)
 
 
 @lru_cache

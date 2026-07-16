@@ -76,7 +76,11 @@ services:
     environment:
       NICO_ENVIRONMENT: development
       NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
-      NICO_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nico}:${POSTGRES_PASSWORD:-nico-change-me}@postgres:5432/${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_HOST: postgres
+      NICO_DATABASE_PORT: 5432
+      NICO_DATABASE_NAME: ${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_USER: ${POSTGRES_USER:-nico}
+      NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
       NICO_REDIS_URL: redis://redis:6379/0
       NICO_MINIO_URL: http://minio:9000
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
@@ -114,7 +118,11 @@ services:
     environment:
       NICO_ENVIRONMENT: development
       NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
-      NICO_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nico}:${POSTGRES_PASSWORD:-nico-change-me}@postgres:5432/${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_HOST: postgres
+      NICO_DATABASE_PORT: 5432
+      NICO_DATABASE_NAME: ${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_USER: ${POSTGRES_USER:-nico}
+      NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
       NICO_REDIS_URL: redis://redis:6379/0
       NICO_MINIO_URL: http://minio:9000
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}

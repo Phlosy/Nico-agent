@@ -1,0 +1,25 @@
+captured_at=2026-07-16T15:44:13Z
+Python 3.12.7
+v20.19.5
+10.8.2
+Docker version 29.3.0, build 5927d80
+Docker Compose version v5.1.0
+fastapi=0.139.2
+sqlalchemy=2.0.51
+alembic=1.18.5
+pydantic-settings=2.14.2
+redis-py=8.0.1
+nico-agent-web@0.1.0 /home/node7/xpk/Nico-agent/frontend
+├── @tanstack/react-query@5.101.2
+├── @testing-library/jest-dom@6.9.1
+├── @testing-library/react@16.3.2
+├── @testing-library/user-event@14.6.1
+├── @types/react-dom@19.2.3
+├── @types/react@19.2.17
+├── @vitejs/plugin-react@6.0.3
+├── jsdom@29.1.1
+├── react-dom@19.2.7
+├── react@19.2.7
+├── typescript@5.9.3
+├── vite@8.1.5
+└── vitest@4.1.10

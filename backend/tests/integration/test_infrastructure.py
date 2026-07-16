@@ -23,7 +23,7 @@ def settings() -> Settings:
 
 @pytest.mark.asyncio
 async def test_migration_enables_extensions_without_goal_c_tables(settings: Settings) -> None:
-    engine = create_async_engine(settings.database_url)
+    engine = create_async_engine(settings.resolved_database_url)
     try:
         async with engine.connect() as connection:
             extensions = set(

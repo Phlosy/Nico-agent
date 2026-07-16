@@ -34,8 +34,17 @@ function isReadinessReport(value: unknown): value is ReadinessReport {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ReadinessReport>;
   if (candidate.status !== "ready" && candidate.status !== "not_ready") return false;
-  if (typeof candidate.checked_at !== "string") return false;
-  if (!candidate.components || typeof candidate.components !== "object") return false;
+  if (
+    typeof candidate.checked_at !== "string" ||
+    Number.isNaN(Date.parse(candidate.checked_at))
+  )
+    return false;
+  if (
+    !candidate.components ||
+    typeof candidate.components !== "object" ||
+    Array.isArray(candidate.components)
+  )
+    return false;
 
   return Object.values(candidate.components).every(
     (component) =>
@@ -43,7 +52,8 @@ function isReadinessReport(value: unknown): value is ReadinessReport {
       typeof component === "object" &&
       (component.status === "up" || component.status === "down") &&
       typeof component.latency_ms === "number" &&
+      Number.isFinite(component.latency_ms) &&
+      component.latency_ms >= 0 &&
       (component.detail === null || typeof component.detail === "string"),
   );
 }
-

@@ -15,9 +15,11 @@ class StubHealthService:
 
 
 @pytest.mark.asyncio
-async def test_supervisor_once_reports_readiness_without_claiming_work(caplog) -> None:
+async def test_supervisor_once_reports_readiness_without_claiming_work(
+    caplog, ready_report: ReadinessReport
+) -> None:
     caplog.set_level(logging.INFO)
-    service = StubHealthService(ReadinessReport.ready_for_testing())
+    service = StubHealthService(ready_report)
 
     ready = await supervise_once(service)
 

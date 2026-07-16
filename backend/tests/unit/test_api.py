@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -27,8 +29,10 @@ def make_client(report: ReadinessReport) -> tuple[AsyncClient, StubHealthService
 
 
 @pytest.mark.asyncio
-async def test_liveness_does_not_touch_external_dependencies() -> None:
-    client, service = make_client(ReadinessReport.ready_for_testing())
+async def test_liveness_does_not_touch_external_dependencies(
+    ready_report: ReadinessReport,
+) -> None:
+    client, service = make_client(ready_report)
 
     async with client:
         response = await client.get("/api/v1/health/live")
@@ -40,8 +44,10 @@ async def test_liveness_does_not_touch_external_dependencies() -> None:
 
 
 @pytest.mark.asyncio
-async def test_readiness_returns_200_when_every_component_is_up() -> None:
-    client, service = make_client(ReadinessReport.ready_for_testing())
+async def test_readiness_returns_200_when_every_component_is_up(
+    ready_report: ReadinessReport,
+) -> None:
+    client, service = make_client(ready_report)
 
     async with client:
         response = await client.get(
@@ -71,8 +77,8 @@ async def test_readiness_returns_503_with_component_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_request_id_is_replaced() -> None:
-    client, _ = make_client(ReadinessReport.ready_for_testing())
+async def test_invalid_request_id_is_replaced(ready_report: ReadinessReport) -> None:
+    client, _ = make_client(ready_report)
 
     async with client:
         response = await client.get(
@@ -84,8 +90,37 @@ async def test_invalid_request_id_is_replaced() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openapi_describes_health_contract() -> None:
-    client, _ = make_client(ReadinessReport.ready_for_testing())
+async def test_unhandled_errors_return_a_safe_body_and_request_id(
+    ready_report: ReadinessReport,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR)
+    service = StubHealthService(ready_report)
+    app = create_app(
+        settings=Settings(environment="test", _env_file=None),
+        health_service=service,
+    )
+
+    @app.get("/test/unhandled-error")
+    async def fail() -> None:
+        raise RuntimeError("secret internal detail")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/test/unhandled-error",
+            headers={"X-Request-ID": "failed-request-1"},
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal Server Error"}
+    assert response.headers["x-request-id"] == "failed-request-1"
+    assert "secret internal detail" not in response.text
+    assert "secret internal detail" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_openapi_describes_health_contract(ready_report: ReadinessReport) -> None:
+    client, _ = make_client(ready_report)
 
     async with client:
         response = await client.get("/openapi.json")

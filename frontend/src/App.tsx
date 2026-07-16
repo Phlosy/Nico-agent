@@ -14,6 +14,13 @@ const COMPONENTS = [
   { key: "minio", name: "MinIO", short: "IO", purpose: "Artifact 对象存储" },
 ] as const;
 
+const TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
 export function App() {
   const readiness = useQuery({
     queryKey: ["platform-readiness"],
@@ -23,12 +30,7 @@ export function App() {
   });
 
   const checkedAt = readiness.data?.checked_at
-    ? new Intl.DateTimeFormat("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }).format(new Date(readiness.data.checked_at))
+    ? TIME_FORMATTER.format(new Date(readiness.data.checked_at))
     : null;
 
   return (
@@ -118,14 +120,7 @@ function StatusSummary({
   failed: boolean;
   ready: boolean;
 }) {
-  const state = pending ? "pending" : failed || !ready ? "degraded" : "ready";
-  const label = pending
-    ? "正在建立连接"
-    : failed
-      ? "状态读取失败"
-      : ready
-        ? "平台基础设施已就绪"
-        : "基础设施需要关注";
+  const { state, label } = summaryPresentation(pending, failed, ready);
 
   return (
     <div className={`summary ${state}`} role="status">
@@ -136,6 +131,13 @@ function StatusSummary({
       </div>
     </div>
   );
+}
+
+function summaryPresentation(pending: boolean, failed: boolean, ready: boolean) {
+  if (pending) return { state: "pending", label: "正在建立连接" };
+  if (failed) return { state: "degraded", label: "状态读取失败" };
+  if (ready) return { state: "ready", label: "平台基础设施已就绪" };
+  return { state: "degraded", label: "基础设施需要关注" };
 }
 
 function ComponentCard({
@@ -177,4 +179,3 @@ function ComponentCard({
     </article>
   );
 }
-

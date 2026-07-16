@@ -11,4 +11,5 @@ node_modules/
 frontend/dist/
 frontend/coverage/
 *.log
+!artifacts/goals/**/*.log
 .DS_Store

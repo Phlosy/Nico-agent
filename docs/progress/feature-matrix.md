@@ -26,12 +26,13 @@
 | 委派、审核、退回与汇总 Workflow | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 状态边界与路线图已完成 | 仅设计 |
 | Plugin Manifest、发现、校验与启停 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 插件 ADR 已完成 | 仅设计 |
 | Quant Team Plugin | 边界已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 路线图已完成 | 未实现 |
-| REST API 与 OpenAPI | 高层已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 系统上下文已完成 | 未实现 |
+| REST API 与 OpenAPI | 高层已设计 | 健康检查与 OpenAPI 基础已实现 | 6 项 API 单测 | 真实依赖 readiness 已通过 | HTTP/OpenAPI smoke 已通过 | `docs/api.md` | Goal B 基础已验证；领域 API 未实现 |
 | SSE Event Stream | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 补读语义已完成 | 仅设计 |
 | Python SDK | 边界已设计 | 未实现 | 未实现 | 未实现 | 未实现 | SDK 约束已完成 | 未实现 |
 | TypeScript SDK | 边界已设计 | 未实现 | 未实现 | 未实现 | 未实现 | SDK 约束已完成 | 未实现 |
-| Web Console | 信息范围已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 路线图已完成 | 未实现 |
+| Web Console | 信息范围已设计 | 真实基础设施状态页已实现 | 4 项组件测试 | 经 Nginx/API 验证 | 桌面/移动与故障 E2E 已通过 | 开发与测试文档已完成 | Goal B 骨架已验证；业务 Console 未实现 |
 | API Key/JWT 与 Secret 隔离 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 多租户/工具边界已完成 | 仅设计 |
-| PostgreSQL/pgvector/Redis/MinIO | 已决策 | 未实现 | 未实现 | 未实现 | 未实现 | ADR 已完成 | 仅设计 |
-| Docker Compose 与一键脚本 | 已规划 | 未实现 | 不适用 | 未实现 | 未实现 | Goal B 出口已定义 | 未实现 |
-| 全量单元、集成、故障与 E2E 测试 | 已规划 | 未实现 | 未实现 | 未实现 | 未实现 | 各 Goal 出口已定义 | 未实现 |
+| 配置、结构化日志与健康检查 | 已设计 | Pydantic Settings、JSON 日志、关联 ID、并发探针已实现 | 10 项相关单测 | 三类真实依赖已通过 | 健康/降级/恢复已通过 | API/开发文档已完成 | Goal B 已验证 |
+| PostgreSQL/pgvector/Redis/MinIO | 已决策 | Compose 与扩展迁移已实现 | 探针单测已完成 | 4 项真实依赖测试通过 | Redis 故障/恢复已通过 | ADR 与开发文档已完成 | Goal B 已验证；尚无业务 Schema |
+| Docker Compose 与一键脚本 | 已规划 | 7 服务拓扑及 7 个生命周期脚本已实现 | Shell/Compose 静态校验通过 | 镜像、健康、Bucket、清理已验证 | `verify-goal-b.sh` 通过 | 开发/测试文档已完成 | Goal B 已验证 |
+| 全量单元、集成、故障与 E2E 测试 | 已规划 | Goal B 测试框架与出口已实现 | 后端 16 + 前端 7 通过 | Goal B 集成 4 项通过 | Goal B E2E/故障/UI 通过 | `docs/testing.md` | Goal B 范围已验证；全平台仍待后续 Goal |

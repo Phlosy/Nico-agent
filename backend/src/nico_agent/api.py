@@ -61,12 +61,18 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 },
             )
             return response
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            logger.error(
                 "http request failed",
-                extra={"method": request.method, "path": request.url.path},
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "exception_type": type(exc).__name__,
+                },
             )
-            raise
+            response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+            response.headers["X-Request-ID"] = request_id
+            return response
         finally:
             request_id_context.reset(token)
 

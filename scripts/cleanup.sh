@@ -13,7 +13,8 @@ fi
 if [[ "${1:-}" == "--all" ]]; then
   rm -rf "$ROOT_DIR/.venv" "$ROOT_DIR/frontend/node_modules" "$ROOT_DIR/frontend/dist"
   log "removed containers, volumes and local dependency directories"
+elif [[ "${1:-}" == "--volumes" ]]; then
+  log "removed platform containers and data volumes"
 else
   log "removed platform containers; pass --volumes to remove data or --all for local dependencies"
 fi
-

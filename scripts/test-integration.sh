@@ -30,12 +30,20 @@ for attempt in {1..30}; do
 done
 
 export NICO_ENVIRONMENT=test
-export NICO_DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-nico}:${POSTGRES_PASSWORD:-nico-change-me}@localhost:${POSTGRES_PORT:-15432}/${POSTGRES_DB:-nico_agent}"
+unset NICO_DATABASE_URL
+export NICO_DATABASE_HOST=localhost
+export NICO_DATABASE_PORT="${POSTGRES_PORT:-15432}"
+export NICO_DATABASE_NAME="${POSTGRES_DB:-nico_agent}"
+export NICO_DATABASE_USER="${POSTGRES_USER:-nico}"
+export NICO_DATABASE_PASSWORD="${POSTGRES_PASSWORD:-nico-change-me}"
 export NICO_REDIS_URL="redis://localhost:${REDIS_PORT:-16379}/0"
 export NICO_MINIO_URL="http://localhost:${MINIO_API_PORT:-19010}"
 export RUN_INTEGRATION=1
 
 log "applying Alembic migrations"
+"$ROOT_DIR/.venv/bin/alembic" -c "$ROOT_DIR/backend/alembic.ini" upgrade head
+log "proving the extension migration can roll back and reapply"
+"$ROOT_DIR/.venv/bin/alembic" -c "$ROOT_DIR/backend/alembic.ini" downgrade base
 "$ROOT_DIR/.venv/bin/alembic" -c "$ROOT_DIR/backend/alembic.ini" upgrade head
 log "running real dependency integration tests"
 "$ROOT_DIR/.venv/bin/pytest" "$ROOT_DIR/backend/tests/integration"
