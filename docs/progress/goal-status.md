@@ -5,7 +5,7 @@
 | Goal | 状态 | 完成比例 | 验收结果 | 证据目录 | 当前阻塞 |
 | ---- | -- | ---: | ---- | ---- | ---- |
 | A | Verified | 100% | `scripts/verify-goal-a.sh` 通过 | `artifacts/goals/goal-a/20260716T142433Z/` | 无 |
-| B | Not Started | 0% | 未执行 | 尚未创建 | 必须先读取 Goal A Handoff |
+| B | In Progress | 10% | 基线与验收契约已锁定 | 执行完成时归档 | 无 |
 | C | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal B Verified |
 | D | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal C Verified |
 | E | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal D Verified |
