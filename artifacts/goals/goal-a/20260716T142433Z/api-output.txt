@@ -1,0 +1,1 @@
+NOT_APPLICABLE: Goal A intentionally contains no API implementation or static API response. API and OpenAPI scaffolding begins in Goal B; domain APIs begin in Goal C.

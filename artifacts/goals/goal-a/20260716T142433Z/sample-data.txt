@@ -1,0 +1,1 @@
+NOT_APPLICABLE: Goal A defines architecture only and creates no demo domain data. Demo fixtures begin with implemented models and the quant plugin workflow.

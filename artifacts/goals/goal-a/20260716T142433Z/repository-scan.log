@@ -1,0 +1,13 @@
+Repository: /home/node7/xpk/Nico-agent
+Baseline commit: 489899e388f1d5a9171d3bdb163de27a1c6c386a
+Initial branch: main
+Working branch: feat/agent-platform-goal-a
+Initial tracked files: README.md
+Initial README content: # Nico-agent
+Python application: not found
+JavaScript/TypeScript application: not found
+Database migrations: not found
+Docker/Compose: not found
+Hermes or another agent framework: not found
+Reusable application code: none
+Assessment: greenfield repository; Goal A documentation baseline required before code.

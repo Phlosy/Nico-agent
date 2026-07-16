@@ -1,0 +1,7 @@
+baseline_commit=489899e388f1d5a9171d3bdb163de27a1c6c386a
+branch=feat/agent-platform-goal-a
+git=2.43.0
+bash=5.2.21
+python=3.12.7
+node=20.19.5
+taskbook_sha256=7088fddfb7fdbe6e43f81db1225f6e984ffc0c0ebd98904ef310f02b371ad604
