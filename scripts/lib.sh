@@ -61,3 +61,25 @@ wait_for_url() {
   die "$label did not become ready: $url"
 }
 
+wait_for_service_health() {
+  local service="$1"
+  local attempts="${2:-30}"
+  local container_id
+  container_id="$("${COMPOSE[@]}" ps --quiet "$service")"
+  [[ -n "$container_id" ]] || die "service has no container: $service"
+
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    local health_state
+    health_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")"
+    if [[ "$health_state" == "healthy" ]]; then
+      log "$service container is healthy"
+      return 0
+    fi
+    if [[ "$health_state" == "unhealthy" || "$health_state" == "exited" ]]; then
+      "${COMPOSE[@]}" logs --no-color --tail=50 "$service" >&2
+      die "$service entered $health_state state"
+    fi
+    sleep 2
+  done
+  die "$service container did not become healthy"
+}

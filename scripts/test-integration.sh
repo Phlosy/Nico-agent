@@ -21,6 +21,14 @@ for attempt in {1..30}; do
   sleep 2
 done
 
+for attempt in {1..30}; do
+  if "${COMPOSE[@]}" exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then
+    break
+  fi
+  [[ "$attempt" -eq 30 ]] && die "Redis did not become ready"
+  sleep 2
+done
+
 export NICO_ENVIRONMENT=test
 export NICO_DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER:-nico}:${POSTGRES_PASSWORD:-nico-change-me}@localhost:${POSTGRES_PORT:-15432}/${POSTGRES_DB:-nico_agent}"
 export NICO_REDIS_URL="redis://localhost:${REDIS_PORT:-16379}/0"

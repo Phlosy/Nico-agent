@@ -35,5 +35,12 @@ assert "/api/v1/health/ready" in openapi["paths"]
 assert "Nico Agent Platform" in index
 PY
 
+worker_id="$("${COMPOSE[@]}" ps --quiet worker)"
+init_id="$("${COMPOSE[@]}" ps --all --quiet minio-init)"
+[[ "$(docker inspect --format '{{.State.Running}}' "$worker_id")" == "true" ]] \
+  || die "worker is not running"
+[[ "$(docker inspect --format '{{.State.ExitCode}}' "$init_id")" == "0" ]] \
+  || die "MinIO bucket initialization failed"
+
 "${COMPOSE[@]}" ps
 log "E2E passed; the platform remains running at $WEB_BASE (cleanup with scripts/cleanup.sh)"
