@@ -633,12 +633,9 @@ class ControlPlaneService:
             previous = await self._run(session, context, run_id, for_update=True)
             if RunStatus(previous.status) not in {
                 RunStatus.FAILED,
-                RunStatus.CANCELLED,
                 RunStatus.TIMED_OUT,
             }:
-                raise DomainConflict(
-                    "RUN_NOT_RETRYABLE", "only a terminal unsuccessful run can retry"
-                )
+                raise DomainConflict("RUN_NOT_RETRYABLE", "only failed or timed-out runs can retry")
             task = await self._task(session, context, previous.task_id, for_update=True)
             if TaskStatus(task.status) not in {TaskStatus.RUNNING, TaskStatus.REVISION_REQUIRED}:
                 raise DomainConflict("TASK_NOT_RUNNABLE", "task state does not allow another run")

@@ -1,0 +1,14 @@
+scripts/verify-goal-c.sh
+scripts/test.sh
+scripts/test-integration.sh
+scripts/e2e-goal-c.sh
+.venv/bin/ruff check backend
+.venv/bin/ruff format --check backend
+.venv/bin/pytest backend/tests/unit
+alembic -c backend/alembic.ini downgrade base
+alembic -c backend/alembic.ini upgrade head
+docker compose up --detach --build
+curl GET /api/v1/runs/{run_id} with X-Tenant-ID
+curl GET /api/v1/runs/{run_id} with a different X-Tenant-ID
+scripts/cleanup.sh --volumes
+

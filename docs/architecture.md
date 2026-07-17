@@ -39,11 +39,13 @@ flowchart LR
 
 第一版采用模块化单体控制面而不是微服务。API 与 Worker 是不同进程，共享同一领域包和数据库事务约束，未来可按负载拆分。
 
-## Goal B 已实现切片
+## Goal B/C 已实现切片
 
-当前可运行实现包含 FastAPI API、独立基础设施监督 Worker、React/Vite Web，以及由 Compose 管理的 PostgreSQL/pgvector、Redis、MinIO。API 的 liveness/readiness 与 Web 状态页是第一个真实垂直切片。
+当前可运行实现包含 FastAPI API、独立基础设施监督 Worker、React/Vite Web，以及由 Compose 管理的 PostgreSQL/pgvector、Redis、MinIO。Goal C 已在基础设施垂直切片上增加通用控制面：Tenant/Project、Agent/AgentVersion、Task/Run/RunStep、Event/AuditRecord 的持久化模型、事务服务和 REST API。
 
-Worker 目前只验证独立部署与共享包边界并监督依赖，不领取业务任务；持久化 Run 租约从 Goal C/D 实现。数据库首个 Alembic revision 只启用 `pgcrypto` 和 `vector`，除 `alembic_version` 外不创建业务表。
+API 将每个领域操作绑定到 `TenantContext`。租户业务事务先切换到无 `BYPASSRLS` 的 `nico_runtime` 角色，再用事务级 `app.tenant_id` 设置驱动 PostgreSQL `FORCE ROW LEVEL SECURITY`；复合外键同时阻止跨租户对象关联。状态变化、Event 和 AuditRecord 在一个事务内提交，客户端以 `expected_revision` 防止并发覆盖。
+
+Worker 仍只监督基础设施，不领取或执行 Run。Run 表已具备待执行状态、attempt、租约、心跳、检查点和预算字段，为 Goal D 的 Runtime Provider/Worker 执行闭环提供权威存储，但领取、心跳、恢复和 Hermes 均未提前实现。
 
 ## 代码拓扑目标
 

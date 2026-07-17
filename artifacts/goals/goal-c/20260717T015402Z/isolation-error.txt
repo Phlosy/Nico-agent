@@ -1,0 +1,8 @@
+HTTP/1.1 404 Not Found
+date: Fri, 17 Jul 2026 01:56:27 GMT
+server: uvicorn
+content-length: 176
+content-type: application/json
+x-request-id: e1a63654-1f5b-4925-808e-6f2024294bda
+
+{"code":"RESOURCE_NOT_FOUND","message":"run afa828fe-f276-429b-86ca-a434dd002815 was not found","details":{"entity":"run","resource_id":"afa828fe-f276-429b-86ca-a434dd002815"}}

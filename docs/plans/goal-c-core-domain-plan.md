@@ -1,6 +1,6 @@
 # Goal C：核心领域与租户隔离实施计划
 
-- 状态：In Progress
+- 状态：Verified
 - 日期：2026-07-17
 - 基线：Goal B commit `5408ab1`
 
@@ -36,3 +36,5 @@
 ## 阶段成果
 
 完成后更新 Goal Status、Feature Matrix、API/架构/状态机文档，保存 `artifacts/goals/goal-c/<timestamp>/`，并创建 Goal C Handoff。只有全部出口通过才标记 Verified。
+
+最终验收于 `2026-07-17` 通过，证据目录为 `artifacts/goals/goal-c/20260717T015402Z/`。

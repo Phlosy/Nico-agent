@@ -36,6 +36,16 @@ classDiagram
 - 所有状态使用枚举和显式转换函数；转换与 Event 在同一事务提交。
 - JSON 配置必须通过版本化 Pydantic/JSON Schema 校验，不能把任意 JSON 当作无约束领域模型。
 
+## Goal C 实现边界
+
+Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、AgentVersion、Task、Run、RunStep、Event 和 AuditRecord。其余目录对象仍是后续 Goal 的设计基线，不能据此认为已经实现。
+
+- 租户业务表均含 `tenant_id`；对象关系使用包含 `tenant_id` 的复合外键，数据库运行角色启用 `FORCE RLS`。
+- AgentVersion 包含角色、职责边界、目标、模型/工具/记忆/技能策略、插件引用、预算、运行配置与内容 Hash；发布和回滚只切换不可变版本状态与 Agent 指针。
+- Task 是目标，Run 是一次尝试。Run 固定 AgentVersion；Failed/TimedOut Run 可重试并创建递增 `attempt` 和 `retry_of_run_id` 的新行，Cancelled 同时终止 Task，不可重试。
+- Run 已预留 lease、heartbeat、checkpoint、cost、result/error；Goal C 不实现 Worker 领取和 Runtime 调用。
+- Event 与 AuditRecord 都是追加式记录并共享 correlation ID；Run Event 可以按 sequence 回放。
+
 ## 核心对象目录
 
 | 对象 | 数据职责与关键字段 | 状态/生命周期 | 可变与删除策略 | 审计要求 |

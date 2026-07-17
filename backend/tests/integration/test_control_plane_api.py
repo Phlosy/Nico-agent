@@ -346,6 +346,33 @@ async def test_invalid_transitions_and_revisions_are_stable_and_atomic(
     assert restore_without_version.status_code == 400
     assert restore_without_version.json()["code"] == "AGENT_VERSION_REQUIRED"
 
+    ready = await create_ready_agent(client, headers, uuid4().hex[:8])
+    assigned = (
+        await client.post(
+            "/api/v1/tasks",
+            json={
+                "project_id": project["id"],
+                "title": "Cancelled runs stay cancelled",
+                "assignee_agent_id": ready["id"],
+            },
+            headers=headers,
+        )
+    ).json()
+    pending = (
+        await client.post(f"/api/v1/tasks/{assigned['id']}/runs", json={}, headers=headers)
+    ).json()
+    cancelled = await client.post(
+        f"/api/v1/runs/{pending['id']}/cancel",
+        json={"expected_revision": pending["revision"]},
+        headers=headers,
+    )
+    assert cancelled.json()["status"] == "cancelled"
+    retry_cancelled = await client.post(
+        f"/api/v1/runs/{pending['id']}/retry", json={}, headers=headers
+    )
+    assert retry_cancelled.status_code == 400
+    assert retry_cancelled.json()["code"] == "RUN_NOT_RETRYABLE"
+
 
 @pytest.mark.asyncio
 async def test_api_tenant_context_cannot_read_or_link_another_tenant(client: AsyncClient) -> None:

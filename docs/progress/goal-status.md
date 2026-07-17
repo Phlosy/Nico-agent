@@ -6,7 +6,7 @@
 | ---- | -- | ---: | ---- | ---- | ---- |
 | A | Verified | 100% | `scripts/verify-goal-a.sh` 通过 | `artifacts/goals/goal-a/20260716T142433Z/` | 无 |
 | B | Verified | 100% | `scripts/verify-goal-b.sh` 通过；故障/UI/清理验收通过 | `artifacts/goals/goal-b/20260716T154321Z/` | 无 |
-| C | In Progress | 10% | 范围、租户上下文与验收契约已锁定 | 执行完成时归档 | 无 |
+| C | Verified | 100% | `scripts/verify-goal-c.sh` 通过；31 后端单测、7 前端测试、10 真实集成与核心 API E2E 通过 | `artifacts/goals/goal-c/20260717T015402Z/` | 无 |
 | D | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal C Verified |
 | E | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal D Verified |
 | F | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal E Verified |

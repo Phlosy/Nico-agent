@@ -22,6 +22,29 @@ stateDiagram-v2
 
 Agent 的 Running 是派生/协调状态，不授权调用工具；Run 和 Tool Policy 才是执行权限来源。
 
+## AgentVersion
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Published: publish
+    Published --> Superseded: publish replacement
+    Superseded --> Published: rollback
+```
+
+发布后的配置行不提供修改 API；回滚重新激活既有不可变版本。
+
+## Project
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active
+    Active --> Archived: archive
+    Archived --> Active: restore (reserved)
+```
+
+Goal C API 实现创建、读取、更新与归档；恢复转换已在领域规则中保留，尚未开放路由。
+
 ## Task
 
 ```mermaid
@@ -68,7 +91,25 @@ stateDiagram-v2
     Running --> TimedOut: deadline
 ```
 
-所有终态不可逆。Retry 创建新的 Pending Run，不把 Failed/Cancelled/TimedOut 改回 Running。
+所有终态不可逆。Failed/TimedOut 的 Retry 创建新的 Pending Run，不把旧 Run 改回 Running；Cancelled 同时终止 Task，不可重试。
+
+## RunStep
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Running: start
+    Pending --> Cancelled: cancel
+    Running --> Waiting: wait
+    Waiting --> Running: resume
+    Running --> Completed: commit output
+    Running --> Failed: commit error
+    Running --> Cancelled: cancel
+    Waiting --> Failed: terminal error
+    Waiting --> Cancelled: cancel
+```
+
+Completed、Failed、Cancelled 都是不可逆终态。RunStep 的状态、输出/错误、时间戳、Event 和 AuditRecord 在同一事务提交。
 
 ## Skill
 

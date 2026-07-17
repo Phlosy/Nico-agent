@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal B（项目骨架与基础设施）已实现并完成验收**。仓库可以启动 API、基础设施监督 Worker、Web 状态页、PostgreSQL/pgvector、Redis 与 MinIO；Agent、Task、Run 等业务能力仍未实现，将从 Goal C 开始交付。
+当前状态：**Goal C（Agent、Task、Run 核心模型）已完成并通过验收**。仓库已具备 Tenant/Project、Agent/AgentVersion、Task/Run/RunStep、Event/AuditRecord 的多租户持久化、状态机、REST API、PostgreSQL FORCE RLS 和真实 E2E。Worker 仍是基础设施监督进程；Runtime Provider 与 Hermes 从 Goal D 实现。
 
 ## 快速启动
 
@@ -39,6 +39,7 @@ scripts/cleanup.sh --volumes
 - [通用成长型多 Agent 服务平台实施任务书](docs/plans/agent-platform-implementation-taskbook.md)
 - [Goal A 阶段计划](docs/plans/goal-a-architecture-baseline-plan.md)
 - [Goal B 阶段计划](docs/plans/goal-b-infrastructure-plan.md)
+- [Goal C 阶段计划](docs/plans/goal-c-core-domain-plan.md)
 - [阶段路线图](docs/roadmap.md)
 - [Goal 状态](docs/progress/goal-status.md)
 - [功能矩阵](docs/progress/feature-matrix.md)
@@ -62,10 +63,10 @@ scripts/cleanup.sh --volumes
 scripts/test.sh
 ```
 
-完整 Goal B 验收（真实依赖、迁移、Compose 与 E2E）：
+完整 Goal C 验收（全量回归、真实依赖/RLS、Compose 与核心 API E2E）：
 
 ```bash
-scripts/verify-goal-b.sh
+scripts/verify-goal-c.sh
 ```
 
 Goal A 架构基线仍可独立验证：
@@ -74,4 +75,4 @@ Goal A 架构基线仍可独立验证：
 bash scripts/verify-goal-a.sh
 ```
 
-Goal C 开始前必须先阅读最新 Goal B Handoff、Feature Matrix 和相关 ADR。不得把 Goal B 的基础设施监督 Worker 当成 Run 执行器，也不得在未建立 TenantContext/RLS 测试前声称具备多租户业务隔离。
+Goal D 开始前必须先阅读最新 Goal C Handoff、Feature Matrix 和相关 ADR。不得把当前基础设施监督 Worker 当成 Run 执行器，也不得让 Hermes 直接依赖或修改控制面 ORM 模型。
