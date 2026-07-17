@@ -52,7 +52,7 @@ class MockRuntimeProvider:
         self._sessions: dict[str, _MockSession] = {}
 
     async def create_session(self, request: RuntimeSessionRequest) -> RuntimeSessionHandle:
-        external_id = f"mock:{request.run_id}"
+        external_id = request.resume_session_id or f"mock:{request.run_id}"
         session = self._sessions.get(external_id)
         if session is None:
             session = _MockSession(

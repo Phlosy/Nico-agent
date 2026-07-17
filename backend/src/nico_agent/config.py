@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     worker_heartbeat_seconds: float = Field(default=10.0, gt=0, le=1800)
     worker_concurrency: int = Field(default=1, ge=1, le=64)
     worker_id: str = Field(default="nico-worker", min_length=1, max_length=180)
+    hermes_command: str = Field(default="hermes", min_length=1, max_length=1000)
+    hermes_cwd: str | None = None
 
     @field_validator("log_level", mode="before")
     @classmethod

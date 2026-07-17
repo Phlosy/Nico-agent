@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 import signal
 
 from nico_agent.config import Settings, get_settings
@@ -14,7 +15,11 @@ from nico_agent.health import (
     build_health_service,
 )
 from nico_agent.logging import configure_logging
-from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
+from nico_agent.runtime import (
+    HermesRuntimeProvider,
+    MockRuntimeProvider,
+    RuntimeProviderRegistry,
+)
 from nico_agent.runtime.executor import RuntimeWorker
 
 logger = logging.getLogger(__name__)
@@ -55,6 +60,11 @@ async def worker_main(settings: Settings | None = None) -> None:
     providers = []
     if runtime_settings.environment != "production":
         providers.append(MockRuntimeProvider())
+    providers.append(
+        HermesRuntimeProvider(
+            tuple(shlex.split(runtime_settings.hermes_command)), cwd=runtime_settings.hermes_cwd
+        )
+    )
     registry = RuntimeProviderRegistry(providers)
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()

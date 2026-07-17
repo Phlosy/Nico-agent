@@ -83,6 +83,7 @@ class RuntimeSessionRequest(BaseModel):
     budgets: dict[str, Any] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
     event_sequence: int = Field(default=0, ge=0)
+    resume_session_id: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class RuntimeSessionHandle(BaseModel):

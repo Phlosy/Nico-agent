@@ -161,6 +161,7 @@ class RuntimeExecutionService:
                 budgets={**version.budgets, **run.budgets},
                 checkpoint=checkpoint,
                 event_sequence=runtime_session.last_event_sequence,
+                resume_session_id=runtime_session.external_session_id if recovering else None,
             )
             await session.flush()
             return PreparedRuntime(
