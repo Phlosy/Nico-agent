@@ -160,6 +160,8 @@ Run trajectory
 
 发布不会覆盖旧版本。来源 Run、Step、模型、工具、插件、代码版本和评估结果全部保留。收益或单次任务成功不能直接作为发布依据。
 
+Goal F 进一步冻结 scope-first 约束：向量查询先按 tenant、Active 状态、有效期和调用上下文计算出的 tenant/project/agent scope 过滤，再进行 pgvector 排序；`team` scope 在 Goal G 的 Team/Membership 存在前失败关闭。Candidate 与正式召回/解析路径隔离，Evaluation、Approval 和发布对象必须绑定同一 content hash。Skill 灰度使用独立 deployment，稳定发布和回滚只切换 active pointer。详见 [Memory 与 Skill 边界](memory-and-skill.md) 和 ADR-0010。
+
 ## Plugin 边界
 
 Plugin Manifest 注册 Role、Tool、Skill、Workflow、Evaluator、Knowledge、Schema 和 Permission。第一版只加载管理员安装的受信 Python 包或仓库内插件；未受信代码不能在 API 进程内执行。量化插件只存在于 `plugins/quant-team`，核心包不得出现交易指标、策略或实盘下单概念。
@@ -181,3 +183,4 @@ Plugin Manifest 注册 Role、Tool、Skill、Workflow、Evaluator、Knowledge、
 - [ADR-0006：共享库多租户隔离](decisions/ADR-0006-multitenancy-isolation.md)
 - [ADR-0008：Runtime 租约与 Hermes 进程边界](decisions/ADR-0008-runtime-leases-and-hermes-process-boundary.md)
 - [ADR-0009：平台唯一 Tool Gateway 与独立 Sandbox Runner](decisions/ADR-0009-tool-gateway-and-sandbox-boundary.md)
+- [ADR-0010：作用域先行的 Memory 与不可变 Skill 成长](decisions/ADR-0010-scoped-memory-and-versioned-skill-growth.md)

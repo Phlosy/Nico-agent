@@ -63,7 +63,7 @@ Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、Agen
 | RunStep | `run_id,sequence,kind,status,input,output,error,started_at,ended_at` | Pending/Running/Waiting/Completed/Failed/Cancelled | 完成后不可变 | 开始、完成、失败 |
 | ToolDefinition | `plugin_id,name,description,input_schema,output_schema,permission,timeout,retry,isolation,version` | Draft/Enabled/Disabled | 启用版本不可变 | 注册、启停、版本 |
 | ToolCall | `run_step_id,tool_version_id,idempotency_key,caller,args,result,error,retries,usage,timestamps` | Pending/Running/Succeeded/Failed/TimedOut/Cancelled | 执行后不可变 | 每次尝试及资源使用 |
-| Memory | `owner/scope/type,content,embedding,source_run_id,source_step_id,confidence,status,version,approved,expires_at,supersedes_id` | Candidate/Active/Invalidated/Expired/Deleted | 更新创建新版本；删除为 tombstone | 来源、审批、召回、失效 |
+| Memory | `memory_key,scope/type,content,confidence,status,version,expires_at,supersedes_id,content_hash`；embedding 位于版本化 chunk | Candidate/Active/Invalidated/Expired/Deleted | 更新创建新版本；删除为 tombstone；Candidate 不召回 | 完整来源、评价、审批、召回、失效 |
 | Skill | 稳定身份；`name,description,current_version_id,success_stats` | Candidate/Testing/Approved/Published/Deprecated/Disabled | active pointer 可回滚 | 状态与版本切换 |
 | SkillVersion | `skill_id,version,conditions,preconditions,input_schema,steps,tools,output_schema,validation,failure_modes,source_runs,content_hash` | Draft/Testing/Published/Rejected | 发布后不可变 | 生成、测试、批准、回滚 |
 | Artifact | `run_id,step_id,type,name,uri,content_hash,size,mime,metadata` | Available/Quarantined/Expired/Deleted | 对象不可覆盖；按策略到期 | 创建、读取授权、删除 |
@@ -80,6 +80,9 @@ Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、Agen
 - **ModelCall**：模型、参数、输入/输出 Hash、Token、费用、延迟和错误；敏感正文按租户策略加密或存 Artifact。
 - **PluginRegistration**：某 PluginVersion 实际注册的 Role/Tool/Skill/Workflow/Evaluator/Schema 清单。
 - **AuditRecord**：面向安全与管理操作的追加式记录，和领域 Event 分开查询但共享 correlation ID。
+- **GrowthSource**：把 Memory/SkillVersion 与同租户 terminal Run、RunStep、ToolCall、trajectory/AgentVersion/生成器快照闭合关联，保存来源 Hash。
+- **MemoryChunk**：确定性切片文本、位置、Hash、embedding provider/version 和 pgvector 向量；只为可召回 Memory 建索引。
+- **SkillDeployment**：将 Published SkillVersion 以确定性比例灰度到 project/agent scope；退役和回滚保留历史。
 
 ## 删除与归档语义
 

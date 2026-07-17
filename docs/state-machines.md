@@ -128,6 +128,34 @@ stateDiagram-v2
     Deprecated --> Published: rollback active pointer
 ```
 
+SkillVersion 使用更严格的不可变版本状态：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Testing: validation starts
+    Testing --> Published: evaluation passed + approval + publish
+    Testing --> Rejected: validation/evaluation failed
+```
+
+Rejected 的修订创建新 Draft 版本；Published 行不可更新。Skill 的 `Approved` 表示已有绑定 content hash 的通过 Evaluation 和 Approval，但尚未激活。灰度 deployment 不改变 SkillVersion 状态；推广或回滚只切换 active pointer/退役 deployment。
+
+## Memory
+
+```mermaid
+stateDiagram-v2
+    [*] --> Candidate
+    Candidate --> Active: evaluation passed + approval + publish
+    Candidate --> Candidate: failed evaluation retained
+    Active --> Invalidated: superseded or operator invalidates
+    Active --> Expired: expiry reached
+    Active --> Deleted: tombstone
+    Invalidated --> Deleted: tombstone
+    Expired --> Deleted: tombstone
+```
+
+Candidate 不进入正式召回。内容修订创建同一 logical key 的新 Candidate 版本；Active/Invalidated/Expired/Deleted 的内容与来源不可改写。工作记忆必须有过期时间。Team scope 在 Goal G 前是稳定但不可进入的合同值。
+
 ## 审批
 
 `Requested -> Approved | Rejected | Cancelled | Expired`。终态不可变；重新申请创建新 Approval。

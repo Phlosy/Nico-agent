@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal E（Tool Gateway 与 Sandbox）已完成并通过验收**。仓库已具备 provider-neutral Runtime、PostgreSQL Run 租约/恢复、平台唯一 Tool Gateway、版本化 ToolDefinition、不可变 ToolCall、租户与 AgentVersion 权限交集、文件/报告/HTTP/只读数据库工具、独立 Python Sandbox Runner，以及只暴露 Nico 授权工具的 Hermes MCP 边界。Memory、Skill、Team、Plugin 和量化业务仍未实现。
+当前状态：**Goal F（Memory 与 Skill）进行中，F1 合同冻结已完成**。Goal E 的 provider-neutral Runtime、持久化 Run、Tool Gateway、工具与 Sandbox 已通过验收；Memory/Skill 的类型、作用域、来源、检索、候选、审批、灰度与回滚边界已经冻结，但数据库和运行时代码将从 F2 起逐项实现。Team、Plugin 和量化业务仍未实现。
 
 ## 快速启动
 
@@ -42,6 +42,7 @@ scripts/cleanup.sh --volumes
 - [Goal C 阶段计划](docs/plans/goal-c-core-domain-plan.md)
 - [Goal D 阶段计划](docs/plans/goal-d-runtime-provider-plan.md)
 - [Goal E 阶段计划](docs/plans/goal-e-tool-sandbox-plan.md)
+- [Goal F 阶段计划](docs/plans/goal-f-memory-skill-plan.md)
 - [阶段路线图](docs/roadmap.md)
 - [Goal 状态](docs/progress/goal-status.md)
 - [功能矩阵](docs/progress/feature-matrix.md)
@@ -56,6 +57,7 @@ scripts/cleanup.sh --volumes
 - [基础 API](docs/api.md)
 - [Runtime 与 Worker](docs/runtime.md)
 - [Tool Gateway 与 Sandbox](docs/tool-gateway.md)
+- [Memory 与 Skill](docs/memory-and-skill.md)
 - [测试策略](docs/testing.md)
 - [架构决策](docs/decisions/)
 
@@ -79,4 +81,4 @@ Goal A 架构基线仍可独立验证：
 bash scripts/verify-goal-a.sh
 ```
 
-Goal F 开始前必须先阅读最新 Goal E Handoff、Feature Matrix、ADR-0009 和工具边界文档。不得绕过 Tool Gateway 直接调用 Hermes 原生工具或 Sandbox Runner，也不得把 ToolCall 轨迹冒充 Memory/Skill 成长能力。
+Goal F 当前从 F1 合同继续实施。开始下一增量前必须阅读 Goal E Handoff、Goal F 计划、Memory/Skill 边界、ADR-0009/0010 和 Feature Matrix。不得绕过 Tool Gateway、让反思器执行工具、把 Candidate 加入正式召回，或在 Goal G 前伪造 Team scope。

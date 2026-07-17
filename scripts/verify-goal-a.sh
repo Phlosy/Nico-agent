@@ -84,12 +84,15 @@ for section in {1..15}; do
   fi
 done
 
-for heading in 背景 问题 候选方案 最终选择 选择原因 代价 后续影响 可逆性; do
-  count="$(grep -l "^## $heading$" docs/decisions/ADR-*.md | wc -l)"
-  if [[ "$count" -ne 6 ]]; then
-    echo "FAIL ADR heading '$heading' appears in $count files, expected 6" >&2
-    exit 1
-  fi
+adr_files=(docs/decisions/ADR-*.md)
+if [[ "${#adr_files[@]}" -lt 6 ]]; then
+  echo "FAIL expected at least 6 ADR files, found ${#adr_files[@]}" >&2
+  exit 1
+fi
+for adr in "${adr_files[@]}"; do
+  for heading in 背景 问题 候选方案 最终选择 选择原因 代价 后续影响 可逆性; do
+    require_text "$adr" "## $heading"
+  done
 done
 
 evidence_dirs=(artifacts/goals/goal-a/*)

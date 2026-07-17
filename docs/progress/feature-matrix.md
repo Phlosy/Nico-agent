@@ -18,10 +18,10 @@
 | Tool Registry 与权限交集 | 已设计 | 精确 name@version Registry、不可变 Definition、租户∩AgentVersion 冻结策略、默认拒绝与实现 Hash 校验已实现 | Registry/Hash/权限/Schema/Secret/幂等/重试/取消已覆盖 | PostgreSQL RLS、并发同键、租约恢复、跨租户已通过 | 4 个授权工具经唯一 Gateway 执行已通过 | ADR-0009 与 Tool 文档已完成 | Goal E 已验证 |
 | 文件、HTTP、DB、报告工具 | 已设计 | Run 工作区原子文件/报告、绑定校验 IP 的 GET/HEAD、只读参数化数据库查询已实现 | 路径/链接/竞态/限额、SSRF/DNS/重定向、SQL/角色/输出已覆盖 | 真实 PostgreSQL 只读角色与 HTTP loopback 故障通过 | 文件读写与 JSON 报告 Compose 路径已通过 | 配置、风险和调用示例已完成 | Goal E 已验证 |
 | Python 沙箱 | 已设计 | 独立认证 Runner、固定 digest、一次性非 root/无网络/只读根容器与 CPU/内存/PID/时间/输出限制已实现 | Runner 合同、认证、payload 与错误已覆盖 | 真实 Docker 隔离、超时、截断、清理已通过 | Gateway→Runner 返回 UID 65534 且零残留容器 | 部署与威胁边界已完成 | Goal E 已验证 |
-| 四类 Memory 与作用域 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 领域模型已完成 | 仅设计 |
-| pgvector 语义检索与来源追踪 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 存储决策已完成 | 仅设计 |
-| Skill 与不可变 SkillVersion | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 领域模型已完成 | 仅设计 |
-| Candidate、验证、审批、发布与回滚 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 成长 ADR 已完成 | 仅设计 |
+| 四类 Memory 与作用域 | 四类型、tenant/project/agent/team scope 与生命周期已冻结 | 未实现；team scope 在 Goal G 前失败关闭 | 未实现 | 未实现 | 未实现 | Goal F 计划与 Memory/Skill 边界已完成 | F1 设计已冻结 |
+| pgvector 语义检索与来源追踪 | scope-first 检索、确定性 chunk/embed、完整来源快照已冻结 | 未实现 | 未实现 | 未实现 | 未实现 | ADR-0010 与检索合同已完成 | F1 设计已冻结 |
+| Skill 与不可变 SkillVersion | 稳定身份、不可变版本、结构化内容与 deployment 已冻结 | 未实现 | 未实现 | 未实现 | 未实现 | 状态机与边界已完成 | F1 设计已冻结 |
+| Candidate、验证、审批、发布与回滚 | content-hash 绑定的 Candidate→Evaluation→Approval→发布/灰度/回滚已冻结 | 未实现 | 未实现 | 未实现 | 未实现 | ADR-0005/0010 与阶段计划已完成 | F1 设计已冻结 |
 | Team、Role 与 Membership | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 领域模型已完成 | 仅设计 |
 | 委派、审核、退回与汇总 Workflow | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 状态边界与路线图已完成 | 仅设计 |
 | Plugin Manifest、发现、校验与启停 | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 插件 ADR 已完成 | 仅设计 |
