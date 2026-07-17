@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     http_read_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     http_max_redirects: int = Field(default=3, ge=0, le=10)
     http_allow_loopback: bool = False
+    database_tool_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    database_tool_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
+    database_tool_max_rows: int = Field(default=500, ge=1, le=5_000)
+    database_tool_max_output_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
 
     @field_validator("log_level", mode="before")
     @classmethod
