@@ -1,6 +1,6 @@
 # REST API
 
-Goal D 在通用控制面 REST API 上增加 RuntimeSession 和轨迹查询；SSE、正式认证和 SDK 仍属于后续 Goal。
+Goal E 在通用控制面 REST API 上增加版本化 ToolDefinition 和按 Run 的 ToolCall 查询；SSE、正式认证和 SDK 仍属于后续 Goal。
 
 ## OpenAPI
 
@@ -58,7 +58,7 @@ X-Actor-ID: <optional actor; defaults to development-user>
 
 生产环境明确拒绝上述开发 Header 和 bootstrap，返回 `403 DEVELOPMENT_TENANT_CONTEXT_DISABLED`。API Key/JWT 的正式身份、权限与限额在 Goal K 实现，因此当前控制面不得直接暴露到公网。
 
-## Goal C/D 控制面
+## Goal C–E 控制面
 
 | 资源 | 方法与路径 | 行为 |
 | --- | --- | --- |
@@ -78,6 +78,8 @@ X-Actor-ID: <optional actor; defaults to development-user>
 | Run | `POST .../runs/{run_id}/transition\|cancel\|retry` | 状态转换、取消；Failed/TimedOut 创建重试 Run |
 | Runtime | `GET .../runs/{run_id}/runtime` | 读取 Provider/session/capability/checkpoint/usage 摘要 |
 | Runtime | `GET .../runs/{run_id}/trajectory` | 读取终态规范化 Provider 轨迹；未完成时返回稳定错误 |
+| ToolDefinition | `GET /api/v1/tool-definitions` | 读取当前租户已注册的精确版本、Schema、权限、风险和内容 Hash |
+| ToolCall | `GET .../runs/{run_id}/tool-calls` | 按创建顺序读取脱敏参数、尝试、结果/错误和 usage；不公开执行租约 token |
 | RunStep | `POST .../runs/{run_id}/steps` | 追加步骤 |
 | RunStep | `POST .../steps/{step_id}/transition` | 步骤状态与结果转换 |
 | Event | `GET .../runs/{run_id}/events` | 按 sequence 读取 Run 事件 |
@@ -86,6 +88,8 @@ X-Actor-ID: <optional actor; defaults to development-user>
 更新和状态命令使用 `expected_revision`。并发冲突返回 `409 REVISION_CONFLICT`，非法状态转换返回 `409 INVALID_STATE_TRANSITION`，跨租户读取与不存在资源统一返回 `404 RESOURCE_NOT_FOUND`。唯一键或引用冲突返回 `409 DATA_CONFLICT`。
 
 Run 的 Provider 由不可变 AgentVersion 的 `run_config.runtime_provider` 选择。API 不直接调用 Provider；独立 Worker 领取 Pending Run 后推进状态。`POST .../cancel` 先提交数据库权威 Cancelled 并清除租约，Worker 随后合作取消 Provider，迟到结果不能覆盖终态。
+
+API 不提供直接执行工具的端点。工具只能由拥有有效 Run 租约的 Worker 经 Gateway 发起；因此客户端不能绕过 AgentVersion 策略、幂等、审计或 Sandbox。开发 Header 仍不是认证。
 
 ## 当前安全边界
 

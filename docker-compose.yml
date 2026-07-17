@@ -137,10 +137,28 @@ services:
         condition: service_healthy
       sandbox-runner:
         condition: service_healthy
+      worker-state-init:
+        condition: service_completed_successfully
     volumes:
       - agent-workspaces:/var/lib/nico/workspaces
       - hermes-state:/var/lib/nico/hermes
     restart: unless-stopped
+
+  worker-state-init:
+    build:
+      context: ./backend
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        install -d -o nico -g nico -m 0700 /var/lib/nico/workspaces /var/lib/nico/hermes
+        chown -R nico:nico /var/lib/nico/workspaces /var/lib/nico/hermes
+        chmod 0700 /var/lib/nico/workspaces /var/lib/nico/hermes
+    volumes:
+      - agent-workspaces:/var/lib/nico/workspaces
+      - hermes-state:/var/lib/nico/hermes
+    restart: "no"
 
   sandbox-runner:
     build:

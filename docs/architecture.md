@@ -39,13 +39,15 @@ flowchart LR
 
 第一版采用模块化单体控制面而不是微服务。API 与 Worker 是不同进程，共享同一领域包和数据库事务约束，未来可按负载拆分。
 
-## Goal B–D 已实现切片
+## Goal B–E 已实现切片
 
 当前可运行实现包含 FastAPI API、独立基础设施监督 Worker、React/Vite Web，以及由 Compose 管理的 PostgreSQL/pgvector、Redis、MinIO。Goal C 已在基础设施垂直切片上增加通用控制面：Tenant/Project、Agent/AgentVersion、Task/Run/RunStep、Event/AuditRecord 的持久化模型、事务服务和 REST API。
 
 API 将每个领域操作绑定到 `TenantContext`。租户业务事务先切换到无 `BYPASSRLS` 的 `nico_runtime` 角色，再用事务级 `app.tenant_id` 设置驱动 PostgreSQL `FORCE ROW LEVEL SECURITY`；复合外键同时阻止跨租户对象关联。状态变化、Event 和 AuditRecord 在一个事务内提交，客户端以 `expected_revision` 防止并发覆盖。
 
 Goal D 将 Worker 升级为有界并发的持久化执行器。只有最小权限 `nico_worker_claimer` 能调用 `SECURITY DEFINER` 领取函数；正文加载和 RuntimeSession/RunStep/Event/Audit 写入随后回到 `TenantContext`、`nico_runtime` 与 `FORCE RLS` 事务。每次心跳和终态提交同时校验 owner、token 与未过期租约，API 取消会先清除权威租约，因此迟到 Worker 不能覆盖终态。
+
+Goal E 在 Runtime 与副作用之间加入平台唯一 Tool Gateway。每个工具实现以精确 `name@version` 注册；租户策略与不可变 AgentVersion 策略在 Run 首次领取时冻结为权限交集。Gateway 每次调用重新验证 Run 租约，执行 Schema、Secret 引用、幂等、超时、受控重试、取消、输出限制，并把 ToolCall、RunStep、Event 和 AuditRecord 写入同一 PostgreSQL 权威边界。Hermes 只通过按 Run 创建的本地 MCP broker 使用授权工具；原生 terminal/web/file/browser 等工具保持关闭。Python 由独立 `sandbox-runner` 执行，只有该服务挂载 Docker socket，Worker 不持有宿主容器权限。
 
 ## 代码拓扑目标
 
@@ -82,6 +84,8 @@ sequenceDiagram
     participant D as PostgreSQL
     participant W as Worker
     participant R as Runtime Provider
+    participant G as Tool Gateway
+    participant S as Sandbox Runner
 
     C->>A: Create Task / Start Run
     A->>D: Task + Pending Run + Event (transaction)
@@ -89,6 +93,12 @@ sequenceDiagram
     W->>D: Claim Run with lease
     W->>D: Planning + RuntimeSession
     W->>R: create_session / run
+    R->>G: normalized tool intent / Nico MCP
+    G->>D: lease + policy + ToolCall start
+    G->>S: bounded Python request (when selected)
+    S-->>G: redacted bounded result
+    G->>D: ToolCall + RunStep + Event/Audit terminal
+    G-->>R: normalized tool outcome
     R-->>W: normalized runtime events/result
     W->>D: Running + RunStep + Event/Audit + checkpoint
     W->>D: trajectory + terminal Run/Task
@@ -96,7 +106,7 @@ sequenceDiagram
     A-->>C: SSE events / final result
 ```
 
-Worker 通过数据库租约领取 Run。心跳过期后其他 Worker 只能在 Provider 声明恢复能力且 RuntimeSession/checkpoint 存在时恢复；Provider event sequence 用于去重和连续性检查。Redis 仍不参与权威领取或状态提交。Tool Gateway、Artifact 外置和 SSE 扇出分别从 Goal E/J 进入，上图当前路径只实现到 Runtime 事件与 PostgreSQL 轨迹。
+Worker 通过数据库租约领取 Run。心跳过期后其他 Worker 只能在 Provider 声明恢复能力且 RuntimeSession/checkpoint 存在时恢复；Provider event sequence 用于去重和连续性检查。工具幂等键绑定逻辑调用、精确版本与参数，恢复后相同请求复用既有终态。Redis 仍不参与权威领取或状态提交。Artifact 外置和 SSE 扇出留待后续 Goal。
 
 ## 多租户边界
 
@@ -127,12 +137,13 @@ Provider 返回规范化事件，不接收 ORM 或数据库 Session。`MockRunti
 
 ## Tool 与沙箱边界
 
-- ToolDefinition 描述 Schema、权限、超时、重试、隔离和版本；ToolCall 是不可变执行记录。
-- Agent 的工具白名单与 Plugin 权限取交集，高风险工具另需 Approval。
+- ToolDefinition 冻结 Schema、权限、超时、重试、隔离、风险、输出限制和实现 Hash；终态 ToolCall 不可更新或删除。
+- 当前授权是租户策略与不可变 AgentVersion 策略的交集；Role/Plugin 尚未实现，出现 Plugin 引用时失败关闭。高风险 Approval 留待后续权限阶段。
 - Secret 只在 Tool Gateway 执行时解析，不进入 Prompt、Event 或普通日志。
 - 文件工具使用租户/Run 工作区根目录和规范化路径检查。
 - Python 在无网络、只读基础镜像、限时/限 CPU/内存/输出的容器中运行。
 - HTTP 工具只允许 GET/HEAD，执行 DNS/IP/重定向复核和域名白名单。
+- 数据库工具只接受管理员 Secret 引用提供的只读 DSN、单条参数化 SELECT/WITH，并验证数据库角色权限。
 
 ## Memory 与 Skill 成长路径
 
@@ -169,3 +180,4 @@ Plugin Manifest 注册 Role、Tool、Skill、Workflow、Evaluator、Knowledge、
 - [ADR-0005：候选驱动的受控成长](decisions/ADR-0005-controlled-growth.md)
 - [ADR-0006：共享库多租户隔离](decisions/ADR-0006-multitenancy-isolation.md)
 - [ADR-0008：Runtime 租约与 Hermes 进程边界](decisions/ADR-0008-runtime-leases-and-hermes-process-boundary.md)
+- [ADR-0009：平台唯一 Tool Gateway 与独立 Sandbox Runner](decisions/ADR-0009-tool-gateway-and-sandbox-boundary.md)
