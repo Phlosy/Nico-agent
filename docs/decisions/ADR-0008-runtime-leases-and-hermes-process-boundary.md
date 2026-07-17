@@ -36,4 +36,3 @@ Goal D 实现 claimer、RuntimeSession 和 subprocess Adapter。Goal E 不得让
 ## 可逆性
 
 高。claim 函数可替换为事务 Outbox/专用调度器而不改变 Run；Hermes subprocess Provider 可替换为远程或嵌入式 Provider。RuntimeSession 持久化的 provider/version/capabilities 保留了迁移依据。
-
