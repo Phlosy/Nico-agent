@@ -31,6 +31,7 @@ from nico_agent.growth.contracts import (
     SkillCandidateReference,
     TrajectorySnapshot,
     canonical_hash,
+    skill_content_hash,
 )
 from nico_agent.growth.reflection import DeterministicReflectionProvider
 from nico_agent.growth.snapshot import TrajectorySnapshotBuilder
@@ -212,7 +213,7 @@ class GrowthCandidateService:
                 }
             )
         if reflection.skill is not None:
-            skill_hash = self._skill_content_hash(reflection.skill)
+            skill_hash = skill_content_hash(reflection.skill)
             key = canonical_hash(
                 {
                     "snapshot_hash": snapshot.snapshot_hash,
@@ -398,21 +399,6 @@ class GrowthCandidateService:
         if scope == "agent":
             return None, agent_id
         return None, None
-
-    @staticmethod
-    def _skill_content_hash(draft: SkillCandidateDraft) -> str:
-        return canonical_hash(
-            {
-                "conditions": draft.conditions,
-                "preconditions": draft.preconditions,
-                "input_schema": draft.input_schema,
-                "steps": draft.steps,
-                "tools": draft.tools,
-                "output_schema": draft.output_schema,
-                "validation": draft.validation,
-                "failure_modes": draft.failure_modes,
-            }
-        )
 
     @staticmethod
     def _skill_name(name_hint: str, source_hash: str) -> str:

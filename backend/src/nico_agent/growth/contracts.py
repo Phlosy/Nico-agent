@@ -21,6 +21,25 @@ def canonical_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def skill_content_hash(value: SkillCandidateDraft | Any) -> str:
+    if isinstance(value, SkillCandidateDraft):
+        payload = value.model_dump(mode="json")
+    else:
+        payload = {
+            "conditions": value.conditions,
+            "preconditions": value.preconditions,
+            "input_schema": value.input_schema,
+            "steps": value.steps,
+            "tools": value.tools,
+            "output_schema": value.output_schema,
+            "validation": value.validation,
+            "failure_modes": value.failure_modes,
+        }
+    payload.pop("name_hint", None)
+    payload.pop("description", None)
+    return canonical_hash(payload)
+
+
 class SnapshotToolCall(BaseModel):
     model_config = ConfigDict(frozen=True)
 

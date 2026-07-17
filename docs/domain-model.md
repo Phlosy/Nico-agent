@@ -45,7 +45,7 @@ classDiagram
 
 ## Goal C–F 实现边界
 
-Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、AgentVersion、Task、Run、RunStep、Event 和 AuditRecord；Goal D/E 增加 RuntimeSession、ToolDefinition 和 ToolCall。Goal F 已落库 Memory、MemoryChunk、Skill、SkillVersion、GrowthSource、Evaluation、Approval 与 SkillDeployment，并实现 scope-first pgvector 检索及终态轨迹候选生成服务；验证/审批/发布服务和 Goal F API 尚未实现。其余目录对象仍是后续 Goal 的设计基线，不能据此认为已经实现。
+Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、AgentVersion、Task、Run、RunStep、Event 和 AuditRecord；Goal D/E 增加 RuntimeSession、ToolDefinition 和 ToolCall。Goal F 已落库 Memory、MemoryChunk、Skill、SkillVersion、GrowthSource、Evaluation、Approval 与 SkillDeployment，并实现 scope-first pgvector 检索、终态轨迹候选、通用验证/审批和完整 Memory 生命周期服务；Skill 发布/解析及 Goal F API 尚未实现。其余目录对象仍是后续 Goal 的设计基线，不能据此认为已经实现。
 
 - 租户业务表均含 `tenant_id`；对象关系使用包含 `tenant_id` 的复合外键，数据库运行角色启用 `FORCE RLS`。
 - AgentVersion 包含角色、职责边界、目标、模型/工具/记忆/技能策略、插件引用、预算、运行配置与内容 Hash；发布和回滚只切换不可变版本状态与 Agent 指针。
@@ -55,6 +55,7 @@ Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、Agen
 - RuntimeSession 已落库并与 Run 一一对应，固定 Provider/version/protocol/capabilities，保存外部 session ID、检查点、使用量、连续事件序号和终态轨迹；同样启用 `FORCE RLS`。
 - Goal F 新表全部使用运行角色 `FORCE RLS` 和 tenant-aware 复合外键；GrowthSource 只能引用 terminal Run/RunStep/ToolCall，Evaluation/Approval 与 subject content hash 绑定，发布与灰度由数据库触发器再次校验。
 - F4 的反思边界只传递冻结的脱敏 TrajectorySnapshot 和候选 DTO；scope/TTL、持久化、Event/Audit 与幂等锁定由应用服务掌握，Provider 不能访问 ORM、工具或发布状态。
+- F5 的验证器同样不接收 ORM/Session/工具；Evaluation profile 和 Requested Approval 有数据库并发唯一索引，GrowthSource 禁止 UPDATE。Memory 的 publish/revise/invalidate/expire/delete 均使用行锁、expected revision、稳定错误、Event/Audit 和数据库触发器，发布与 MemoryChunk 写入处于同一事务。
 
 ## 核心对象目录
 

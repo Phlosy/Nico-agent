@@ -953,6 +953,26 @@ class Evaluation(Base, TimestampMixin):
             "skill_version_id",
             "created_at",
         ),
+        Index(
+            "uq_evaluations_memory_profile",
+            "tenant_id",
+            "memory_id",
+            "evaluator_name",
+            "evaluator_version",
+            "content_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'memory'"),
+        ),
+        Index(
+            "uq_evaluations_skill_profile",
+            "tenant_id",
+            "skill_version_id",
+            "evaluator_name",
+            "evaluator_version",
+            "content_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'skill_version'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -1023,6 +1043,24 @@ class Approval(Base, TimestampMixin):
         ),
         UniqueConstraint("tenant_id", "id", name="uq_approvals_tenant_id_id"),
         Index("ix_approvals_tenant_status", "tenant_id", "status", "created_at"),
+        Index(
+            "uq_approvals_memory_requested",
+            "tenant_id",
+            "memory_id",
+            "action",
+            "content_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'memory' AND status = 'requested'"),
+        ),
+        Index(
+            "uq_approvals_skill_requested",
+            "tenant_id",
+            "skill_version_id",
+            "action",
+            "content_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'skill_version' AND status = 'requested'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(

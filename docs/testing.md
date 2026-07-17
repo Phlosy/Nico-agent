@@ -21,7 +21,7 @@
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
 
-Goal F F4 当前回归为后端 163 项单元、前端 7 项及 44 项真实依赖集成测试。除 F2/F3 的成长表、确定性 chunk/embed 和 scope-first pgvector 检索外，新增覆盖嵌套 DTO Hash 稳定性、递归脱敏、有界快照、成功/失败反思、策略所有的 tenant/project/agent scope、短期 working memory、精确工具/Runtime 来源、Candidate 不可召回、Event/Audit，以及并发重复生成幂等。验证、审批和发布应用服务仍属于 F5/F6，Goal F 整栈 E2E 属于 F8。
+Goal F F5 当前回归为后端 167 项单元、前端 7 项及 53 项真实依赖集成测试。F5 新增覆盖 Memory/SkillVersion 冻结验证 DTO、JSON Schema/步骤/精确工具/来源/Hash 规则、验证器异常脱敏、最新失败评价阻断、Evaluation 与 Requested Approval 并发幂等、跨租户隐藏、禁止自审、批准/拒绝/取消/过期/重新申请、发布前闸门、仅最新 Memory 版本可发布、修订 Candidate、原子 supersede+index、显式失效、到期、tombstone、来源不可改写，以及索引失败时状态/Event/chunk 全回滚。Skill 发布/灰度/回滚属于 F6，REST API 属于 F7，Goal F 整栈 E2E 属于 F8。
 
 ## 人工与故障验收
 

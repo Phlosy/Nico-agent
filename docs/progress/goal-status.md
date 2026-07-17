@@ -9,7 +9,7 @@
 | C | Verified | 100% | `scripts/verify-goal-c.sh` 通过；31 后端单测、7 前端测试、10 真实集成与核心 API E2E 通过 | `artifacts/goals/goal-c/20260717T015402Z/` | 无 |
 | D | Verified | 100% | `scripts/verify-goal-d.sh` 通过；47 后端单测、7 前端测试、18 真实集成、Goal C/D Compose E2E 通过 | `artifacts/goals/goal-d/20260717T032610Z/` | 无；Hermes 真实推理因本机无 CLI/凭据未执行，不影响 Adapter 验收 |
 | E | Verified | 100% | `scripts/verify-goal-e.sh` 通过；138 后端单测、7 前端测试/构建、31 真实集成、Goal C/D/E Compose E2E 与真实 Hermes 0.18.2 MCP 发现通过 | `artifacts/goals/goal-e/20260717T063841Z/` | 无；真实模型推理因无外部凭据未执行，不影响 Tool/MCP 边界验收 |
-| F | In Progress | 50% | F1–F4 已完成；终态脱敏轨迹经 provider-neutral 反思合同幂等生成受控 Memory/Skill Candidate；163 单测、7 前端测试/构建、44 真实集成通过 | 尚未创建 | 无；Candidate 尚不可发布，Team scope 在 Goal G 前失败关闭 |
+| F | In Progress | 65% | F1–F5 已完成；通用确定性验证、非自审人工 Approval 和原子 Memory 发布/修订/失效/到期/tombstone 已实现；167 单测、7 前端测试/构建、53 真实集成通过 | 尚未创建 | 无；Skill 仍不可发布，Team scope 在 Goal G 前失败关闭 |
 | G | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal F Verified |
 | H | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal G Verified |
 | I | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal H Verified |

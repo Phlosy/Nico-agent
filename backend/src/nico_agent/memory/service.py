@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import AccessDenied, DomainConflict, ResourceNotFound
@@ -41,74 +42,81 @@ class MemoryIndexService:
             memory = await session.scalar(select(Memory).where(Memory.id == memory_id))
             if memory is None:
                 raise ResourceNotFound("memory", str(memory_id))
-            if memory.status != "active":
-                raise DomainConflict(
-                    "MEMORY_NOT_ACTIVE",
-                    "only active memory can be indexed",
-                    details={"memory_id": str(memory_id), "status": memory.status},
-                )
-            if memory.expires_at is not None and memory.expires_at <= datetime.now(UTC):
-                raise DomainConflict(
-                    "MEMORY_EXPIRED",
-                    "expired memory cannot be indexed",
-                    details={"memory_id": str(memory_id)},
-                )
-            canonical_hash = content_hash(memory.content)
-            if canonical_hash != memory.content_hash:
-                raise DomainConflict(
-                    "MEMORY_CONTENT_HASH_MISMATCH",
-                    "memory content does not match its immutable hash",
-                    details={"memory_id": str(memory_id)},
-                )
+            return await self.index_memory_in_session(session, memory)
 
-            chunks = self.chunker.chunk(memory.content)
-            vectors = self.embedder.embed([chunk.content for chunk in chunks])
-            existing = (
-                await session.scalars(
-                    select(MemoryChunk)
-                    .where(
-                        MemoryChunk.memory_id == memory.id,
-                        MemoryChunk.embedding_provider == self.embedder.name,
-                        MemoryChunk.embedding_version == self.embedder.version,
-                        MemoryChunk.chunker_version == self.chunker.version,
-                    )
-                    .order_by(MemoryChunk.chunk_index)
-                )
-            ).all()
-            if existing:
-                expected = [(chunk.index, chunk.content_hash) for chunk in chunks]
-                actual = [(chunk.chunk_index, chunk.content_hash) for chunk in existing]
-                if actual != expected:
-                    raise DomainConflict(
-                        "MEMORY_INDEX_CONFLICT",
-                        "existing immutable index does not match deterministic chunks",
-                        details={"memory_id": str(memory_id)},
-                    )
-                return self._summary(memory, len(existing), already_indexed=True)
+    async def index_memory_in_session(
+        self, session: AsyncSession, memory: Memory
+    ) -> MemoryIndexSummary:
+        """Create deterministic chunks inside an existing publication transaction."""
 
-            session.add_all(
-                [
-                    MemoryChunk(
-                        tenant_id=context.tenant_id,
-                        memory_id=memory.id,
-                        chunk_index=chunk.index,
-                        start_offset=chunk.start_offset,
-                        end_offset=chunk.end_offset,
-                        content=chunk.content,
-                        content_hash=chunk.content_hash,
-                        memory_content_hash=memory.content_hash,
-                        chunker_name=self.chunker.name,
-                        chunker_version=self.chunker.version,
-                        embedding_provider=self.embedder.name,
-                        embedding_version=self.embedder.version,
-                        embedding_dimension=self.embedder.dimension,
-                        embedding=list(vector),
-                    )
-                    for chunk, vector in zip(chunks, vectors, strict=True)
-                ]
+        if memory.status != "active":
+            raise DomainConflict(
+                "MEMORY_NOT_ACTIVE",
+                "only active memory can be indexed",
+                details={"memory_id": str(memory.id), "status": memory.status},
             )
-            await session.flush()
-            return self._summary(memory, len(chunks), already_indexed=False)
+        if memory.expires_at is not None and memory.expires_at <= datetime.now(UTC):
+            raise DomainConflict(
+                "MEMORY_EXPIRED",
+                "expired memory cannot be indexed",
+                details={"memory_id": str(memory.id)},
+            )
+        canonical_hash = content_hash(memory.content)
+        if canonical_hash != memory.content_hash:
+            raise DomainConflict(
+                "MEMORY_CONTENT_HASH_MISMATCH",
+                "memory content does not match its immutable hash",
+                details={"memory_id": str(memory.id)},
+            )
+
+        chunks = self.chunker.chunk(memory.content)
+        vectors = self.embedder.embed([chunk.content for chunk in chunks])
+        existing = (
+            await session.scalars(
+                select(MemoryChunk)
+                .where(
+                    MemoryChunk.memory_id == memory.id,
+                    MemoryChunk.embedding_provider == self.embedder.name,
+                    MemoryChunk.embedding_version == self.embedder.version,
+                    MemoryChunk.chunker_version == self.chunker.version,
+                )
+                .order_by(MemoryChunk.chunk_index)
+            )
+        ).all()
+        if existing:
+            expected = [(chunk.index, chunk.content_hash) for chunk in chunks]
+            actual = [(chunk.chunk_index, chunk.content_hash) for chunk in existing]
+            if actual != expected:
+                raise DomainConflict(
+                    "MEMORY_INDEX_CONFLICT",
+                    "existing immutable index does not match deterministic chunks",
+                    details={"memory_id": str(memory.id)},
+                )
+            return self._summary(memory, len(existing), already_indexed=True)
+
+        session.add_all(
+            [
+                MemoryChunk(
+                    tenant_id=memory.tenant_id,
+                    memory_id=memory.id,
+                    chunk_index=chunk.index,
+                    start_offset=chunk.start_offset,
+                    end_offset=chunk.end_offset,
+                    content=chunk.content,
+                    content_hash=chunk.content_hash,
+                    memory_content_hash=memory.content_hash,
+                    chunker_name=self.chunker.name,
+                    chunker_version=self.chunker.version,
+                    embedding_provider=self.embedder.name,
+                    embedding_version=self.embedder.version,
+                    embedding_dimension=self.embedder.dimension,
+                    embedding=list(vector),
+                )
+                for chunk, vector in zip(chunks, vectors, strict=True)
+            ]
+        )
+        await session.flush()
+        return self._summary(memory, len(chunks), already_indexed=False)
 
     def _summary(
         self, memory: Memory, chunk_count: int, *, already_indexed: bool

@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal F（Memory 与 Skill）进行中，F4 候选生成已完成**。Goal E 的 Runtime、Tool Gateway、工具与 Sandbox 已通过验收；Goal F 已落地租户安全成长模型、确定性 `vector(384)` 检索，以及终态 Run/Step/ToolCall/Runtime 脱敏快照、provider-neutral 反思合同和幂等 Memory/Skill 候选生成。候选仍不可召回或发布；验证、审批、发布/回滚服务与 API 将从 F5 起逐项实现。Team、Plugin 和量化业务仍未实现。
+当前状态：**Goal F（Memory 与 Skill）进行中，F5 受控 Memory 生命周期已完成**。Goal F 已落地租户安全成长模型、确定性 `vector(384)` 检索、终态轨迹候选生成，以及 provider-neutral 确定性验证、独立人工审批和 Memory 发布/修订/失效/到期/tombstone。发布事务原子绑定最新 Evaluation、未过期且非自审的 Approval、旧版本失效和新向量索引；SkillVersion 当前只可验证/审批，发布、灰度和回滚属于 F6。Team、Plugin 和量化业务仍未实现。
 
 ## 快速启动
 
@@ -81,4 +81,4 @@ Goal A 架构基线仍可独立验证：
 bash scripts/verify-goal-a.sh
 ```
 
-Goal F 当前已完成 F1–F4，下一增量是 F5 验证、Evaluation、Approval 与 Memory 生命周期服务。开始前必须阅读 Goal E Handoff、Goal F 计划、Memory/Skill 边界、ADR-0009/0010 和 Feature Matrix。不得绕过 Tool Gateway、让反思器执行工具、把 Candidate 加入正式召回，或在 Goal G 前伪造 Team scope。
+Goal F 当前已完成 F1–F5，下一增量是 F6 SkillVersion 比较、发布、灰度解析、禁用与回滚。开始前必须阅读 Goal E Handoff、Goal F 计划、Memory/Skill 边界、ADR-0009/0010 和 Feature Matrix。不得绕过 Tool Gateway、让反思器/验证器执行工具、让未发布 Candidate 进入运行时，或在 Goal G 前伪造 Team scope。
