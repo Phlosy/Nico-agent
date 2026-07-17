@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from nico_agent.config import Settings
 from nico_agent.database import Database, TenantContext
+from nico_agent.domain.errors import DomainError
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
@@ -18,6 +19,7 @@ from nico_agent.domain.models import (
     Evaluation,
     GrowthSource,
     Memory,
+    MemoryChunk,
     Project,
     Run,
     RunStep,
@@ -27,6 +29,9 @@ from nico_agent.domain.models import (
     Task,
     Tenant,
 )
+from nico_agent.memory.chunking import content_hash
+from nico_agent.memory.contracts import MemoryQueryContext
+from nico_agent.memory.service import MemoryIndexService, MemoryRetriever
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -196,6 +201,40 @@ async def _approve_subject(session, *, tenant_id, memory=None, version=None) -> 
     approval.reason = "Deterministic validation passed."
     approval.decided_at = datetime.now(UTC)
     await session.flush()
+
+
+async def _publish_memory(
+    database: Database,
+    scope: dict,
+    *,
+    content: str,
+    scope_type: str,
+    expires_at: datetime | None = None,
+    stored_hash: str | None = None,
+) -> Memory:
+    async with database.admin_transaction() as session:
+        memory = Memory(
+            tenant_id=scope["tenant_id"],
+            version=1,
+            memory_type="semantic",
+            scope_type=scope_type,
+            project_id=scope["project_id"] if scope_type == "project" else None,
+            agent_id=scope["agent_id"] if scope_type == "agent" else None,
+            content=content,
+            confidence=0.9,
+            content_hash=stored_hash or content_hash(content),
+            created_by="reflection:deterministic-v1",
+            expires_at=expires_at,
+        )
+        session.add(memory)
+        await session.flush()
+        session.add(_source(scope, memory=memory))
+        await session.flush()
+        await _approve_subject(session, tenant_id=scope["tenant_id"], memory=memory)
+        memory.status = "active"
+        memory.approved_at = datetime.now(UTC)
+        await session.flush()
+        return memory
 
 
 @pytest.mark.asyncio
@@ -476,5 +515,228 @@ async def test_canary_overlap_and_terminal_records_are_immutable() -> None:
                     text("UPDATE skill_deployments SET rollout_percentage = 40 WHERE id = :id"),
                     {"id": first.id},
                 )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pgvector_retrieval_is_scope_filtered_and_source_aware() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    try:
+        first = await _seed_terminal_scope(database, "vector-first")
+        second = await _seed_terminal_scope(database, "vector-second")
+        tenant_memory = await _publish_memory(
+            database,
+            first,
+            content=(
+                "Tenant protocol requires candidate evaluation and approval before publication."
+            ),
+            scope_type="tenant",
+        )
+        project_memory = await _publish_memory(
+            database,
+            first,
+            content=(
+                "Project alpha retrieves approved memories with scoped pgvector cosine ranking."
+            ),
+            scope_type="project",
+        )
+        agent_memory = await _publish_memory(
+            database,
+            first,
+            content="The private agent remembers its own diagnostic procedure and no other agent.",
+            scope_type="agent",
+        )
+        other_tenant_memory = await _publish_memory(
+            database,
+            second,
+            content="Project alpha secret from another tenant must never be visible.",
+            scope_type="tenant",
+        )
+
+        first_context = TenantContext(first["tenant_id"], "vector-test", uuid4())
+        second_context = TenantContext(second["tenant_id"], "vector-test", uuid4())
+        indexer = MemoryIndexService(database)
+        for memory, context in (
+            (tenant_memory, first_context),
+            (project_memory, first_context),
+            (agent_memory, first_context),
+            (other_tenant_memory, second_context),
+        ):
+            summary = await indexer.index_memory(context, memory.id)
+            assert summary.chunk_count >= 1
+            assert summary.embedding_dimension == 384
+            assert summary.already_indexed is False
+        repeated = await indexer.index_memory(first_context, project_memory.id)
+        assert repeated.already_indexed is True
+
+        retriever = MemoryRetriever(database)
+        project_results = await retriever.search(
+            first_context,
+            MemoryQueryContext(project_id=first["project_id"]),
+            "project alpha approved pgvector memories",
+            limit=10,
+        )
+        project_ids = {result.memory_id for result in project_results}
+        assert project_memory.id in project_ids
+        assert tenant_memory.id in project_ids
+        assert agent_memory.id not in project_ids
+        assert other_tenant_memory.id not in project_ids
+        assert project_results[0].memory_id == project_memory.id
+        assert all(result.sources for result in project_results)
+
+        tenant_only = await retriever.search(
+            first_context,
+            MemoryQueryContext(),
+            "candidate approval publication",
+            limit=10,
+        )
+        assert {result.memory_id for result in tenant_only} == {tenant_memory.id}
+
+        agent_results = await retriever.search(
+            first_context,
+            MemoryQueryContext(agent_id=first["agent_id"]),
+            "private agent diagnostic procedure",
+            limit=10,
+        )
+        assert agent_memory.id in {result.memory_id for result in agent_results}
+        assert project_memory.id not in {result.memory_id for result in agent_results}
+
+        second_results = await retriever.search(
+            second_context,
+            MemoryQueryContext(),
+            "project alpha secret",
+            limit=10,
+        )
+        assert {result.memory_id for result in second_results} == {other_tenant_memory.id}
+
+        with pytest.raises(DomainError) as team_error:
+            await retriever.search(
+                first_context,
+                MemoryQueryContext(team_id=uuid4()),
+                "team memory",
+            )
+        assert team_error.value.code == "MEMORY_TEAM_SCOPE_UNAVAILABLE"
+
+        with pytest.raises(DomainError) as cross_tenant_context:
+            await retriever.search(
+                first_context,
+                MemoryQueryContext(project_id=second["project_id"]),
+                "cross tenant",
+            )
+        assert cross_tenant_context.value.code == "RESOURCE_NOT_FOUND"
+
+        async with database.admin_transaction() as session:
+            stored = await session.get(Memory, project_memory.id)
+            stored.status = "invalidated"
+            stored.invalidated_at = datetime.now(UTC)
+            await session.flush()
+        after_invalidation = await retriever.search(
+            first_context,
+            MemoryQueryContext(project_id=first["project_id"]),
+            "project alpha approved pgvector memories",
+            limit=10,
+        )
+        assert project_memory.id not in {result.memory_id for result in after_invalidation}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_memory_index_rejects_unusable_content_and_chunks_are_immutable() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    try:
+        scope = await _seed_terminal_scope(database, "vector-guards")
+        context = TenantContext(scope["tenant_id"], "vector-test", uuid4())
+        indexer = MemoryIndexService(database)
+
+        async with database.admin_transaction() as session:
+            candidate = Memory(
+                tenant_id=scope["tenant_id"],
+                version=1,
+                memory_type="semantic",
+                scope_type="tenant",
+                content="Unapproved candidate content.",
+                confidence=0.5,
+                content_hash=content_hash("Unapproved candidate content."),
+                created_by="test",
+            )
+            session.add(candidate)
+            await session.flush()
+            candidate_id = candidate.id
+
+        with pytest.raises(DomainError) as inactive:
+            await indexer.index_memory(context, candidate_id)
+        assert inactive.value.code == "MEMORY_NOT_ACTIVE"
+
+        expired = await _publish_memory(
+            database,
+            scope,
+            content="An already expired memory cannot enter the vector index.",
+            scope_type="tenant",
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        with pytest.raises(DomainError) as expired_error:
+            await indexer.index_memory(context, expired.id)
+        assert expired_error.value.code == "MEMORY_EXPIRED"
+
+        mismatch = await _publish_memory(
+            database,
+            scope,
+            content="This content is intentionally bound to the wrong hash.",
+            scope_type="tenant",
+            stored_hash="f" * 64,
+        )
+        with pytest.raises(DomainError) as mismatch_error:
+            await indexer.index_memory(context, mismatch.id)
+        assert mismatch_error.value.code == "MEMORY_CONTENT_HASH_MISMATCH"
+
+        indexed = await _publish_memory(
+            database,
+            scope,
+            content="Immutable vector chunks preserve exact provenance and ranking inputs.",
+            scope_type="tenant",
+        )
+        await indexer.index_memory(context, indexed.id)
+        async with database.admin_transaction() as session:
+            chunk_id = await session.scalar(
+                select(MemoryChunk.id).where(MemoryChunk.memory_id == indexed.id)
+            )
+            assert chunk_id is not None
+
+        with pytest.raises(DBAPIError):
+            async with database.admin_transaction() as session:
+                await session.execute(
+                    text("UPDATE memory_chunks SET content = 'mutated' WHERE id = :id"),
+                    {"id": chunk_id},
+                )
+        with pytest.raises(DBAPIError):
+            async with database.admin_transaction() as session:
+                await session.execute(
+                    text("DELETE FROM memory_chunks WHERE id = :id"),
+                    {"id": chunk_id},
+                )
+
+        async with engine.connect() as connection:
+            vector_type = await connection.scalar(
+                text(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+                    "WHERE c.relname = 'memory_chunks' AND a.attname = 'embedding'"
+                )
+            )
+            index_definition = await connection.scalar(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_memory_chunks_embedding_hnsw'"
+                )
+            )
+        assert vector_type == "vector(384)"
+        assert "USING hnsw" in index_definition
+        assert "vector_cosine_ops" in index_definition
     finally:
         await engine.dispose()

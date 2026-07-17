@@ -21,7 +21,7 @@
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
 
-Goal F F2 当前回归为后端 150 项单元、前端 7 项及 36 项真实依赖集成测试。新增覆盖七类成长表的升级—降级—重放、模型/迁移零漂移、`FORCE RLS`、跨租户复合外键、Team scope 失败关闭、terminal source、Candidate/Draft 初始态、content-hash Evaluation/Approval、发布闸门、灰度冲突和正式记录不可变。F3 之前不声称 pgvector 检索或应用层成长链已实现。
+Goal F F3 当前回归为后端 158 项单元、前端 7 项及 38 项真实依赖集成测试。除 F2 七类成长表外，新增覆盖 Unicode normalization、段落优先 chunk、稳定 Hash、384 维 L2 embedding、`vector(384)`、HNSW cosine profile、幂等索引、MemoryChunk 不可变、tenant/project/agent scope、跨租户 context、来源返回和失效排除。F4 之前不声称终态轨迹反思或候选生成已实现。
 
 ## 人工与故障验收
 

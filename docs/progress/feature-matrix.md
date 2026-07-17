@@ -18,8 +18,8 @@
 | Tool Registry 与权限交集 | 已设计 | 精确 name@version Registry、不可变 Definition、租户∩AgentVersion 冻结策略、默认拒绝与实现 Hash 校验已实现 | Registry/Hash/权限/Schema/Secret/幂等/重试/取消已覆盖 | PostgreSQL RLS、并发同键、租约恢复、跨租户已通过 | 4 个授权工具经唯一 Gateway 执行已通过 | ADR-0009 与 Tool 文档已完成 | Goal E 已验证 |
 | 文件、HTTP、DB、报告工具 | 已设计 | Run 工作区原子文件/报告、绑定校验 IP 的 GET/HEAD、只读参数化数据库查询已实现 | 路径/链接/竞态/限额、SSRF/DNS/重定向、SQL/角色/输出已覆盖 | 真实 PostgreSQL 只读角色与 HTTP loopback 故障通过 | 文件读写与 JSON 报告 Compose 路径已通过 | 配置、风险和调用示例已完成 | Goal E 已验证 |
 | Python 沙箱 | 已设计 | 独立认证 Runner、固定 digest、一次性非 root/无网络/只读根容器与 CPU/内存/PID/时间/输出限制已实现 | Runner 合同、认证、payload 与错误已覆盖 | 真实 Docker 隔离、超时、截断、清理已通过 | Gateway→Runner 返回 UID 65534 且零残留容器 | 部署与威胁边界已完成 | Goal E 已验证 |
-| 四类 Memory 与作用域 | 四类型、tenant/project/agent/team scope 与生命周期已冻结 | Memory 版本、三类可验证 scope、状态/过期/tombstone 与 RLS 已落库；team 在 Goal G 前 DB 拒绝 | 状态转换已覆盖 | RLS、跨租户 scope、Team 拒绝、发布与不可变性通过 | 未实现 | Goal F 计划与 Memory/Skill 边界已更新 | F2 持久化已验证；检索/服务待实现 |
-| pgvector 语义检索与来源追踪 | scope-first 检索、确定性 chunk/embed、完整来源快照已冻结 | GrowthSource 及 terminal Run/Step/ToolCall/trajectory Hash 闭合已实现；chunk/vector 未实现 | 来源状态规则已覆盖 | 非终态/跨租户来源及追加不可变通过 | 未实现 | ADR-0010 与来源合同已完成 | F2 来源已验证；pgvector 待 F3 |
+| 四类 Memory 与作用域 | 四类型、tenant/project/agent/team scope 与生命周期已冻结 | Memory 版本、三类可验证 scope、状态/过期/tombstone、RLS、索引与检索服务已实现；team 在 Goal G 前失败关闭 | 状态、chunk/embed 和参数规则已覆盖 | RLS、跨租户 context、scope 集合、Candidate/Invalidated/Expired 排除通过 | 未实现 | Goal F 计划与 Memory/Skill 边界已更新 | F3 存储与检索已验证；API 待实现 |
+| pgvector 语义检索与来源追踪 | scope-first 检索、确定性 chunk/embed、完整来源快照已冻结 | terminal GrowthSource、确定性切片/384 维 embedding、不可变 MemoryChunk、HNSW cosine、幂等索引和来源返回已实现 | 8 项 normalization/chunk/embed 稳定性通过 | 真实 vector(384)、排名、profile、RLS/scope/来源/失效与不可变通过 | 未实现 | ADR-0010 与检索实现边界已完成 | F3 已验证；本地 embedding 为质量基线 |
 | Skill 与不可变 SkillVersion | 稳定身份、不可变版本、结构化内容与 deployment 已冻结 | Skill/SkillVersion/SkillDeployment、active pointer 外键、内容不可变与灰度冲突约束已落库 | 状态转换已覆盖 | 发布链、灰度唯一、退役和不可变通过 | 未实现 | 状态机与边界已更新 | F2 持久化已验证；服务待实现 |
 | Candidate、验证、审批、发布与回滚 | content-hash 绑定的 Candidate→Evaluation→Approval→发布/灰度/回滚已冻结 | Evaluation/Approval 与发布数据库闸门已实现；应用验证器/发布/回滚服务未实现 | 状态转换已覆盖 | Hash 错配、直接发布、终态改写/删除均被数据库拒绝 | 未实现 | ADR-0005/0010 与阶段计划已完成 | F2 数据库闸门已验证 |
 | Team、Role 与 Membership | 已设计 | 未实现 | 未实现 | 未实现 | 未实现 | 领域模型已完成 | 仅设计 |
@@ -33,6 +33,6 @@
 | Web Console | 信息范围已设计 | 真实基础设施状态页已实现 | 4 项组件测试 | 经 Nginx/API 验证 | 桌面/移动与故障 E2E 已通过 | 开发与测试文档已完成 | Goal B 骨架已验证；业务 Console 未实现 |
 | API Key/JWT 与 Secret 隔离 | 已设计 | Tool Secret 引用、执行时解析、参数/结果/日志脱敏已实现；正式 API Key/JWT 未实现 | Secret resolver/红action/错误边界已覆盖 | ToolCall/Event/Audit/轨迹无明文通过 | E2E 无 Runner/lease token 泄露 | Tool 安全边界已完成 | Goal E Tool Secret 已验证；正式认证待 Goal K |
 | 配置、结构化日志与健康检查 | 已设计 | Pydantic Settings、JSON 日志、关联 ID、并发探针已实现 | 10 项相关单测 | 三类真实依赖已通过 | 健康/降级/恢复已通过 | API/开发文档已完成 | Goal B 已验证 |
-| PostgreSQL/pgvector/Redis/MinIO | 已决策 | Runtime/Tool 与七类 Goal F 成长表、复合外键、运行角色/FORCE RLS 已落库；vector chunk 待 F3 | 探针/状态/成长状态已完成 | 36 项真实依赖/控制面/Runtime/Tool/Growth 测试通过 | API、Worker 与 Tool Gateway 使用真实 PostgreSQL 已通过 | ADR、领域、Tool、Memory/Skill 文档已更新 | Goal F F2 存储范围已验证 |
+| PostgreSQL/pgvector/Redis/MinIO | 已决策 | Runtime/Tool、七类成长表和 MemoryChunk vector(384)/HNSW、运行角色/FORCE RLS 已落库 | 探针/状态/chunk/embed 已完成 | 38 项真实依赖/控制面/Runtime/Tool/Growth/vector 测试通过 | API、Worker 与 Tool Gateway 使用真实 PostgreSQL 已通过；Memory E2E 待 F8 | ADR、领域、Tool、Memory/Skill 文档已更新 | Goal F F3 检索范围已验证 |
 | Docker Compose 与一键脚本 | 已规划 | 9 服务拓扑含非 root Worker 状态卷初始化与独立 Runner；Goal E 验收脚本已实现 | Shell/Compose 静态校验通过 | 固定镜像、迁移、依赖和 Runner 健康已验证 | `verify-goal-e.sh` 与三个阶段 E2E 已通过 | 开发/测试文档已完成 | Goal E 已验证 |
-| 全量单元、集成、故障与 E2E 测试 | 已规划 | Goal E 测试出口及 Goal F F2 数据库测试已实现 | 后端 150 + 前端 7 通过 | 真实依赖 36 项通过 | Goal C 核心、Goal D Runtime、Goal E Tool/Sandbox E2E 通过；Goal F E2E 未实现 | `docs/testing.md` | Goal F F2 回归已通过 |
+| 全量单元、集成、故障与 E2E 测试 | 已规划 | Goal E 测试出口及 Goal F F2/F3 数据库/检索测试已实现 | 后端 158 + 前端 7 通过 | 真实依赖 38 项通过 | Goal C 核心、Goal D Runtime、Goal E Tool/Sandbox E2E 通过；Goal F E2E 未实现 | `docs/testing.md` | Goal F F3 回归已通过 |

@@ -1,6 +1,6 @@
 # Memory 与 Skill 边界
 
-Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F2 已将领域记录和数据库不变量落地，代码状态见 Feature Matrix。
+Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F3 已将领域记录、数据库不变量和真实 pgvector 检索落地，代码状态见 Feature Matrix。
 
 ## 能力流
 
@@ -48,6 +48,10 @@ Candidate、Evaluation、Approval 和发布对象都保存 content hash。发布
 
 第一版 embedding 是版本化、确定性的本地 feature hashing，确保离线可运行和测试可复现。它不是外部语义模型质量的替代声明；替换 provider 必须生成新索引版本，不能把不同维度或模型的向量混排。
 
+当前实现使用 `nico-paragraph-window@1.0.0` 对 NFKC 规范化内容进行段落优先、固定窗口和重叠切片；`nico-feature-hashing@1.0.0` 将词元及 3–5 字符 n-gram 映射为 L2 归一化的 384 维向量。MemoryChunk 同时冻结 Memory/Chunk Hash、offset、chunker 和 embedding profile，使用 pgvector HNSW `vector_cosine_ops`。同一 profile 重复索引返回既有结果，任何 Hash/切片漂移都失败关闭。
+
+`MemoryRetriever` 不接受 scope allowlist，只接受 TenantContext 与可选 Project/Agent 上下文；服务先在 RLS 事务中确认上下文存在，再以 SQL 过滤 Active、未过期和授权 scope，按每条 Memory 的最佳 chunk cosine distance、Memory ID 稳定排序，并附带 GrowthSource 摘要。Team、跨租户 context、Candidate、Invalidated、Expired 和 Deleted 均不能进入结果。
+
 ## Skill 发布与解析
 
 SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤、精确工具引用、验证规则和失败模式的不可变执行知识。验证检查 Schema、步骤图、工具存在性/状态、来源闭合、权限不扩张和测试用例。发布只允许已通过验证且获批的版本。
@@ -58,5 +62,6 @@ SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤�
 
 - F1：本文、ADR-0010 与实施计划已冻结。
 - F2：Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval、SkillDeployment 已落库；运行角色对全部新表启用 `FORCE RLS`。复合外键闭合同租户来源，触发器拒绝非终态来源、直接发布、Hash 错配、非法状态转换、正式内容改写和物理删除。
-- F3 起实现确定性 chunk/embed、pgvector 检索、领域服务、候选成长链和 API。
+- F3：确定性 chunk/embed、版本化 MemoryChunk、`vector(384)`、HNSW cosine 索引、幂等索引服务和 scope-first 检索已完成；本地 embedding 是可复现基线，不声称外部语义模型质量。
+- F4 起实现终态轨迹反思、候选成长链、验证/发布服务和 API。
 - Goal G 才能启用 Team scope；Goal H 才能由 Plugin 注册反思器/evaluator；Goal K 才提供正式身份和细粒度审批授权。

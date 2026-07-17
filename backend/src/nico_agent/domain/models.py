@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -609,6 +610,72 @@ class Memory(Base, TimestampMixin):
     invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class MemoryChunk(Base):
+    __tablename__ = "memory_chunks"
+    __table_args__ = (
+        CheckConstraint("chunk_index >= 0", name="ck_memory_chunks_index"),
+        CheckConstraint(
+            "start_offset >= 0 AND end_offset > start_offset",
+            name="ck_memory_chunks_offsets",
+        ),
+        CheckConstraint("embedding_dimension = 384", name="ck_memory_chunks_dimension"),
+        CheckConstraint(
+            "length(content_hash) = 64 AND length(memory_content_hash) = 64",
+            name="ck_memory_chunks_hashes",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "memory_id"],
+            ["memories.tenant_id", "memories.id"],
+            ondelete="RESTRICT",
+            name="fk_memory_chunks_tenant_memory",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_memory_chunks_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "memory_id",
+            "embedding_provider",
+            "embedding_version",
+            "chunker_version",
+            "chunk_index",
+            name="uq_memory_chunks_profile_index",
+        ),
+        Index(
+            "ix_memory_chunks_tenant_memory",
+            "tenant_id",
+            "memory_id",
+            "embedding_provider",
+            "embedding_version",
+        ),
+        Index(
+            "ix_memory_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    memory_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    memory_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunker_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    chunker_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(String(120), nullable=False)
+    embedding_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Skill(Base, TimestampMixin):

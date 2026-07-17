@@ -20,6 +20,7 @@ classDiagram
     Run "1" --> "many" GrowthSource
     RunStep "1" --> "many" GrowthSource
     Memory "1" *-- "many" GrowthSource
+    Memory "1" *-- "many" MemoryChunk
     Memory "1" *-- "many" Evaluation
     Memory "1" *-- "many" Approval
     Skill "1" *-- "many" SkillVersion
@@ -88,7 +89,7 @@ Goal C 已实际落库并开放 API 的对象是 Tenant、Project、Agent、Agen
 - **PluginRegistration**：某 PluginVersion 实际注册的 Role/Tool/Skill/Workflow/Evaluator/Schema 清单。
 - **AuditRecord**：面向安全与管理操作的追加式记录，和领域 Event 分开查询但共享 correlation ID。
 - **GrowthSource**：把 Memory/SkillVersion 与同租户 terminal Run、RunStep、ToolCall、trajectory/AgentVersion/生成器快照闭合关联，保存来源 Hash。
-- **MemoryChunk**：确定性切片文本、位置、Hash、embedding provider/version 和 pgvector 向量；只为可召回 Memory 建索引。
+- **MemoryChunk**：已落库的确定性切片文本、位置、Memory/Chunk Hash、chunker 与 embedding profile 和 `vector(384)`；仅 Active 未过期 Memory 可创建，行不可更新/删除。
 - **SkillDeployment**：将 Published SkillVersion 以确定性比例灰度到 project/agent scope；退役和回滚保留历史。
 
 ## 删除与归档语义
