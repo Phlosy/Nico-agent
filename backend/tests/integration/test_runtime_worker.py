@@ -308,3 +308,46 @@ async def test_authoritative_cancel_prevents_late_worker_completion() -> None:
         assert runtime_session["status"] == "cancelled"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mock_failure_and_unknown_provider_become_terminal() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    try:
+        failed = await seed_pending_run(
+            database,
+            priority=100,
+            run_config={
+                "runtime_provider": "mock",
+                "mock": {"fail": True, "error_code": "MODEL_FAILED"},
+            },
+        )
+        worker = RuntimeWorker(
+            database,
+            RuntimeProviderRegistry([MockRuntimeProvider()]),
+            worker_id="failure-worker",
+            lease_seconds=5,
+            heartbeat_seconds=0.05,
+        )
+        assert await worker.execute_once() is True
+        failed_run = await _row(database, "runs", failed["id"])
+        failed_session = await _row(database, "runtime_sessions", failed["id"])
+        assert failed_run["status"] == "failed"
+        assert failed_run["error"]["code"] == "MODEL_FAILED"
+        assert failed_session["status"] == "failed"
+        assert failed_run["lease_token"] is None
+
+        missing = await seed_pending_run(
+            database,
+            priority=100,
+            run_config={"runtime_provider": "not-registered"},
+        )
+        assert await worker.execute_once() is True
+        missing_run = await _row(database, "runs", missing["id"])
+        assert missing_run["status"] == "failed"
+        assert missing_run["error"]["code"] == "RUNTIME_PROVIDER_NOT_FOUND"
+        assert missing_run["lease_token"] is None
+    finally:
+        await engine.dispose()

@@ -55,6 +55,7 @@ from nico_agent.domain.states import (
     require_revision,
     transition_state,
 )
+from nico_agent.runtime.contracts import RuntimeTrajectory
 
 
 class ControlPlaneService:
@@ -551,6 +552,30 @@ class ControlPlaneService:
     async def get_run(self, context: TenantContext, run_id: UUID) -> Run:
         async with self.database.tenant_transaction(context) as session:
             return await self._run(session, context, run_id)
+
+    async def get_runtime_session(self, context: TenantContext, run_id: UUID) -> RuntimeSession:
+        async with self.database.tenant_transaction(context) as session:
+            await self._run(session, context, run_id)
+            runtime_session = await session.scalar(
+                select(RuntimeSession).where(
+                    RuntimeSession.tenant_id == context.tenant_id,
+                    RuntimeSession.run_id == run_id,
+                )
+            )
+            if runtime_session is None:
+                raise ResourceNotFound("runtime_session", str(run_id))
+            return runtime_session
+
+    async def get_runtime_trajectory(
+        self, context: TenantContext, run_id: UUID
+    ) -> RuntimeTrajectory:
+        runtime_session = await self.get_runtime_session(context, run_id)
+        if runtime_session.trajectory is None:
+            raise DomainConflict(
+                "RUNTIME_TRAJECTORY_UNAVAILABLE",
+                "the runtime trajectory is not available until execution completes",
+            )
+        return RuntimeTrajectory.model_validate(runtime_session.trajectory)
 
     async def transition_run(
         self, context: TenantContext, run_id: UUID, command: RunTransition

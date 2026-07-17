@@ -26,6 +26,7 @@ from nico_agent.api_schemas import (
     RunStepCreate,
     RunStepRead,
     RunStepTransition,
+    RuntimeSessionRead,
     RunTransition,
     TaskCreate,
     TaskRead,
@@ -37,6 +38,7 @@ from nico_agent.config import Settings
 from nico_agent.control_plane import ControlPlaneService
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import AccessDenied, DomainError
+from nico_agent.runtime.contracts import RuntimeTrajectory
 
 router = APIRouter(prefix="/api/v1", tags=["control-plane"])
 
@@ -259,6 +261,16 @@ async def create_run(task_id: UUID, command: RunCreate, service: Service, contex
 @router.get("/runs/{run_id}", response_model=RunRead)
 async def get_run(run_id: UUID, service: Service, context: Context):
     return await service.get_run(context, run_id)
+
+
+@router.get("/runs/{run_id}/runtime", response_model=RuntimeSessionRead)
+async def get_runtime_session(run_id: UUID, service: Service, context: Context):
+    return await service.get_runtime_session(context, run_id)
+
+
+@router.get("/runs/{run_id}/trajectory", response_model=RuntimeTrajectory)
+async def get_runtime_trajectory(run_id: UUID, service: Service, context: Context):
+    return await service.get_runtime_trajectory(context, run_id)
 
 
 @router.post("/runs/{run_id}/transition", response_model=RunRead)

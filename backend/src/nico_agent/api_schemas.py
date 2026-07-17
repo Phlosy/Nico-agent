@@ -211,6 +211,26 @@ class RunRead(FromAttributesModel):
     updated_at: datetime
 
 
+class RuntimeSessionRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    provider_name: str
+    provider_version: str
+    protocol_version: str
+    external_session_id: str | None
+    status: str
+    capabilities: list[str]
+    provider_state: dict[str, Any]
+    checkpoint: dict[str, Any] | None
+    usage: dict[str, Any]
+    last_event_sequence: int
+    started_at: datetime | None
+    ended_at: datetime | None
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class RunStepCreate(BaseModel):
     sequence: int = Field(ge=1)
     kind: str = Field(min_length=1, max_length=100)

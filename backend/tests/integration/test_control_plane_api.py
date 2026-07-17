@@ -7,6 +7,8 @@ from httpx import ASGITransport, AsyncClient
 
 from nico_agent.api import create_app
 from nico_agent.config import Settings
+from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
+from nico_agent.runtime.executor import RuntimeWorker
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -36,7 +38,13 @@ async def bootstrap(client: AsyncClient, label: str) -> tuple[str, dict[str, str
     return tenant_id, {"X-Tenant-ID": tenant_id, "X-Actor-ID": "integration-user"}
 
 
-async def create_ready_agent(client: AsyncClient, headers: dict[str, str], suffix: str) -> dict:
+async def create_ready_agent(
+    client: AsyncClient,
+    headers: dict[str, str],
+    suffix: str,
+    *,
+    run_config: dict | None = None,
+) -> dict:
     agent_response = await client.post(
         "/api/v1/agents",
         json={
@@ -55,6 +63,7 @@ async def create_ready_agent(client: AsyncClient, headers: dict[str, str], suffi
             "mandate": "Collect evidence and return structured findings",
             "boundaries": ["no external mutation"],
             "model_config": {"provider": "future-runtime"},
+            "run_config": run_config or {},
         },
         headers=headers,
     )
@@ -68,6 +77,81 @@ async def create_ready_agent(client: AsyncClient, headers: dict[str, str], suffi
     )
     assert publish_response.status_code == 200, publish_response.text
     return publish_response.json()
+
+
+@pytest.mark.asyncio
+async def test_http_run_executes_through_mock_worker_and_exposes_runtime() -> None:
+    app = create_app(settings=Settings(environment="test", _env_file=None))
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            tenant_id, headers = await bootstrap(client, "RuntimeE2E")
+            project = (
+                await client.post(
+                    "/api/v1/projects",
+                    json={"name": f"runtime-{uuid4().hex[:8]}"},
+                    headers=headers,
+                )
+            ).json()
+            agent = await create_ready_agent(
+                client,
+                headers,
+                uuid4().hex[:8],
+                run_config={
+                    "runtime_provider": "mock",
+                    "mock": {
+                        "steps": ["plan", "answer"],
+                        "output": {"report": "verified"},
+                    },
+                },
+            )
+            task = (
+                await client.post(
+                    "/api/v1/tasks",
+                    json={
+                        "project_id": project["id"],
+                        "title": "Execute through the runtime worker",
+                        "input": {"topic": "Goal D"},
+                        "acceptance": {"report": "verified"},
+                        "assignee_agent_id": agent["id"],
+                        "priority": 100,
+                    },
+                    headers=headers,
+                )
+            ).json()
+            run_response = await client.post(
+                f"/api/v1/tasks/{task['id']}/runs", json={"max_steps": 4}, headers=headers
+            )
+            assert run_response.status_code == 201, run_response.text
+            run = run_response.json()
+            assert (
+                await client.get(f"/api/v1/runs/{run['id']}/runtime", headers=headers)
+            ).status_code == 404
+
+            worker = RuntimeWorker(
+                app.state.database,
+                RuntimeProviderRegistry([MockRuntimeProvider()]),
+                worker_id="http-mock-e2e",
+                lease_seconds=5,
+                heartbeat_seconds=0.05,
+            )
+            assert await worker.execute_once() is True
+
+            completed = await client.get(f"/api/v1/runs/{run['id']}", headers=headers)
+            runtime = await client.get(f"/api/v1/runs/{run['id']}/runtime", headers=headers)
+            trajectory = await client.get(f"/api/v1/runs/{run['id']}/trajectory", headers=headers)
+            assert completed.json()["status"] == "completed"
+            assert completed.json()["result"] == {"report": "verified"}
+            assert runtime.status_code == 200
+            assert runtime.json()["provider_name"] == "mock"
+            assert runtime.json()["last_event_sequence"] > 0
+            assert trajectory.status_code == 200
+            assert trajectory.json()["events"][-1]["type"] == "run.completed"
+
+            _, foreign_headers = await bootstrap(client, "RuntimeForeign")
+            assert (
+                await client.get(f"/api/v1/runs/{run['id']}/runtime", headers=foreign_headers)
+            ).status_code == 404
+            assert tenant_id != foreign_headers["X-Tenant-ID"]
 
 
 @pytest.mark.asyncio
