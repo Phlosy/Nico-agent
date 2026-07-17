@@ -1,6 +1,6 @@
 # Memory 与 Skill 边界
 
-Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；当前 F1 只冻结合同，代码状态见 Feature Matrix。
+Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F2 已将领域记录和数据库不变量落地，代码状态见 Feature Matrix。
 
 ## 能力流
 
@@ -56,6 +56,7 @@ SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤�
 
 ## 当前阶段边界
 
-- F1：本文、ADR-0010 与实施计划已冻结；运行时代码尚未实现。
-- F2 起逐项落地数据库、领域服务、检索、成长链和 API。
+- F1：本文、ADR-0010 与实施计划已冻结。
+- F2：Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval、SkillDeployment 已落库；运行角色对全部新表启用 `FORCE RLS`。复合外键闭合同租户来源，触发器拒绝非终态来源、直接发布、Hash 错配、非法状态转换、正式内容改写和物理删除。
+- F3 起实现确定性 chunk/embed、pgvector 检索、领域服务、候选成长链和 API。
 - Goal G 才能启用 Team scope；Goal H 才能由 Plugin 注册反思器/evaluator；Goal K 才提供正式身份和细粒度审批授权。

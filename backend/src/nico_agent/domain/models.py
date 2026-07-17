@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
@@ -29,9 +30,15 @@ from nico_agent.database import Base
 from nico_agent.domain.states import (
     AgentStatus,
     AgentVersionStatus,
+    ApprovalStatus,
+    EvaluationStatus,
+    MemoryStatus,
     ProjectStatus,
     RunStatus,
     RunStepStatus,
+    SkillDeploymentStatus,
+    SkillStatus,
+    SkillVersionStatus,
     TaskStatus,
     ToolCallStatus,
     ToolDefinitionStatus,
@@ -144,6 +151,7 @@ class AgentVersion(Base, TimestampMixin):
             name="fk_agent_versions_tenant_agent",
         ),
         UniqueConstraint("tenant_id", "agent_id", "id", name="uq_agent_versions_scope_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_versions_tenant_id_id"),
         UniqueConstraint(
             "tenant_id", "agent_id", "version", name="uq_agent_versions_scope_version"
         ),
@@ -309,6 +317,7 @@ class RuntimeSession(Base, TimestampMixin):
         ),
         UniqueConstraint("tenant_id", "id", name="uq_runtime_sessions_tenant_id_id"),
         UniqueConstraint("tenant_id", "run_id", name="uq_runtime_sessions_tenant_run"),
+        UniqueConstraint("tenant_id", "run_id", "id", name="uq_runtime_sessions_tenant_run_id"),
         Index("ix_runtime_sessions_tenant_status", "tenant_id", "status", "updated_at"),
     )
 
@@ -461,6 +470,13 @@ class ToolCall(Base, TimestampMixin):
         UniqueConstraint(
             "tenant_id",
             "run_id",
+            "run_step_id",
+            "id",
+            name="uq_tool_calls_tenant_run_step_id",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
             "tool_definition_id",
             "idempotency_key",
             name="uq_tool_calls_run_tool_idempotency",
@@ -495,6 +511,554 @@ class ToolCall(Base, TimestampMixin):
     usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class Memory(Base, TimestampMixin):
+    __tablename__ = "memories"
+    __table_args__ = (
+        CheckConstraint(
+            "memory_type IN ('working', 'episodic', 'semantic', 'procedural')",
+            name="ck_memories_type",
+        ),
+        CheckConstraint(
+            "status IN ('candidate', 'active', 'invalidated', 'expired', 'deleted')",
+            name="ck_memories_status",
+        ),
+        CheckConstraint(
+            "scope_type IN ('tenant', 'project', 'agent')",
+            name="ck_memories_scope_goal_f",
+        ),
+        CheckConstraint(
+            "(scope_type = 'tenant' AND project_id IS NULL AND agent_id IS NULL) OR "
+            "(scope_type = 'project' AND project_id IS NOT NULL AND agent_id IS NULL) OR "
+            "(scope_type = 'agent' AND project_id IS NULL AND agent_id IS NOT NULL)",
+            name="ck_memories_scope_owner",
+        ),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_memories_confidence"),
+        CheckConstraint("version > 0", name="ck_memories_version_positive"),
+        CheckConstraint("length(content_hash) = 64", name="ck_memories_content_hash"),
+        CheckConstraint(
+            "memory_type <> 'working' OR expires_at IS NOT NULL",
+            name="ck_memories_working_expiry",
+        ),
+        CheckConstraint(
+            "status <> 'active' OR approved_at IS NOT NULL",
+            name="ck_memories_active_approved",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_memories_tenant_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agents.tenant_id", "agents.id"],
+            ondelete="RESTRICT",
+            name="fk_memories_tenant_agent",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "supersedes_id"],
+            ["memories.tenant_id", "memories.id"],
+            ondelete="RESTRICT",
+            name="fk_memories_tenant_supersedes",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_memories_tenant_id_id"),
+        UniqueConstraint("tenant_id", "memory_key", "version", name="uq_memories_key_version"),
+        Index(
+            "uq_memories_active_key",
+            "tenant_id",
+            "memory_key",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_memories_tenant_scope_status",
+            "tenant_id",
+            "scope_type",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    memory_key: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, server_default=text("gen_random_uuid()")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=MemoryStatus.CANDIDATE.value
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    supersedes_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class Skill(Base, TimestampMixin):
+    __tablename__ = "skills"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('candidate', 'testing', 'approved', 'published', 'deprecated', 'disabled')",
+            name="ck_skills_status",
+        ),
+        CheckConstraint(
+            "scope_type IN ('tenant', 'project', 'agent')",
+            name="ck_skills_scope_goal_f",
+        ),
+        CheckConstraint(
+            "(scope_type = 'tenant' AND project_id IS NULL AND agent_id IS NULL) OR "
+            "(scope_type = 'project' AND project_id IS NOT NULL AND agent_id IS NULL) OR "
+            "(scope_type = 'agent' AND project_id IS NULL AND agent_id IS NOT NULL)",
+            name="ck_skills_scope_owner",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_skills_tenant_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agents.tenant_id", "agents.id"],
+            ondelete="RESTRICT",
+            name="fk_skills_tenant_agent",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "current_version_id"],
+            ["skill_versions.tenant_id", "skill_versions.skill_id", "skill_versions.id"],
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_skills_current_version",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_skills_tenant_id_id"),
+        UniqueConstraint("tenant_id", "name", name="uq_skills_tenant_name"),
+        Index("ix_skills_tenant_status", "tenant_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=SkillStatus.CANDIDATE.value
+    )
+    current_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    success_stats: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class SkillVersion(Base, TimestampMixin):
+    __tablename__ = "skill_versions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'testing', 'published', 'rejected')",
+            name="ck_skill_versions_status",
+        ),
+        CheckConstraint("version > 0", name="ck_skill_versions_version_positive"),
+        CheckConstraint("length(content_hash) = 64", name="ck_skill_versions_content_hash"),
+        CheckConstraint(
+            "status <> 'published' OR (approved_at IS NOT NULL AND published_at IS NOT NULL)",
+            name="ck_skill_versions_published_approved",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_id"],
+            ["skills.tenant_id", "skills.id"],
+            ondelete="RESTRICT",
+            name="fk_skill_versions_tenant_skill",
+        ),
+        UniqueConstraint("tenant_id", "skill_id", "id", name="uq_skill_versions_tenant_skill_id"),
+        UniqueConstraint("tenant_id", "id", name="uq_skill_versions_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id", "skill_id", "version", name="uq_skill_versions_skill_version"
+        ),
+        Index("ix_skill_versions_tenant_status", "tenant_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    skill_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=SkillVersionStatus.DRAFT.value
+    )
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    preconditions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    input_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    tools: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    output_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    validation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    failure_modes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class GrowthSource(Base):
+    __tablename__ = "growth_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "subject_type IN ('memory', 'skill_version')",
+            name="ck_growth_sources_subject_type",
+        ),
+        CheckConstraint(
+            "(subject_type = 'memory' AND memory_id IS NOT NULL AND "
+            "skill_version_id IS NULL) OR "
+            "(subject_type = 'skill_version' AND memory_id IS NULL AND "
+            "skill_version_id IS NOT NULL)",
+            name="ck_growth_sources_subject",
+        ),
+        CheckConstraint(
+            "length(trajectory_hash) = 64 AND length(source_hash) = 64",
+            name="ck_growth_sources_hashes",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "memory_id"],
+            ["memories.tenant_id", "memories.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_memory",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_version_id"],
+            ["skill_versions.tenant_id", "skill_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_skill_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "run_step_id"],
+            ["run_steps.tenant_id", "run_steps.run_id", "run_steps.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_run_step",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "run_step_id", "tool_call_id"],
+            [
+                "tool_calls.tenant_id",
+                "tool_calls.run_id",
+                "tool_calls.run_step_id",
+                "tool_calls.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_tool_call",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "runtime_session_id"],
+            ["runtime_sessions.tenant_id", "runtime_sessions.run_id", "runtime_sessions.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_runtime_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_version_id"],
+            ["agent_versions.tenant_id", "agent_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_growth_sources_tenant_agent_version",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_growth_sources_tenant_id_id"),
+        Index(
+            "uq_growth_sources_memory_hash",
+            "tenant_id",
+            "memory_id",
+            "source_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'memory'"),
+        ),
+        Index(
+            "uq_growth_sources_skill_hash",
+            "tenant_id",
+            "skill_version_id",
+            "source_hash",
+            unique=True,
+            postgresql_where=text("subject_type = 'skill_version'"),
+        ),
+        Index("ix_growth_sources_tenant_run", "tenant_id", "run_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    memory_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    skill_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_step_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tool_call_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    runtime_session_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    agent_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    trajectory_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    generator_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    generator_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Evaluation(Base, TimestampMixin):
+    __tablename__ = "evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "subject_type IN ('memory', 'skill_version')",
+            name="ck_evaluations_subject_type",
+        ),
+        CheckConstraint(
+            "(subject_type = 'memory' AND memory_id IS NOT NULL AND "
+            "skill_version_id IS NULL) OR "
+            "(subject_type = 'skill_version' AND memory_id IS NULL AND "
+            "skill_version_id IS NOT NULL)",
+            name="ck_evaluations_subject",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'failed')", name="ck_evaluations_status"
+        ),
+        CheckConstraint(
+            "verdict IS NULL OR verdict IN ('pass', 'fail')",
+            name="ck_evaluations_verdict",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 1)", name="ck_evaluations_score"
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND verdict IS NULL AND ended_at IS NULL) OR "
+            "(status = 'completed' AND verdict IS NOT NULL AND ended_at IS NOT NULL) OR "
+            "(status = 'failed' AND verdict IS NULL AND error IS NOT NULL AND "
+            "ended_at IS NOT NULL)",
+            name="ck_evaluations_terminal_shape",
+        ),
+        CheckConstraint("length(content_hash) = 64", name="ck_evaluations_content_hash"),
+        ForeignKeyConstraint(
+            ["tenant_id", "memory_id"],
+            ["memories.tenant_id", "memories.id"],
+            ondelete="RESTRICT",
+            name="fk_evaluations_tenant_memory",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_version_id"],
+            ["skill_versions.tenant_id", "skill_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_evaluations_tenant_skill_version",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_evaluations_tenant_id_id"),
+        Index(
+            "ix_evaluations_tenant_subject",
+            "tenant_id",
+            "subject_type",
+            "memory_id",
+            "skill_version_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    memory_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    skill_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    evaluator_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    evaluator_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=EvaluationStatus.PENDING.value
+    )
+    score: Mapped[float | None] = mapped_column(Float)
+    verdict: Mapped[str | None] = mapped_column(String(20))
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class Approval(Base, TimestampMixin):
+    __tablename__ = "approvals"
+    __table_args__ = (
+        CheckConstraint(
+            "subject_type IN ('memory', 'skill_version')",
+            name="ck_approvals_subject_type",
+        ),
+        CheckConstraint(
+            "(subject_type = 'memory' AND memory_id IS NOT NULL AND "
+            "skill_version_id IS NULL) OR "
+            "(subject_type = 'skill_version' AND memory_id IS NULL AND "
+            "skill_version_id IS NOT NULL)",
+            name="ck_approvals_subject",
+        ),
+        CheckConstraint("action = 'publish'", name="ck_approvals_action_goal_f"),
+        CheckConstraint(
+            "status IN ('requested', 'approved', 'rejected', 'cancelled', 'expired')",
+            name="ck_approvals_status",
+        ),
+        CheckConstraint("length(content_hash) = 64", name="ck_approvals_content_hash"),
+        CheckConstraint(
+            "(status = 'requested' AND reviewer IS NULL AND decided_at IS NULL) OR "
+            "(status IN ('approved', 'rejected') AND reviewer IS NOT NULL AND "
+            "reason IS NOT NULL AND decided_at IS NOT NULL) OR "
+            "(status IN ('cancelled', 'expired') AND reason IS NOT NULL AND "
+            "decided_at IS NOT NULL)",
+            name="ck_approvals_terminal_shape",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "memory_id"],
+            ["memories.tenant_id", "memories.id"],
+            ondelete="RESTRICT",
+            name="fk_approvals_tenant_memory",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_version_id"],
+            ["skill_versions.tenant_id", "skill_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_approvals_tenant_skill_version",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_approvals_tenant_id_id"),
+        Index("ix_approvals_tenant_status", "tenant_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    memory_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    skill_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    action: Mapped[str] = mapped_column(String(32), nullable=False, server_default="publish")
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ApprovalStatus.REQUESTED.value
+    )
+    requester: Mapped[str] = mapped_column(String(200), nullable=False)
+    reviewer: Mapped[str | None] = mapped_column(String(200))
+    reason: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class SkillDeployment(Base, TimestampMixin):
+    __tablename__ = "skill_deployments"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('project', 'agent')",
+            name="ck_skill_deployments_scope_goal_f",
+        ),
+        CheckConstraint(
+            "(scope_type = 'project' AND project_id IS NOT NULL AND agent_id IS NULL) OR "
+            "(scope_type = 'agent' AND project_id IS NULL AND agent_id IS NOT NULL)",
+            name="ck_skill_deployments_scope_owner",
+        ),
+        CheckConstraint(
+            "rollout_percentage >= 1 AND rollout_percentage <= 99",
+            name="ck_skill_deployments_rollout",
+        ),
+        CheckConstraint("status IN ('active', 'retired')", name="ck_skill_deployments_status"),
+        CheckConstraint(
+            "(status = 'active' AND retired_at IS NULL) OR "
+            "(status = 'retired' AND retired_at IS NOT NULL)",
+            name="ck_skill_deployments_terminal_shape",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_id"],
+            ["skills.tenant_id", "skills.id"],
+            ondelete="RESTRICT",
+            name="fk_skill_deployments_tenant_skill",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "skill_id", "skill_version_id"],
+            ["skill_versions.tenant_id", "skill_versions.skill_id", "skill_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_skill_deployments_tenant_version",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_skill_deployments_tenant_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agents.tenant_id", "agents.id"],
+            ondelete="RESTRICT",
+            name="fk_skill_deployments_tenant_agent",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_skill_deployments_tenant_id_id"),
+        Index(
+            "uq_skill_deployments_project_active",
+            "tenant_id",
+            "skill_id",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status = 'active' AND scope_type = 'project'"),
+        ),
+        Index(
+            "uq_skill_deployments_agent_active",
+            "tenant_id",
+            "skill_id",
+            "agent_id",
+            unique=True,
+            postgresql_where=text("status = 'active' AND scope_type = 'agent'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    skill_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    skill_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    rollout_percentage: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=SkillDeploymentStatus.ACTIVE.value
+    )
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    retired_by: Mapped[str | None] = mapped_column(String(200))
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 

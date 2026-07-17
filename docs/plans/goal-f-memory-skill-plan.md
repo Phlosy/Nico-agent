@@ -1,6 +1,6 @@
 # Goal F：Memory 与 Skill 实施计划
 
-- 状态：In Progress（F1 合同冻结）
+- 状态：In Progress（F2 持久化基线完成）
 - 日期：2026-07-17
 - 基线：Goal E commit `431ad14`
 

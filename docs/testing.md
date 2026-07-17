@@ -4,10 +4,10 @@
 
 | 层级 | 命令 | 覆盖 |
 | --- | --- | --- |
-| 后端单元 | `.venv/bin/pytest backend/tests/unit` | Goal A–D 回归，以及 Registry/Schema/权限/Secret/幂等/超时/重试/取消、文件/报告/HTTP/DB/Python 合同、MCP/Hermes 边界 |
+| 后端单元 | `.venv/bin/pytest backend/tests/unit` | Goal A–E 回归，以及 Memory/Skill/Evaluation/Approval/Deployment 状态机、工具与 Runtime 合同 |
 | 前端组件 | `npm --prefix frontend test` | API 运行时契约、加载、健康、503 降级、网络失败与手动重试 |
 | 静态/构建 | `scripts/test.sh` | Ruff、后端单测、前端测试、TypeScript 与 Vite 生产构建 |
-| 真实依赖 | `scripts/test-integration.sh` | 迁移升级—回滚—重放、RLS、最小 claimer、并发领取、优先级、租约过期接管、旧 token 拒绝、检查点恢复、取消/失败与 Runtime 原子持久化 |
+| 真实依赖 | `scripts/test-integration.sh` | 迁移升级—回滚—重放、RLS、最小 claimer、Runtime/Tool，以及 Goal F 来源闭合、发布闸门、Hash 绑定、灰度唯一和终态不可变 |
 | 整栈 E2E | `scripts/e2e.sh` | 镜像、Compose 依赖、容器健康、API/OpenAPI、Web、Worker、Bucket 初始化 |
 | Goal B 总验收 | `scripts/verify-goal-b.sh` | 构建镜像，执行以上自动化出口，并证明迁移可回滚重放 |
 | Goal C 核心 E2E | `scripts/e2e-goal-c.sh` | 真实 HTTP Tenant→Project→AgentVersion→Task→Run→Step→Event/Audit 生命周期与第二租户隔离 |
@@ -20,6 +20,8 @@
 集成测试默认跳过，只有 `RUN_INTEGRATION=1` 才运行；`test-integration.sh` 会准备真实依赖并设置该变量，因此不能把普通 pytest 的 skip 当成集成测试通过。
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
+
+Goal F F2 当前回归为后端 150 项单元、前端 7 项及 36 项真实依赖集成测试。新增覆盖七类成长表的升级—降级—重放、模型/迁移零漂移、`FORCE RLS`、跨租户复合外键、Team scope 失败关闭、terminal source、Candidate/Draft 初始态、content-hash Evaluation/Approval、发布闸门、灰度冲突和正式记录不可变。F3 之前不声称 pgvector 检索或应用层成长链已实现。
 
 ## 人工与故障验收
 

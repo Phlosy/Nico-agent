@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal F（Memory 与 Skill）进行中，F1 合同冻结已完成**。Goal E 的 provider-neutral Runtime、持久化 Run、Tool Gateway、工具与 Sandbox 已通过验收；Memory/Skill 的类型、作用域、来源、检索、候选、审批、灰度与回滚边界已经冻结，但数据库和运行时代码将从 F2 起逐项实现。Team、Plugin 和量化业务仍未实现。
+当前状态：**Goal F（Memory 与 Skill）进行中，F2 持久化基线已完成**。Goal E 的 Runtime、Tool Gateway、工具与 Sandbox 已通过验收；Goal F 已冻结成长边界，并落地 Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval、SkillDeployment 的租户安全模型、迁移、RLS、复合外键、状态转换和不可变触发器。pgvector 检索、候选生成、应用服务和 API 将从 F3 起逐项实现。Team、Plugin 和量化业务仍未实现。
 
 ## 快速启动
 

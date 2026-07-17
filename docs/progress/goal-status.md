@@ -9,7 +9,7 @@
 | C | Verified | 100% | `scripts/verify-goal-c.sh` 通过；31 后端单测、7 前端测试、10 真实集成与核心 API E2E 通过 | `artifacts/goals/goal-c/20260717T015402Z/` | 无 |
 | D | Verified | 100% | `scripts/verify-goal-d.sh` 通过；47 后端单测、7 前端测试、18 真实集成、Goal C/D Compose E2E 通过 | `artifacts/goals/goal-d/20260717T032610Z/` | 无；Hermes 真实推理因本机无 CLI/凭据未执行，不影响 Adapter 验收 |
 | E | Verified | 100% | `scripts/verify-goal-e.sh` 通过；138 后端单测、7 前端测试/构建、31 真实集成、Goal C/D/E Compose E2E 与真实 Hermes 0.18.2 MCP 发现通过 | `artifacts/goals/goal-e/20260717T063841Z/` | 无；真实模型推理因无外部凭据未执行，不影响 Tool/MCP 边界验收 |
-| F | In Progress | 10% | F1 合同、ADR、状态机、来源链与验收计划已冻结；代码尚未开始 | 尚未创建 | 无；Team scope 依设计在 Goal G 前失败关闭 |
+| F | In Progress | 25% | F1 合同已冻结；F2 七类成长表、迁移/RLS/复合外键/不可变触发器已完成；150 单测、36 真实集成通过 | 尚未创建 | 无；Team scope 依设计在 Goal G 前失败关闭 |
 | G | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal F Verified |
 | H | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal G Verified |
 | I | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal H Verified |

@@ -76,6 +76,63 @@ class ToolCallStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class MemoryType(StrEnum):
+    WORKING = "working"
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+    PROCEDURAL = "procedural"
+
+
+class MemoryScope(StrEnum):
+    TENANT = "tenant"
+    PROJECT = "project"
+    AGENT = "agent"
+    TEAM = "team"
+
+
+class MemoryStatus(StrEnum):
+    CANDIDATE = "candidate"
+    ACTIVE = "active"
+    INVALIDATED = "invalidated"
+    EXPIRED = "expired"
+    DELETED = "deleted"
+
+
+class SkillStatus(StrEnum):
+    CANDIDATE = "candidate"
+    TESTING = "testing"
+    APPROVED = "approved"
+    PUBLISHED = "published"
+    DEPRECATED = "deprecated"
+    DISABLED = "disabled"
+
+
+class SkillVersionStatus(StrEnum):
+    DRAFT = "draft"
+    TESTING = "testing"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+
+
+class EvaluationStatus(StrEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ApprovalStatus(StrEnum):
+    REQUESTED = "requested"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class SkillDeploymentStatus(StrEnum):
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
 AGENT_TRANSITIONS = {
     AgentStatus.DRAFT: {AgentStatus.READY, AgentStatus.ARCHIVED},
     AgentStatus.READY: {AgentStatus.RUNNING, AgentStatus.ARCHIVED},
@@ -189,6 +246,65 @@ TOOL_CALL_TRANSITIONS = {
     ToolCallStatus.FAILED: set(),
     ToolCallStatus.TIMED_OUT: set(),
     ToolCallStatus.CANCELLED: set(),
+}
+
+MEMORY_TRANSITIONS = {
+    MemoryStatus.CANDIDATE: {MemoryStatus.ACTIVE, MemoryStatus.DELETED},
+    MemoryStatus.ACTIVE: {
+        MemoryStatus.INVALIDATED,
+        MemoryStatus.EXPIRED,
+        MemoryStatus.DELETED,
+    },
+    MemoryStatus.INVALIDATED: {MemoryStatus.DELETED},
+    MemoryStatus.EXPIRED: {MemoryStatus.DELETED},
+    MemoryStatus.DELETED: set(),
+}
+
+SKILL_TRANSITIONS = {
+    SkillStatus.CANDIDATE: {SkillStatus.TESTING, SkillStatus.DISABLED},
+    SkillStatus.TESTING: {
+        SkillStatus.CANDIDATE,
+        SkillStatus.APPROVED,
+        SkillStatus.DISABLED,
+    },
+    SkillStatus.APPROVED: {SkillStatus.PUBLISHED, SkillStatus.DISABLED},
+    SkillStatus.PUBLISHED: {SkillStatus.DEPRECATED, SkillStatus.DISABLED},
+    SkillStatus.DEPRECATED: {SkillStatus.PUBLISHED, SkillStatus.DISABLED},
+    SkillStatus.DISABLED: set(),
+}
+
+SKILL_VERSION_TRANSITIONS = {
+    SkillVersionStatus.DRAFT: {SkillVersionStatus.TESTING, SkillVersionStatus.REJECTED},
+    SkillVersionStatus.TESTING: {
+        SkillVersionStatus.PUBLISHED,
+        SkillVersionStatus.REJECTED,
+    },
+    SkillVersionStatus.PUBLISHED: set(),
+    SkillVersionStatus.REJECTED: set(),
+}
+
+EVALUATION_TRANSITIONS = {
+    EvaluationStatus.PENDING: {EvaluationStatus.COMPLETED, EvaluationStatus.FAILED},
+    EvaluationStatus.COMPLETED: set(),
+    EvaluationStatus.FAILED: set(),
+}
+
+APPROVAL_TRANSITIONS = {
+    ApprovalStatus.REQUESTED: {
+        ApprovalStatus.APPROVED,
+        ApprovalStatus.REJECTED,
+        ApprovalStatus.CANCELLED,
+        ApprovalStatus.EXPIRED,
+    },
+    ApprovalStatus.APPROVED: set(),
+    ApprovalStatus.REJECTED: set(),
+    ApprovalStatus.CANCELLED: set(),
+    ApprovalStatus.EXPIRED: set(),
+}
+
+SKILL_DEPLOYMENT_TRANSITIONS = {
+    SkillDeploymentStatus.ACTIVE: {SkillDeploymentStatus.RETIRED},
+    SkillDeploymentStatus.RETIRED: set(),
 }
 
 StateT = TypeVar("StateT", bound=StrEnum)

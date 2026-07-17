@@ -136,14 +136,17 @@ async def test_concurrent_claim_is_unique_and_expired_lease_is_reclaimed() -> No
     engine = create_async_engine(settings.resolved_database_url)
     database = Database(engine)
     try:
-        seeded = await seed_pending_run(database)
+        seeded = await seed_pending_run(database, priority=2_000_000_000)
         claims = await asyncio.gather(
             database.claim_next_run("worker-a", 30),
             database.claim_next_run("worker-b", 30),
         )
-        winner = next(claim for claim in claims if claim is not None)
+        target_claims = [
+            claim for claim in claims if claim is not None and claim.run_id == seeded["id"]
+        ]
+        winner = target_claims[0]
 
-        assert sum(claim is not None for claim in claims) == 1
+        assert len(target_claims) == 1
         assert winner.run_id == seeded["id"]
         assert winner.tenant_id == seeded["tenant_id"]
         assert winner.previous_status == "pending"
