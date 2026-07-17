@@ -57,7 +57,7 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         await engine.dispose()
 
     assert extensions == {"pgcrypto", "vector"}
-    assert revision == "20260717_0008"
+    assert revision == "20260717_0009"
     assert domain_tables == {
         "tenants",
         "projects",

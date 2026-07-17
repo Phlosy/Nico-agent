@@ -475,6 +475,11 @@ async def test_canary_overlap_and_terminal_records_are_immutable() -> None:
             version.status = "published"
             version.approved_at = version.published_at = datetime.now(UTC)
             await session.flush()
+            skill.status = "approved"
+            await session.flush()
+            skill.status = "published"
+            skill.current_version_id = version.id
+            await session.flush()
             first = SkillDeployment(
                 tenant_id=scope["tenant_id"],
                 skill_id=skill.id,

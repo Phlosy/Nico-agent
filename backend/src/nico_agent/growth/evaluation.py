@@ -453,7 +453,8 @@ class DeterministicGrowthValidator:
             self._check(
                 "candidate_status",
                 version.status in {"draft", "testing"}
-                and version.skill_status in {"candidate", "testing"},
+                and version.skill_status
+                in {"candidate", "testing", "approved", "published", "deprecated"},
                 f"{version.skill_status}/{version.status}",
             ),
             self._check(

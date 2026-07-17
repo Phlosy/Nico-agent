@@ -21,7 +21,7 @@
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
 
-Goal F F5 当前回归为后端 167 项单元、前端 7 项及 53 项真实依赖集成测试。F5 新增覆盖 Memory/SkillVersion 冻结验证 DTO、JSON Schema/步骤/精确工具/来源/Hash 规则、验证器异常脱敏、最新失败评价阻断、Evaluation 与 Requested Approval 并发幂等、跨租户隐藏、禁止自审、批准/拒绝/取消/过期/重新申请、发布前闸门、仅最新 Memory 版本可发布、修订 Candidate、原子 supersede+index、显式失效、到期、tombstone、来源不可改写，以及索引失败时状态/Event/chunk 全回滚。Skill 发布/灰度/回滚属于 F6，REST API 属于 F7，Goal F 整栈 E2E 属于 F8。
+Goal F F6 当前回归为后端 170 项单元、前端 7 项及 57 项真实依赖集成测试。F5 覆盖冻结验证 DTO、验证器异常脱敏、最新评价、并发幂等、非自审审批和原子 Memory 生命周期。F6 新增覆盖 Skill 八区内容/精确工具差异、稳定分桶、不可变修订来源、首次发布、后续版本发布不自动切换指针、并发 canary 幂等、真实 Run scope 解析、稳定/命中分流、推广退役、弃用、同版本恢复、历史回滚、禁用、跨租户隐藏、scope 不扩张、陈旧 revision、审批后工具状态漂移，以及数据库拒绝自审发布、带 active canary 的停用/指针切换和越界 deployment。REST API 属于 F7，Goal F 整栈 E2E 属于 F8。
 
 ## 人工与故障验收
 

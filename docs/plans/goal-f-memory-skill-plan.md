@@ -1,6 +1,6 @@
 # Goal F：Memory 与 Skill 实施计划
 
-- 状态：In Progress（F5 验证、人工审批与 Memory 生命周期完成）
+- 状态：In Progress（F6 SkillVersion 发布、灰度、禁用与回滚完成）
 - 日期：2026-07-17
 - 基线：Goal E commit `431ad14`
 
