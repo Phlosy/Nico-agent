@@ -58,6 +58,29 @@ class Settings(BaseSettings):
     database_tool_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     database_tool_max_rows: int = Field(default=500, ge=1, le=5_000)
     database_tool_max_output_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
+    sandbox_runner_url: str = Field(
+        default="http://sandbox-runner:8090", min_length=1, max_length=2000
+    )
+    sandbox_runner_token: str = Field(
+        default="nico-sandbox-development-token", min_length=16, max_length=500, repr=False
+    )
+    sandbox_docker_socket: str = Field(
+        default="/var/run/docker.sock", min_length=1, max_length=2000
+    )
+    sandbox_image: str = Field(
+        default=(
+            "python:3.12.10-alpine@"
+            "sha256:4bbf5ef9ce4b273299d394de268ad6018e10a9375d7efc7c2ce9501a6eb6b86c"
+        ),
+        min_length=80,
+        max_length=500,
+    )
+    sandbox_wall_time_seconds: int = Field(default=10, ge=1, le=30)
+    sandbox_memory_bytes: int = Field(default=134_217_728, ge=33_554_432, le=536_870_912)
+    sandbox_nano_cpus: int = Field(default=500_000_000, ge=100_000_000, le=2_000_000_000)
+    sandbox_pids_limit: int = Field(default=32, ge=1, le=128)
+    sandbox_output_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
+    sandbox_max_concurrency: int = Field(default=4, ge=1, le=32)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -69,12 +92,29 @@ class Settings(BaseSettings):
     def remove_minio_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("sandbox_runner_url")
+    @classmethod
+    def remove_sandbox_runner_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @field_validator("sandbox_image")
+    @classmethod
+    def require_pinned_sandbox_image(cls, value: str) -> str:
+        if "@sha256:" not in value or len(value.rsplit("@sha256:", 1)[1]) != 64:
+            raise ValueError("sandbox image must be pinned by a sha256 digest")
+        return value
+
     @model_validator(mode="after")
     def validate_worker_lease(self) -> Settings:
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds:
             raise ValueError("worker heartbeat must be shorter than the Run lease")
         if self.workspace_max_file_bytes > self.workspace_max_total_bytes:
             raise ValueError("workspace file limit cannot exceed its total limit")
+        if (
+            self.environment == "production"
+            and self.sandbox_runner_token == "nico-sandbox-development-token"
+        ):
+            raise ValueError("production requires a non-default Sandbox Runner token")
         return self
 
     @property

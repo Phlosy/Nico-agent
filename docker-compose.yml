@@ -127,10 +127,47 @@ services:
       NICO_MINIO_URL: http://minio:9000
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
       NICO_WORKER_HEALTH_INTERVAL_SECONDS: ${NICO_WORKER_HEALTH_INTERVAL_SECONDS:-15}
+      NICO_SANDBOX_RUNNER_URL: http://sandbox-runner:8090
+      NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
     command: ["python", "-m", "nico_agent.worker"]
     depends_on:
       api:
         condition: service_healthy
+      sandbox-runner:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sandbox-runner:
+    build:
+      context: ./backend
+    user: "0:0"
+    environment:
+      NICO_ENVIRONMENT: development
+      NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
+      NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
+      NICO_SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+    command:
+      - uvicorn
+      - nico_agent.sandbox.api:create_sandbox_runner_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+      - --log-config
+      - logging.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz', timeout=3)
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
     restart: unless-stopped
 
   web:

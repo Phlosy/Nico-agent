@@ -162,7 +162,11 @@ async def test_development_tenant_context_is_rejected_in_production(
     ready_report: ReadinessReport,
 ) -> None:
     app = create_app(
-        settings=Settings(environment="production", _env_file=None),
+        settings=Settings(
+            environment="production",
+            sandbox_runner_token="production-runner-token-for-api-test",
+            _env_file=None,
+        ),
         health_service=StubHealthService(ready_report),
         database=object(),  # type: ignore[arg-type]
     )

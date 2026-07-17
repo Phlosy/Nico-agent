@@ -30,6 +30,7 @@ dev = [
 [project.scripts]
 nico-api = "nico_agent.main:run"
 nico-worker = "nico_agent.worker:run"
+nico-sandbox-runner = "nico_agent.sandbox.api:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
