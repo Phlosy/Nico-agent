@@ -12,13 +12,17 @@ from nico_agent.runtime.contracts import (
     RuntimeSessionStatus,
     RuntimeTrajectory,
 )
+from nico_agent.runtime.mock import MockRuntimeProvider
+from nico_agent.runtime.registry import RuntimeProviderRegistry
 
 __all__ = [
     "AgentRuntimeProvider",
+    "MockRuntimeProvider",
     "RuntimeCapability",
     "RuntimeEvent",
     "RuntimeEventType",
     "RuntimeProviderDescriptor",
+    "RuntimeProviderRegistry",
     "RuntimeResult",
     "RuntimeSessionHandle",
     "RuntimeSessionRequest",

@@ -33,6 +33,7 @@ class _MockSession:
     cancel_requested: asyncio.Event = field(default_factory=asyncio.Event)
     resume_gate: asyncio.Event = field(default_factory=asyncio.Event)
     changed: asyncio.Condition = field(default_factory=asyncio.Condition)
+    sequence_offset: int = 0
 
     def __post_init__(self) -> None:
         self.resume_gate.set()
@@ -54,7 +55,11 @@ class MockRuntimeProvider:
         external_id = f"mock:{request.run_id}"
         session = self._sessions.get(external_id)
         if session is None:
-            session = _MockSession(request=request, checkpoint=request.checkpoint)
+            session = _MockSession(
+                request=request,
+                checkpoint=request.checkpoint,
+                sequence_offset=request.event_sequence,
+            )
             self._sessions[external_id] = session
             await self._emit(
                 session,
@@ -80,9 +85,15 @@ class MockRuntimeProvider:
 
         session.status = RuntimeSessionStatus.RUNNING
         session.messages.append({"role": "user", "content": request.task_input})
-        await self._emit(session, RuntimeEventType.RUN_STARTED)
+        await self._emit(
+            session,
+            RuntimeEventType.RUN_RESUMED if request.checkpoint else RuntimeEventType.RUN_STARTED,
+        )
 
-        for index, step_name in enumerate(steps, start=1):
+        completed_steps = 0
+        if request.checkpoint is not None:
+            completed_steps = int(request.checkpoint.get("completed_steps", 0))
+        for index, step_name in enumerate(steps[completed_steps:], start=completed_steps + 1):
             if not await self._await_control(session, delay):
                 return await self._finish_cancelled(session)
             await self._emit(
@@ -172,19 +183,22 @@ class MockRuntimeProvider:
 
     async def stream_events(self, external_session_id: str, *, after_sequence: int = 0):
         session = self._session(external_session_id)
-        index = after_sequence
+        cursor = after_sequence
         while True:
             async with session.changed:
                 await session.changed.wait_for(
-                    lambda index=index: (
-                        len(session.events) > index or session.status in TERMINAL_RUNTIME_STATUSES
+                    lambda cursor=cursor: (
+                        any(event.sequence > cursor for event in session.events)
+                        or session.status in TERMINAL_RUNTIME_STATUSES
                     )
                 )
-                pending = list(session.events[index:])
+                pending = [event for event in session.events if event.sequence > cursor]
             for event in pending:
-                index = event.sequence
+                cursor = event.sequence
                 yield event
-            if session.status in TERMINAL_RUNTIME_STATUSES and len(session.events) <= index:
+            if session.status in TERMINAL_RUNTIME_STATUSES and not any(
+                event.sequence > cursor for event in session.events
+            ):
                 return
 
     async def export_trajectory(self, external_session_id: str) -> RuntimeTrajectory:
@@ -223,7 +237,7 @@ class MockRuntimeProvider:
         payload: dict[str, Any] | None = None,
     ) -> None:
         event = RuntimeEvent(
-            sequence=len(session.events) + 1,
+            sequence=session.sequence_offset + len(session.events) + 1,
             type=event_type,
             message=message,
             payload=payload or {},

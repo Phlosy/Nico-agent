@@ -35,3 +35,30 @@ class RuntimeExecutionFailed(RuntimeProviderError):
             message,
             details={"provider": provider, "runtime_code": code},
         )
+
+
+class RuntimeProviderNotFound(RuntimeProviderError):
+    def __init__(self, provider: str) -> None:
+        super().__init__(
+            "RUNTIME_PROVIDER_NOT_FOUND",
+            f"runtime provider {provider} is not registered",
+            details={"provider": provider},
+        )
+
+
+class RuntimeLeaseLost(RuntimeProviderError):
+    def __init__(self, run_id: str) -> None:
+        super().__init__(
+            "RUNTIME_LEASE_LOST",
+            "the worker no longer owns the run lease",
+            details={"run_id": run_id},
+        )
+
+
+class RuntimeRecoveryUnsupported(RuntimeProviderError):
+    def __init__(self, provider: str, reason: str) -> None:
+        super().__init__(
+            "RUNTIME_RECOVERY_UNSUPPORTED",
+            reason,
+            details={"provider": provider},
+        )

@@ -292,6 +292,47 @@ class Run(Base, TimestampMixin):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
+class RuntimeSession(Base, TimestampMixin):
+    __tablename__ = "runtime_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('created', 'running', 'paused', 'completed', 'failed', 'cancelled')",
+            name="ck_runtime_sessions_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_runtime_sessions_tenant_run",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_runtime_sessions_tenant_id_id"),
+        UniqueConstraint("tenant_id", "run_id", name="uq_runtime_sessions_tenant_run"),
+        Index("ix_runtime_sessions_tenant_status", "tenant_id", "status", "updated_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    provider_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    protocol_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_session_id: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="created")
+    capabilities: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    provider_state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    trajectory: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class RunStep(Base, TimestampMixin):
     __tablename__ = "run_steps"
     __table_args__ = (

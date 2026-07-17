@@ -1,9 +1,11 @@
 """Environment-backed application configuration."""
 
+from __future__ import annotations
+
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -37,6 +39,11 @@ class Settings(BaseSettings):
     minio_url: str = "http://localhost:9000"
     dependency_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     worker_health_interval_seconds: float = Field(default=15.0, gt=0, le=300)
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    worker_lease_seconds: int = Field(default=30, ge=5, le=3600)
+    worker_heartbeat_seconds: float = Field(default=10.0, gt=0, le=1800)
+    worker_concurrency: int = Field(default=1, ge=1, le=64)
+    worker_id: str = Field(default="nico-worker", min_length=1, max_length=180)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -47,6 +54,12 @@ class Settings(BaseSettings):
     @classmethod
     def remove_minio_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_worker_lease(self) -> Settings:
+        if self.worker_heartbeat_seconds >= self.worker_lease_seconds:
+            raise ValueError("worker heartbeat must be shorter than the Run lease")
+        return self
 
     @property
     def resolved_database_url(self) -> str:

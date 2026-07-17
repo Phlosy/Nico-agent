@@ -35,6 +35,7 @@ from nico_agent.domain.models import (
     Project,
     Run,
     RunStep,
+    RuntimeSession,
     Task,
     Tenant,
 )
@@ -569,6 +570,23 @@ class ControlPlaneService:
                 RunStatus.TIMED_OUT,
             }:
                 run.ended_at = now
+                run.lease_owner = None
+                run.lease_token = None
+                run.lease_expires_at = None
+                run.heartbeat_at = None
+                if command.target is RunStatus.CANCELLED:
+                    runtime_session = await session.scalar(
+                        select(RuntimeSession)
+                        .where(
+                            RuntimeSession.tenant_id == context.tenant_id,
+                            RuntimeSession.run_id == run.id,
+                        )
+                        .with_for_update()
+                    )
+                    if runtime_session is not None:
+                        runtime_session.status = "cancelled"
+                        runtime_session.ended_at = now
+                        runtime_session.revision += 1
             if command.result is not None:
                 run.result = command.result
             if command.error is not None:

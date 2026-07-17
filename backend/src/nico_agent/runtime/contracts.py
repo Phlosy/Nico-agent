@@ -82,6 +82,7 @@ class RuntimeSessionRequest(BaseModel):
     run_config: dict[str, Any] = Field(default_factory=dict)
     budgets: dict[str, Any] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
+    event_sequence: int = Field(default=0, ge=0)
 
 
 class RuntimeSessionHandle(BaseModel):
@@ -111,6 +112,7 @@ class RuntimeResult(BaseModel):
     error: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
+    external_session_id: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class RuntimeTrajectory(BaseModel):
