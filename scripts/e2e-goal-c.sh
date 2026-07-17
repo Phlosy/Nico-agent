@@ -7,6 +7,8 @@ require_command curl
 require_command python3
 load_env_file
 "$ROOT_DIR/scripts/dev.sh" --detach
+log "stopping the Runtime Worker for the Goal C control-plane-only lifecycle"
+"${COMPOSE[@]}" stop worker
 
 API_BASE="http://localhost:${API_PORT:-18000}"
 TMP_DIR="$(mktemp -d)"
