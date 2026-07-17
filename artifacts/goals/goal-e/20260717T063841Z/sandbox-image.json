@@ -1,0 +1,48 @@
+[
+    {
+        "Id": "sha256:86b404caf2f4d2666a6d2e545cd7a90483578a923a330c9dc63a23598e6a6bb5",
+        "RepoTags": [],
+        "RepoDigests": [
+            "python@sha256:4bbf5ef9ce4b273299d394de268ad6018e10a9375d7efc7c2ce9501a6eb6b86c"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2025-05-30T21:12:34Z",
+        "Config": {
+            "Env": [
+                "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8",
+                "GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305",
+                "PYTHON_VERSION=3.12.10",
+                "PYTHON_SHA256=07ab697474595e06f06647417d3c7fa97ded07afc1a7e4454c5639919b46eaea"
+            ],
+            "Cmd": [
+                "python3"
+            ],
+            "WorkingDir": "/"
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 48727221,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/bf11efbc781858fbe875cd738431fa9d06b6c5785eaf4ed103847ed172b6243a/diff:/var/lib/docker/overlay2/4de0030da7b52cac4dd377362b841ff23c56935608450565cb512da9fea0fd43/diff:/var/lib/docker/overlay2/13a65010606adf8200ee0d62438f5d1092deae146e0dd3f0ca90487fcf4643fc/diff",
+                "MergedDir": "/var/lib/docker/overlay2/94780be511911f4f8e690f157e91ea62f2bf83a521249fcb9df712e5dc40f24a/merged",
+                "UpperDir": "/var/lib/docker/overlay2/94780be511911f4f8e690f157e91ea62f2bf83a521249fcb9df712e5dc40f24a/diff",
+                "WorkDir": "/var/lib/docker/overlay2/94780be511911f4f8e690f157e91ea62f2bf83a521249fcb9df712e5dc40f24a/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:fd2758d7a50e2b78d275ee7d1c218489f2439084449d895fa17eede6c61ab2c4",
+                "sha256:f67ff8d70caa44d8526bec9c7f7edfad26733f13797d86861b0fe1c19bb4abea",
+                "sha256:bbf1849f3aa7647d9ba7be0a987f93a5972dbe9fb47b69a28d49794f1afc744c",
+                "sha256:dd4e17ba1aeb0bf12aff30f70eb5b0347312dc440c951a33af84c205deeaf44f"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+        }
+    }
+]

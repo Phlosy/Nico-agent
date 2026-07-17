@@ -1,6 +1,6 @@
 # Goal E：Tool Gateway 与 Sandbox 实施计划
 
-- 状态：In Progress
+- 状态：Verified
 - 日期：2026-07-17
 - 基线：Goal D commit `5fdc691`
 - Hermes 参考：本地 `/home/node7/xpk/hermes-agent`，版本 `0.18.2`，支持 stdio/HTTP MCP
