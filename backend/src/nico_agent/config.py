@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     worker_id: str = Field(default="nico-worker", min_length=1, max_length=180)
     hermes_command: str = Field(default="hermes", min_length=1, max_length=1000)
     hermes_cwd: str | None = None
+    workspace_root: str = Field(default="/tmp/nico-agent-workspaces", min_length=1, max_length=2000)
+    workspace_max_file_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
+    workspace_max_total_bytes: int = Field(default=10_485_760, ge=1, le=104_857_600)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -61,6 +64,8 @@ class Settings(BaseSettings):
     def validate_worker_lease(self) -> Settings:
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds:
             raise ValueError("worker heartbeat must be shorter than the Run lease")
+        if self.workspace_max_file_bytes > self.workspace_max_total_bytes:
+            raise ValueError("workspace file limit cannot exceed its total limit")
         return self
 
     @property
