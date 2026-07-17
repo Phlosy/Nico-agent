@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     workspace_root: str = Field(default="/tmp/nico-agent-workspaces", min_length=1, max_length=2000)
     workspace_max_file_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
     workspace_max_total_bytes: int = Field(default=10_485_760, ge=1, le=104_857_600)
+    http_max_response_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
+    http_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    http_read_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    http_max_redirects: int = Field(default=3, ge=0, le=10)
+    http_allow_loopback: bool = False
 
     @field_validator("log_level", mode="before")
     @classmethod

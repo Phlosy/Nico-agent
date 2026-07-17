@@ -6,10 +6,20 @@ from nico_agent.tools.builtin.files import (
     ReportWriteExecutor,
     WorkspaceManager,
 )
+from nico_agent.tools.builtin.http_read import (
+    HttpReadExecutor,
+    PinnedRequest,
+    RawHttpResponse,
+    SocketHttpTransport,
+)
 
 __all__ = [
     "FileReadExecutor",
     "FileWriteExecutor",
+    "HttpReadExecutor",
+    "PinnedRequest",
+    "RawHttpResponse",
     "ReportWriteExecutor",
+    "SocketHttpTransport",
     "WorkspaceManager",
 ]
