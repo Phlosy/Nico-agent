@@ -9,7 +9,7 @@
 | C | Verified | 100% | `scripts/verify-goal-c.sh` 通过；31 后端单测、7 前端测试、10 真实集成与核心 API E2E 通过 | `artifacts/goals/goal-c/20260717T015402Z/` | 无 |
 | D | Verified | 100% | `scripts/verify-goal-d.sh` 通过；47 后端单测、7 前端测试、18 真实集成、Goal C/D Compose E2E 通过 | `artifacts/goals/goal-d/20260717T032610Z/` | 无；Hermes 真实推理因本机无 CLI/凭据未执行，不影响 Adapter 验收 |
 | E | Verified | 100% | `scripts/verify-goal-e.sh` 通过；138 后端单测、7 前端测试/构建、31 真实集成、Goal C/D/E Compose E2E 与真实 Hermes 0.18.2 MCP 发现通过 | `artifacts/goals/goal-e/20260717T063841Z/` | 无；真实模型推理因无外部凭据未执行，不影响 Tool/MCP 边界验收 |
-| F | In Progress | 90% | F1–F7 已完成；成长域 REST API/OpenAPI、Memory/Skill 完整生命周期与接口级租户隔离已实现；172 单测、7 前端测试/构建、58 真实集成通过 | 尚未创建 | 无；Goal F Compose E2E/证据/Handoff 待 F8，Team scope 在 Goal G 前失败关闭 |
+| F | Verified | 100% | `scripts/verify-goal-f.sh` 通过；172 后端单测、7 前端测试/构建、58 真实集成及 Goal C/D/E/F Compose E2E 全绿 | `artifacts/goals/goal-f/20260717T084217Z/` | 无；Team scope 按合同在 Goal G Membership 授权前失败关闭 |
 | G | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal F Verified |
 | H | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal G Verified |
 | I | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal H Verified |

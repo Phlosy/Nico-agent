@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal F（Memory 与 Skill）进行中，F7 成长域 REST API 已完成**。Goal F 已落地租户安全成长模型、确定性 `vector(384)` 检索、终态轨迹候选生成、provider-neutral 验证、独立人工审批、完整 Memory 生命周期，以及不可变 SkillVersion 修订/比较/发布、基于真实 Run 的稳定灰度解析、推广、弃用、禁用与历史回滚；这些能力现已通过受 TenantContext/RLS 约束的版本化 HTTP 接口开放。Compose E2E 与最终证据属于 F8；Team、Plugin 和量化业务仍未实现。
+当前状态：**Goal F（Memory 与 Skill）已验证完成**。平台已落地租户安全成长模型、确定性 `vector(384)` 检索、终态轨迹候选生成、provider-neutral 验证、独立人工审批、完整 Memory 生命周期，以及不可变 SkillVersion 修订/比较/发布、基于真实 Run 的稳定灰度解析、推广、弃用、禁用与历史回滚；这些能力已通过受 TenantContext/RLS 约束的版本化 HTTP 接口、真实 PostgreSQL/pgvector 集成和 Compose E2E 验证。Team、Workflow、Plugin 和量化业务仍按路线图留给 Goal G+。
 
 ## 快速启动
 
@@ -75,10 +75,16 @@ scripts/test.sh
 NICO_EVIDENCE_DIR=artifacts/goals/goal-e/<timestamp> scripts/verify-goal-e.sh
 ```
 
+完整 Goal F 验收（Goal E 全量回归、Memory/Skill 单元与真实依赖测试、受控成长 Compose E2E）：
+
+```bash
+NICO_EVIDENCE_DIR=artifacts/goals/goal-f/<timestamp> scripts/verify-goal-f.sh
+```
+
 Goal A 架构基线仍可独立验证：
 
 ```bash
 bash scripts/verify-goal-a.sh
 ```
 
-Goal F 当前已完成 F1–F7，下一增量是 F8 Compose E2E、全量验收证据、文档审查和 Goal G Handoff。开始前必须阅读 Goal E Handoff、Goal F 计划、Memory/Skill 边界、ADR-0009/0010 和 Feature Matrix。不得绕过 Tool Gateway、让反思器/验证器执行工具、让未发布 Candidate 进入运行时，或在 Goal G 前伪造 Team scope。
+Goal F 已完成 F1–F8，权威证据位于 `artifacts/goals/goal-f/20260717T084217Z/`。进入 Goal G 前必须阅读 Goal F Handoff、Goal F 计划、Memory/Skill 边界、ADR-0005/0006/0010 和 Feature Matrix。不得重复实现 Memory/Skill 成长闭环、绕过 Tool Gateway、让反思器/验证器执行工具、让未发布 Candidate 进入运行时，或在 Membership 授权之外启用 Team scope。

@@ -16,12 +16,14 @@
 | Goal D 总验收 | `scripts/verify-goal-d.sh` | Goal C 全量回归、47 后端单测、7 前端测试、18 真实集成、两个 Compose E2E 与 Hermes 边界检查 |
 | Goal E Tool/Sandbox E2E | `scripts/e2e-goal-e.sh` | HTTP→Worker→Mock intent→Gateway→文件/报告/独立 Python 容器→ToolCall/Event/Audit/Trajectory/API；无残留 sandbox 容器 |
 | Goal E 总验收 | `scripts/verify-goal-e.sh` | Goal D 完整回归、138 后端单测、7 前端测试、31 真实集成、三个 Compose E2E、固定镜像和真实 Hermes MCP 发现 |
+| Goal F 成长闭环 E2E | `scripts/e2e-goal-f.sh` | 终态 Run→幂等候选→未审批隔离→独立审批→Memory 召回→Skill v1/v2 灰度/推广/回滚→第二租户不可观察 |
+| Goal F 总验收 | `scripts/verify-goal-f.sh` | Goal E 完整回归、172 后端单测、7 前端测试/构建、58 真实集成、Goal C/D/E/F Compose E2E 与证据归档 |
 
 集成测试默认跳过，只有 `RUN_INTEGRATION=1` 才运行；`test-integration.sh` 会准备真实依赖并设置该变量，因此不能把普通 pytest 的 skip 当成集成测试通过。
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
 
-Goal F F7 当前回归为后端 172 项单元、前端 7 项及 58 项真实依赖集成测试。F5 覆盖冻结验证 DTO、验证器异常脱敏、最新评价、并发幂等、非自审审批和原子 Memory 生命周期。F6 新增覆盖 Skill 八区内容/精确工具差异、稳定分桶、不可变修订来源、首次发布、后续版本发布不自动切换指针、并发 canary 幂等、真实 Run scope 解析、稳定/命中分流、推广退役、弃用、同版本恢复、历史回滚、禁用、跨租户隐藏、scope 不扩张、陈旧 revision、审批后工具状态漂移，以及数据库拒绝自审发布、带 active canary 的停用/指针切换和越界 deployment。F7 覆盖 OpenAPI 路径/Header/敏感字段排除，以及真实 HTTP 终态 Run→候选→Memory 验证/双人审批/发布/向量检索/修订、Skill 比较/双闸门发布/canary/解析/推广/历史回滚/禁用、403/404/409/422 和第二租户不可观察。Goal F 整栈 E2E 属于 F8。
+Goal F 已在 `artifacts/goals/goal-f/20260717T084217Z/` 完整验证：后端 172 项单元、前端 7 项测试及 production build、58 项真实依赖集成，以及 Goal C/D/E/F 四条 Compose E2E 全部通过。F5 覆盖冻结验证 DTO、异常脱敏、最新评价、并发幂等、非自审审批和原子 Memory 生命周期；F6 覆盖 Skill 八区差异、稳定分桶、不可变修订来源、发布、真实 Run scope、canary、推广、弃用、历史回滚、禁用、跨租户、工具漂移及数据库防线；F7 覆盖 OpenAPI、完整成长 HTTP、403/404/409/422 和第二租户隔离；F8 证明候选在审批前不可召回/解析，审批后 Memory 可检索、Skill 可灰度/推广/回滚，且来源响应不泄露 snapshot、向量、原始工具参数或内部 token。
 
 ## 人工与故障验收
 
