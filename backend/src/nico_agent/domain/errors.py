@@ -43,3 +43,8 @@ class ResourceNotFound(DomainError):
 class DomainConflict(DomainError):
     def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(code, message, details=details)
+
+
+class AccessDenied(DomainError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code, message)

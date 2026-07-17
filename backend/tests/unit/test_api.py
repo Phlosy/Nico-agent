@@ -128,3 +128,50 @@ async def test_openapi_describes_health_contract(ready_report: ReadinessReport) 
     assert response.status_code == 200
     assert "/api/v1/health/live" in response.json()["paths"]
     assert "/api/v1/health/ready" in response.json()["paths"]
+
+
+@pytest.mark.asyncio
+async def test_openapi_describes_goal_c_control_plane(ready_report: ReadinessReport) -> None:
+    client, _ = make_client(ready_report)
+
+    async with client:
+        response = await client.get("/openapi.json")
+
+    paths = response.json()["paths"]
+    assert {
+        "/api/v1/tenants/bootstrap",
+        "/api/v1/projects",
+        "/api/v1/agents",
+        "/api/v1/agents/{agent_id}/versions",
+        "/api/v1/tasks",
+        "/api/v1/tasks/{task_id}/runs",
+        "/api/v1/runs/{run_id}/steps",
+        "/api/v1/runs/{run_id}/events",
+        "/api/v1/audit",
+    } <= paths.keys()
+
+    parameters = paths["/api/v1/agents"]["get"]["parameters"]
+    assert any(
+        parameter["in"] == "header" and parameter["name"] == "X-Tenant-ID"
+        for parameter in parameters
+    )
+
+
+@pytest.mark.asyncio
+async def test_development_tenant_context_is_rejected_in_production(
+    ready_report: ReadinessReport,
+) -> None:
+    app = create_app(
+        settings=Settings(environment="production", _env_file=None),
+        health_service=StubHealthService(ready_report),
+        database=object(),  # type: ignore[arg-type]
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/agents",
+            headers={"X-Tenant-ID": "00000000-0000-0000-0000-000000000001"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "DEVELOPMENT_TENANT_CONTEXT_DISABLED"

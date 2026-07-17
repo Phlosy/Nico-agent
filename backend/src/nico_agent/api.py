@@ -14,10 +14,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from nico_agent.config import Settings, get_settings
+from nico_agent.database import Database
+from nico_agent.domain.errors import DomainError
+from nico_agent.domain_api import router as domain_router
 from nico_agent.health import (
     HealthServiceProtocol,
     InfrastructureResources,
@@ -46,6 +50,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         supplied = request.headers.get("X-Request-ID", "")
         request_id = supplied if _VALID_REQUEST_ID.fullmatch(supplied) else str(uuid4())
+        request.state.request_id = request_id
         token = request_id_context.set(request_id)
         started = time.perf_counter()
         try:
@@ -80,6 +85,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 def create_app(
     settings: Settings | None = None,
     health_service: HealthServiceProtocol | None = None,
+    database: Database | None = None,
 ) -> FastAPI:
     runtime_settings = settings or get_settings()
 
@@ -90,6 +96,7 @@ def create_app(
         if health_service is None:
             resources = InfrastructureResources.create(runtime_settings)
             app.state.health_service = build_health_service(runtime_settings, resources)
+            app.state.database = Database(resources.engine)
         logger.info(
             "api started",
             extra={
@@ -112,13 +119,14 @@ def create_app(
     )
     app.state.settings = runtime_settings
     app.state.health_service = health_service
+    app.state.database = database
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Content-Type", "X-Request-ID", "X-Tenant-ID", "X-Actor-ID"],
         expose_headers=["X-Request-ID"],
     )
 
@@ -145,5 +153,34 @@ def create_app(
         if report.status == "not_ready":
             return JSONResponse(status_code=503, content=report.model_dump(mode="json"))
         return report
+
+    @app.exception_handler(DomainError)
+    async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
+        status_code = 400
+        if exc.code == "RESOURCE_NOT_FOUND":
+            status_code = 404
+        elif exc.code in {"REVISION_CONFLICT", "INVALID_STATE_TRANSITION"}:
+            status_code = 409
+        elif exc.code == "DEVELOPMENT_TENANT_CONTEXT_DISABLED":
+            status_code = 403
+        elif exc.code == "DATABASE_UNAVAILABLE":
+            status_code = 503
+        return JSONResponse(
+            status_code=status_code,
+            content={"code": exc.code, "message": exc.message, "details": exc.details},
+        )
+
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(_request: Request, _exc: IntegrityError) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "DATA_CONFLICT",
+                "message": "the operation conflicts with an existing resource or reference",
+                "details": {},
+            },
+        )
+
+    app.include_router(domain_router)
 
     return app

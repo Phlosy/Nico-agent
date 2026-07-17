@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Nico Agent Platform"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     environment: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
