@@ -1,6 +1,6 @@
 # REST API
 
-Goal E 在通用控制面 REST API 上增加版本化 ToolDefinition 和按 Run 的 ToolCall 查询；SSE、正式认证和 SDK 仍属于后续 Goal。
+Goal F 在通用控制面 REST API 上增加受控 Memory/Skill 成长生命周期；SSE、正式认证和 SDK 仍属于后续 Goal。
 
 ## OpenAPI
 
@@ -90,6 +90,31 @@ X-Actor-ID: <optional actor; defaults to development-user>
 Run 的 Provider 由不可变 AgentVersion 的 `run_config.runtime_provider` 选择。API 不直接调用 Provider；独立 Worker 领取 Pending Run 后推进状态。`POST .../cancel` 先提交数据库权威 Cancelled 并清除租约，Worker 随后合作取消 Provider，迟到结果不能覆盖终态。
 
 API 不提供直接执行工具的端点。工具只能由拥有有效 Run 租约的 Worker 经 Gateway 发起；因此客户端不能绕过 AgentVersion 策略、幂等、审计或 Sandbox。开发 Header 仍不是认证。
+
+## Goal F 成长域
+
+API 不提供任意创建正式 Memory 或 Skill 的端点。唯一自动入口是 `POST /api/v1/runs/{run_id}/growth-candidates`，且只接受当前租户已终态化、来源闭合的 Run；结果始终是 Candidate/Draft。发布仍必须依次通过确定性 Evaluation 和独立人工 Approval。
+
+| 资源 | 方法与路径 | 行为 |
+| --- | --- | --- |
+| Candidate | `POST /api/v1/runs/{run_id}/growth-candidates` | 从终态 Run 幂等生成 Memory/Skill 候选 |
+| Memory | `GET /api/v1/memories`、`GET /api/v1/memories/{memory_id}` | 按状态、类型、scope 列表及读取不可变版本 |
+| Memory | `POST /api/v1/memories/search` | 在 project/agent 上下文中 scope-first 向量检索 Active Memory |
+| Memory | `GET .../{memory_id}/sources\|evaluations\|approvals` | 查询脱敏来源摘要、验证和审批历史 |
+| Memory | `POST .../{memory_id}/evaluations\|approvals\|publish` | 验证、申请独立审批并发布/索引 |
+| Memory | `POST .../{memory_id}/revisions\|invalidate\|expire`、`DELETE .../{memory_id}` | 创建不可变修订、失效、到期或 tombstone |
+| Approval | `GET /api/v1/growth-approvals/{approval_id}` | 查询审批 |
+| Approval | `POST .../{approval_id}/decision\|cancel` | 独立批准/拒绝或由申请者取消 |
+| Skill | `GET /api/v1/skills`、`GET /api/v1/skills/{skill_id}` | 列表及读取稳定身份/current pointer |
+| SkillVersion | `GET .../{skill_id}/versions`、`GET .../versions/{version_id}` | 查询不可变版本及其来源/验证/审批 |
+| SkillVersion | `GET .../{skill_id}/versions/compare` | 比较八个内容区、工具集合和版本方向 |
+| SkillVersion | `POST .../revisions\|evaluations\|approvals\|publish` | 创建 Draft、验证、审批和发布版本 |
+| Deployment | `GET/POST .../{skill_id}/deployments` | 查询或创建 project/agent 级 1–99% canary |
+| Deployment | `POST .../deployments/{deployment_id}/retire` | 退役 canary，保留历史 |
+| Resolution | `GET .../{skill_id}/resolve?run_id=...` | 从持久化 Run scope 稳定解析 stable/canary 版本 |
+| Skill | `POST .../{skill_id}/promote\|rollback\|deprecate\|disable` | 切换稳定指针、回滚或停止 Skill |
+
+所有写命令使用 `expected_revision` 或显式的 Skill/SkillVersion revision。请求者自审返回 `403 APPROVAL_SELF_REVIEW_FORBIDDEN`；跨租户资源与不存在资源统一为 `404`；乐观锁冲突为 `409`；请求 Schema 错误为 `422`。来源响应只包含可审计 ID、Hash 和生成器版本，不公开内部 trajectory snapshot、embedding、原始工具 arguments 或 Provider 状态。
 
 ## 当前安全边界
 

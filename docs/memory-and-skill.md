@@ -1,6 +1,6 @@
 # Memory 与 Skill 边界
 
-Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F6 已将领域记录、pgvector 检索、候选生成、验证/审批、Memory 生命周期及 Skill 发布/灰度/回滚落地，代码状态见 Feature Matrix。
+Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F7 已将领域记录、pgvector 检索、候选生成、验证/审批、Memory 生命周期及 Skill 发布/灰度/回滚通过受控 REST API 开放，代码状态见 Feature Matrix。
 
 ## 能力流
 
@@ -66,5 +66,6 @@ SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤�
 - F4：只读构造有界、递归脱敏、Hash 稳定的终态 TrajectorySnapshot；`ReflectionProvider` 只接收冻结 DTO。确定性基线反思器按成功/失败结果生成四类 MemoryCandidate 与结构化 SkillVersion draft，策略服务控制 scope/TTL，并在 Run 行锁下幂等写入 GrowthSource、Event 和 Audit。反思器没有 ORM、Session、Secret、工具或发布能力，重复/并发生成不会复制候选。
 - F5：`GrowthValidator` 只接收冻结的来源/subject DTO；确定性基线验证内容 Hash、Schema、步骤、精确工具状态/来源、scope 与终态轨迹。Evaluation 按 evaluator/version/content 幂等且终态不可变；Approval 要求最新终态 Evaluation 为 pass，禁止请求者自审，并支持批准、拒绝、取消、过期和重新申请。Memory 发布在一个事务内重新校验 Hash/来源/评价/批准、失效旧 Active 版本、激活新版本并写入确定性向量；修订创建同 key 的新 Candidate，失败不影响旧 Active。显式失效、到期与 tombstone 均保留来源、chunk、Event 和 Audit，但 SQL 召回立即排除。
 - F6：结构化修订创建递增 Draft 并复制不可变来源，比较按八个内容区及精确工具版本输出稳定 Hash 差异。发布只允许最新 Draft/Testing 版本，重新计算 content hash、要求最新终态 Evaluation 为 pass、非自审且未过期 Approval，并重建验证快照以拒绝审批后工具状态漂移。首版发布建立稳定指针；后续 Published 版本可按 project/agent 建立 1–99% canary，解析从数据库 Run/Task 推导 scope，以 `sha256(run_id:deployment_id) % 100` 稳定分桶，agent 优先于 project。推广/弃用/禁用/回滚先退役 active deployment；历史 SkillVersion 不改写，Disabled 为终态。
-- F7 才开放 Goal F REST API；F8 完成 Compose E2E 与验收证据。
+- F7：开放终态 Run 候选生成、Memory 查询/来源/检索/修订/发布/失效/删除，以及 Skill 版本查询/比较/验证/审批/发布/灰度/推广/回滚/停用 API。没有任意创建正式 Memory/Skill 的入口；来源响应不公开轨迹 snapshot、向量、原始工具参数或内部凭据。OpenAPI 契约测试和真实 PostgreSQL HTTP 集成覆盖 403/404/409/422、双租户隔离及完整 release 链路。
+- F8 完成 Compose E2E 与验收证据。
 - Goal G 才能启用 Team scope；Goal H 才能由 Plugin 注册反思器/evaluator；Goal K 才提供正式身份和细粒度审批授权。

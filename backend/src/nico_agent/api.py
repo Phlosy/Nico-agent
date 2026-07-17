@@ -20,8 +20,9 @@ from starlette.responses import Response
 
 from nico_agent.config import Settings, get_settings
 from nico_agent.database import Database
-from nico_agent.domain.errors import DomainError
+from nico_agent.domain.errors import AccessDenied, DomainError
 from nico_agent.domain_api import router as domain_router
+from nico_agent.growth_api import router as growth_router
 from nico_agent.health import (
     HealthServiceProtocol,
     InfrastructureResources,
@@ -161,7 +162,7 @@ def create_app(
             status_code = 404
         elif exc.code in {"REVISION_CONFLICT", "INVALID_STATE_TRANSITION"}:
             status_code = 409
-        elif exc.code == "DEVELOPMENT_TENANT_CONTEXT_DISABLED":
+        elif isinstance(exc, AccessDenied):
             status_code = 403
         elif exc.code == "DATABASE_UNAVAILABLE":
             status_code = 503
@@ -182,5 +183,6 @@ def create_app(
         )
 
     app.include_router(domain_router)
+    app.include_router(growth_router)
 
     return app

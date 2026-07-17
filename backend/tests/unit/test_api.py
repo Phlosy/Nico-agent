@@ -158,6 +158,88 @@ async def test_openapi_describes_goal_c_control_plane(ready_report: ReadinessRep
 
 
 @pytest.mark.asyncio
+async def test_openapi_describes_goal_f_growth_lifecycle(
+    ready_report: ReadinessReport,
+) -> None:
+    client, _ = make_client(ready_report)
+
+    async with client:
+        response = await client.get("/openapi.json")
+
+    paths = response.json()["paths"]
+    assert {
+        "/api/v1/runs/{run_id}/growth-candidates",
+        "/api/v1/memories",
+        "/api/v1/memories/search",
+        "/api/v1/memories/{memory_id}/sources",
+        "/api/v1/memories/{memory_id}/approvals",
+        "/api/v1/growth-approvals/{approval_id}/decision",
+        "/api/v1/skills",
+        "/api/v1/skills/{skill_id}/versions/compare",
+        "/api/v1/skills/{skill_id}/deployments",
+        "/api/v1/skills/{skill_id}/rollback",
+        "/api/v1/skills/{skill_id}/disable",
+    } <= paths.keys()
+
+    parameters = paths["/api/v1/memories"]["get"]["parameters"]
+    assert any(
+        parameter["in"] == "header" and parameter["name"] == "X-Tenant-ID"
+        for parameter in parameters
+    )
+
+
+@pytest.mark.asyncio
+async def test_growth_openapi_does_not_expose_internal_evidence_or_vectors(
+    ready_report: ReadinessReport,
+) -> None:
+    client, _ = make_client(ready_report)
+
+    async with client:
+        document = (await client.get("/openapi.json")).json()
+
+    schemas = document["components"]["schemas"]
+    assert set(schemas["GrowthSourceRead"]["properties"]) == {
+        "id",
+        "subject_type",
+        "memory_id",
+        "skill_version_id",
+        "run_id",
+        "run_step_id",
+        "tool_call_id",
+        "runtime_session_id",
+        "agent_version_id",
+        "trajectory_hash",
+        "generator_name",
+        "generator_version",
+        "source_hash",
+        "created_at",
+    }
+    serialized_growth_contracts = str(
+        {
+            name: schema
+            for name, schema in schemas.items()
+            if name
+            in {
+                "GrowthSourceRead",
+                "MemoryRead",
+                "MemorySearchRead",
+                "SkillRead",
+                "SkillVersionEntityRead",
+            }
+        }
+    ).lower()
+    for forbidden in (
+        "snapshot",
+        "embedding",
+        "arguments_hash",
+        "provider_state",
+        "api_key",
+        "secret",
+    ):
+        assert forbidden not in serialized_growth_contracts
+
+
+@pytest.mark.asyncio
 async def test_development_tenant_context_is_rejected_in_production(
     ready_report: ReadinessReport,
 ) -> None:

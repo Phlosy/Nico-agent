@@ -1,6 +1,6 @@
 # Goal F：Memory 与 Skill 实施计划
 
-- 状态：In Progress（F6 SkillVersion 发布、灰度、禁用与回滚完成）
+- 状态：In Progress（F7 REST API、OpenAPI 与接口级隔离测试完成）
 - 日期：2026-07-17
 - 基线：Goal E commit `431ad14`
 
