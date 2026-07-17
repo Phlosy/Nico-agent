@@ -57,7 +57,7 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         await engine.dispose()
 
     assert extensions == {"pgcrypto", "vector"}
-    assert revision == "20260717_0003"
+    assert revision == "20260717_0004"
     assert domain_tables == {
         "tenants",
         "projects",
@@ -69,6 +69,8 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         "events",
         "audit_records",
         "runtime_sessions",
+        "tool_definitions",
+        "tool_calls",
     }
 
 
@@ -86,6 +88,8 @@ async def test_runtime_role_and_force_rls_cover_every_core_table(settings: Setti
         "events",
         "audit_records",
         "runtime_sessions",
+        "tool_definitions",
+        "tool_calls",
     }
     try:
         async with engine.connect() as connection:

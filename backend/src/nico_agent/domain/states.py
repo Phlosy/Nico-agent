@@ -61,6 +61,21 @@ class RunStepStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ToolDefinitionStatus(StrEnum):
+    DRAFT = "draft"
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
+class ToolCallStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
 AGENT_TRANSITIONS = {
     AgentStatus.DRAFT: {AgentStatus.READY, AgentStatus.ARCHIVED},
     AgentStatus.READY: {AgentStatus.RUNNING, AgentStatus.ARCHIVED},
@@ -151,6 +166,29 @@ RUN_STEP_TRANSITIONS = {
     RunStepStatus.COMPLETED: set(),
     RunStepStatus.FAILED: set(),
     RunStepStatus.CANCELLED: set(),
+}
+
+TOOL_DEFINITION_TRANSITIONS = {
+    ToolDefinitionStatus.DRAFT: {
+        ToolDefinitionStatus.ENABLED,
+        ToolDefinitionStatus.DISABLED,
+    },
+    ToolDefinitionStatus.ENABLED: {ToolDefinitionStatus.DISABLED},
+    ToolDefinitionStatus.DISABLED: {ToolDefinitionStatus.ENABLED},
+}
+
+TOOL_CALL_TRANSITIONS = {
+    ToolCallStatus.PENDING: {ToolCallStatus.RUNNING, ToolCallStatus.CANCELLED},
+    ToolCallStatus.RUNNING: {
+        ToolCallStatus.SUCCEEDED,
+        ToolCallStatus.FAILED,
+        ToolCallStatus.TIMED_OUT,
+        ToolCallStatus.CANCELLED,
+    },
+    ToolCallStatus.SUCCEEDED: set(),
+    ToolCallStatus.FAILED: set(),
+    ToolCallStatus.TIMED_OUT: set(),
+    ToolCallStatus.CANCELLED: set(),
 }
 
 StateT = TypeVar("StateT", bound=StrEnum)

@@ -8,12 +8,16 @@ from nico_agent.domain.states import (
     RUN_STEP_TRANSITIONS,
     RUN_TRANSITIONS,
     TASK_TRANSITIONS,
+    TOOL_CALL_TRANSITIONS,
+    TOOL_DEFINITION_TRANSITIONS,
     AgentStatus,
     AgentVersionStatus,
     ProjectStatus,
     RunStatus,
     RunStepStatus,
     TaskStatus,
+    ToolCallStatus,
+    ToolDefinitionStatus,
     require_revision,
     transition_state,
 )
@@ -28,6 +32,8 @@ from nico_agent.domain.states import (
         ("task", TASK_TRANSITIONS),
         ("run", RUN_TRANSITIONS),
         ("run_step", RUN_STEP_TRANSITIONS),
+        ("tool_definition", TOOL_DEFINITION_TRANSITIONS),
+        ("tool_call", TOOL_CALL_TRANSITIONS),
     ],
 )
 def test_every_declared_transition_is_accepted(entity: str, transitions: dict) -> None:
@@ -50,6 +56,18 @@ def test_every_declared_transition_is_accepted(entity: str, transitions: dict) -
         ("task", TaskStatus.CREATED, TaskStatus.COMPLETED, TASK_TRANSITIONS),
         ("run", RunStatus.COMPLETED, RunStatus.RUNNING, RUN_TRANSITIONS),
         ("run_step", RunStepStatus.COMPLETED, RunStepStatus.RUNNING, RUN_STEP_TRANSITIONS),
+        (
+            "tool_definition",
+            ToolDefinitionStatus.ENABLED,
+            ToolDefinitionStatus.DRAFT,
+            TOOL_DEFINITION_TRANSITIONS,
+        ),
+        (
+            "tool_call",
+            ToolCallStatus.SUCCEEDED,
+            ToolCallStatus.RUNNING,
+            TOOL_CALL_TRANSITIONS,
+        ),
     ],
 )
 def test_invalid_transitions_return_a_stable_error(

@@ -33,6 +33,8 @@ from nico_agent.domain.states import (
     RunStatus,
     RunStepStatus,
     TaskStatus,
+    ToolCallStatus,
+    ToolDefinitionStatus,
 )
 
 
@@ -347,6 +349,7 @@ class RunStep(Base, TimestampMixin):
             name="fk_run_steps_tenant_run",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_run_steps_tenant_id_id"),
+        UniqueConstraint("tenant_id", "run_id", "id", name="uq_run_steps_tenant_run_id"),
         UniqueConstraint("tenant_id", "run_id", "sequence", name="uq_run_steps_sequence"),
     )
 
@@ -363,6 +366,128 @@ class RunStep(Base, TimestampMixin):
     input: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class ToolDefinition(Base, TimestampMixin):
+    __tablename__ = "tool_definitions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'enabled', 'disabled')",
+            name="ck_tool_definitions_status",
+        ),
+        CheckConstraint(
+            "risk IN ('low', 'medium', 'high')",
+            name="ck_tool_definitions_risk",
+        ),
+        CheckConstraint("timeout_seconds > 0", name="ck_tool_definitions_timeout"),
+        CheckConstraint("max_output_bytes > 0", name="ck_tool_definitions_output_limit"),
+        CheckConstraint(
+            "length(implementation_hash) = 64 AND length(content_hash) = 64",
+            name="ck_tool_definitions_hashes",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_tool_definitions_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id", "name", "version", name="uq_tool_definitions_tenant_name_version"
+        ),
+        Index(
+            "ix_tool_definitions_tenant_status_name",
+            "tenant_id",
+            "status",
+            "name",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ToolDefinitionStatus.DRAFT.value
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    input_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    output_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    permission: Mapped[str] = mapped_column(String(150), nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    retry_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    isolation_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    risk: Mapped[str] = mapped_column(String(20), nullable=False, server_default="low")
+    max_output_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    implementation_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class ToolCall(Base, TimestampMixin):
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled')",
+            name="ck_tool_calls_status",
+        ),
+        CheckConstraint("length(arguments_hash) = 64", name="ck_tool_calls_arguments_hash"),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_tool_calls_tenant_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "run_step_id"],
+            ["run_steps.tenant_id", "run_steps.run_id", "run_steps.id"],
+            ondelete="RESTRICT",
+            name="fk_tool_calls_tenant_run_step",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "tool_definition_id"],
+            ["tool_definitions.tenant_id", "tool_definitions.id"],
+            ondelete="RESTRICT",
+            name="fk_tool_calls_tenant_definition",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_tool_calls_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "tool_definition_id",
+            "idempotency_key",
+            name="uq_tool_calls_run_tool_idempotency",
+        ),
+        Index("ix_tool_calls_tenant_run_created", "tenant_id", "run_id", "created_at"),
+        Index("ix_tool_calls_tenant_status", "tenant_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_step_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tool_definition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    tool_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    caller: Mapped[str] = mapped_column(String(200), nullable=False)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ToolCallStatus.PENDING.value
+    )
+    attempts: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
