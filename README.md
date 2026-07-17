@@ -2,7 +2,7 @@
 
 Nico Agent Platform 是一个通用、可扩展、多租户的成长型 Agent 服务平台。平台核心只提供 Agent 生命周期、结构化任务与可恢复 Run、工具、记忆、技能、团队工作流、插件、权限和审计；量化、软件研发、科研等领域能力通过独立插件接入。
 
-当前状态：**Goal C（Agent、Task、Run 核心模型）已完成并通过验收**。仓库已具备 Tenant/Project、Agent/AgentVersion、Task/Run/RunStep、Event/AuditRecord 的多租户持久化、状态机、REST API、PostgreSQL FORCE RLS 和真实 E2E。Worker 仍是基础设施监督进程；Runtime Provider 与 Hermes 从 Goal D 实现。
+当前状态：**Goal D（Runtime Provider）已完成并通过验收**。仓库已具备 provider-neutral 协议、确定性 Mock、隔离的 Hermes CLI Adapter、RuntimeSession、PostgreSQL Run 租约/心跳/恢复、持久化 Worker、规范化事件与轨迹 API。Tool Gateway/Sandbox、Memory、Skill、Team、Plugin 和量化业务仍未实现。
 
 ## 快速启动
 
@@ -40,6 +40,7 @@ scripts/cleanup.sh --volumes
 - [Goal A 阶段计划](docs/plans/goal-a-architecture-baseline-plan.md)
 - [Goal B 阶段计划](docs/plans/goal-b-infrastructure-plan.md)
 - [Goal C 阶段计划](docs/plans/goal-c-core-domain-plan.md)
+- [Goal D 阶段计划](docs/plans/goal-d-runtime-provider-plan.md)
 - [阶段路线图](docs/roadmap.md)
 - [Goal 状态](docs/progress/goal-status.md)
 - [功能矩阵](docs/progress/feature-matrix.md)
@@ -52,6 +53,7 @@ scripts/cleanup.sh --volumes
 - [状态机](docs/state-machines.md)
 - [开发与运行](docs/development.md)
 - [基础 API](docs/api.md)
+- [Runtime 与 Worker](docs/runtime.md)
 - [测试策略](docs/testing.md)
 - [架构决策](docs/decisions/)
 
@@ -63,10 +65,10 @@ scripts/cleanup.sh --volumes
 scripts/test.sh
 ```
 
-完整 Goal C 验收（全量回归、真实依赖/RLS、Compose 与核心 API E2E）：
+完整 Goal D 验收（全量回归、真实租约/恢复、Goal C 回归与 Runtime Compose E2E）：
 
 ```bash
-scripts/verify-goal-c.sh
+scripts/verify-goal-d.sh
 ```
 
 Goal A 架构基线仍可独立验证：
@@ -75,4 +77,4 @@ Goal A 架构基线仍可独立验证：
 bash scripts/verify-goal-a.sh
 ```
 
-Goal D 开始前必须先阅读最新 Goal C Handoff、Feature Matrix 和相关 ADR。不得把当前基础设施监督 Worker 当成 Run 执行器，也不得让 Hermes 直接依赖或修改控制面 ORM 模型。
+Goal E 开始前必须先阅读最新 Goal D Handoff、Feature Matrix 和相关 ADR。不得绕过 Runtime Provider 直接调用 Hermes，也不得把 Hermes 原生工具当成已实现的平台 Tool Gateway/Sandbox。

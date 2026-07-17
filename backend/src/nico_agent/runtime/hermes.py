@@ -89,21 +89,37 @@ class HermesRuntimeProvider:
         self._environment = environment
         self._terminate_grace_seconds = terminate_grace_seconds
         self._sessions: dict[str, _HermesSession] = {}
+        self._compatible_version: str | None = None
+        self._version_lock = asyncio.Lock()
 
     async def probe_version(self) -> str:
-        process = await self._spawn((*self._command, "version"))
-        stdout, stderr = await process.communicate()
-        output = _redact((stdout or stderr).decode(errors="replace")).strip()
-        if process.returncode != 0:
-            raise RuntimeExecutionFailed("hermes", "HERMES_VERSION_FAILED", output[:500])
-        match = re.search(r"\bv?(\d+\.\d+\.\d+)\b", output)
-        if match is None:
-            raise RuntimeExecutionFailed(
-                "hermes", "HERMES_VERSION_UNPARSEABLE", "could not parse Hermes CLI version"
-            )
-        return match.group(1)
+        if self._compatible_version is not None:
+            return self._compatible_version
+        async with self._version_lock:
+            if self._compatible_version is not None:
+                return self._compatible_version
+            process = await self._spawn((*self._command, "version"))
+            stdout, stderr = await process.communicate()
+            output = _redact((stdout or stderr).decode(errors="replace")).strip()
+            if process.returncode != 0:
+                raise RuntimeExecutionFailed("hermes", "HERMES_VERSION_FAILED", output[:500])
+            match = re.search(r"\bv?(\d+\.\d+\.\d+)\b", output)
+            if match is None:
+                raise RuntimeExecutionFailed(
+                    "hermes", "HERMES_VERSION_UNPARSEABLE", "could not parse Hermes CLI version"
+                )
+            version = match.group(1)
+            if version != self.descriptor.version:
+                raise RuntimeExecutionFailed(
+                    "hermes",
+                    "HERMES_VERSION_UNSUPPORTED",
+                    f"Hermes CLI {version} is incompatible; expected {self.descriptor.version}",
+                )
+            self._compatible_version = version
+            return version
 
     async def create_session(self, request: RuntimeSessionRequest) -> RuntimeSessionHandle:
+        await self.probe_version()
         external_id = request.resume_session_id or f"hermes:pending:{request.run_id}"
         session = self._sessions.get(external_id)
         if session is None:
@@ -139,7 +155,10 @@ class HermesRuntimeProvider:
             await self._emit(
                 session,
                 RuntimeEventType.RUN_FAILED,
-                payload={"error": {"code": "HERMES_NOT_INSTALLED"}},
+                payload={
+                    "error": {"code": "HERMES_NOT_INSTALLED"},
+                    "external_session_id": session.external_id,
+                },
             )
             raise
 
@@ -160,7 +179,11 @@ class HermesRuntimeProvider:
                 "exit_code": return_code,
             }
             session.status = RuntimeSessionStatus.FAILED
-            await self._emit(session, RuntimeEventType.RUN_FAILED, payload={"error": error})
+            await self._emit(
+                session,
+                RuntimeEventType.RUN_FAILED,
+                payload={"error": error, "external_session_id": session.external_id},
+            )
             return RuntimeResult(
                 status=session.status,
                 error=error,
@@ -175,7 +198,11 @@ class HermesRuntimeProvider:
         ).strip()
         output = {"message": output_text}
         session.status = RuntimeSessionStatus.COMPLETED
-        await self._emit(session, RuntimeEventType.RUN_COMPLETED, payload={"output": output})
+        await self._emit(
+            session,
+            RuntimeEventType.RUN_COMPLETED,
+            payload={"output": output, "external_session_id": session.external_id},
+        )
         return RuntimeResult(
             status=session.status,
             output=output,

@@ -223,6 +223,9 @@ class RuntimeExecutionService:
 
             runtime_session.last_event_sequence = event.sequence
             runtime_session.revision += 1
+            external_session_id = event.payload.get("external_session_id")
+            if isinstance(external_session_id, str) and external_session_id:
+                runtime_session.external_session_id = external_session_id[:500]
             if event.type in {RuntimeEventType.RUN_STARTED, RuntimeEventType.RUN_RESUMED}:
                 runtime_session.status = RuntimeSessionStatus.RUNNING.value
                 runtime_session.started_at = runtime_session.started_at or event.occurred_at
@@ -434,20 +437,6 @@ class RuntimeExecutionService:
             )
             await session.flush()
             return True
-
-    async def get_runtime_session(self, context: TenantContext, run_id: UUID) -> RuntimeSession:
-        async with self.database.tenant_transaction(context) as session:
-            runtime_session = await session.scalar(
-                select(RuntimeSession).where(
-                    RuntimeSession.tenant_id == context.tenant_id,
-                    RuntimeSession.run_id == run_id,
-                )
-            )
-            if runtime_session is None:
-                from nico_agent.domain.errors import ResourceNotFound
-
-                raise ResourceNotFound("runtime_session", str(run_id))
-            return runtime_session
 
     @staticmethod
     def _provider_name(version: AgentVersion) -> str:

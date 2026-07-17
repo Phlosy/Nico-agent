@@ -2,7 +2,7 @@
 
 ## 运行方式
 
-Goal B 支持两条路径：
+当前实现支持两条路径：
 
 1. 推荐的 Docker Compose 全栈路径；
 2. API/Web 在宿主机运行、数据依赖由 Compose 提供的本地开发路径。
@@ -60,9 +60,11 @@ Vite 的 `/api` 与 `/openapi.json` 开发代理默认指向 `localhost:8000`。
 ## 进程边界
 
 - `api` 执行迁移后启动 FastAPI。
-- `worker` 当前只周期性监督三类依赖并输出结构化日志；它不会领取或执行 Run。
+- `worker` 同时监督依赖并运行有界领取循环；通过最小 claimer 角色领取后，以租户事务执行 Provider、心跳和持久化轨迹。
 - `web` 只从 readiness API 读取状态，不存储权威数据。
-- PostgreSQL 是未来领域状态的权威来源；Redis 和 MinIO 的职责保持 ADR-0002 的边界。
+- PostgreSQL 是 Run 队列、租约、状态与轨迹的权威来源；Redis 和 MinIO 的职责保持 ADR-0002 的边界。
+
+Worker 可通过 `NICO_WORKER_POLL_INTERVAL_SECONDS`、`NICO_WORKER_LEASE_SECONDS`、`NICO_WORKER_HEARTBEAT_SECONDS`、`NICO_WORKER_CONCURRENCY` 和 `NICO_WORKER_ID` 调整。Hermes 命令与工作目录分别由 `NICO_HERMES_COMMAND`、`NICO_HERMES_CWD` 指定；命令通过无 shell 的参数数组启动，Secret 只从 Worker 环境进入 Hermes 进程。
 
 ## 清理
 

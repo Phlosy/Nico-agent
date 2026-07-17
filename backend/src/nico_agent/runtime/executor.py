@@ -8,6 +8,7 @@ import logging
 
 from nico_agent.database import Database
 from nico_agent.runtime.contracts import AgentRuntimeProvider
+from nico_agent.runtime.errors import RuntimeLeaseLost
 from nico_agent.runtime.registry import RuntimeProviderRegistry
 from nico_agent.runtime.service import PreparedRuntime, RuntimeExecutionService
 
@@ -58,6 +59,14 @@ class RuntimeWorker:
             )
             await self.service.bind_session(prepared, worker_id=self.worker_id, handle=handle)
             await self._run_provider(provider, prepared, handle.external_session_id)
+        except RuntimeLeaseLost:
+            logger.info(
+                "runtime lease lost; provider cancellation requested",
+                extra={"run_id": str(claim.run_id), "worker_id": self.worker_id},
+            )
+            if provider is not None and prepared is not None and prepared.external_session_id:
+                with contextlib.suppress(Exception):
+                    await provider.cancel(prepared.external_session_id)
         except Exception as exc:
             logger.exception(
                 "runtime execution failed",
@@ -72,7 +81,7 @@ class RuntimeWorker:
                         prepared,
                         worker_id=self.worker_id,
                         code=getattr(exc, "code", type(exc).__name__.upper()),
-                        message=str(exc),
+                        message=self._safe_exception_message(exc),
                     )
             else:
                 with contextlib.suppress(Exception):
@@ -80,9 +89,18 @@ class RuntimeWorker:
                         claim,
                         worker_id=self.worker_id,
                         code=getattr(exc, "code", type(exc).__name__.upper()),
-                        message=str(exc),
+                        message=self._safe_exception_message(exc),
                     )
         return True
+
+    @staticmethod
+    def _safe_exception_message(exc: Exception) -> str:
+        domain_message = getattr(exc, "message", None)
+        if isinstance(domain_message, str) and domain_message:
+            return domain_message[:1000]
+        if isinstance(exc, (ValueError, TypeError)):
+            return str(exc)[:1000]
+        return f"runtime provider raised {type(exc).__name__}"
 
     async def _run_provider(
         self,

@@ -1,6 +1,6 @@
 # REST API
 
-Goal C 提供通用控制面 REST API；Runtime 执行、SSE、正式认证和 SDK 仍属于后续 Goal。
+Goal D 在通用控制面 REST API 上增加 RuntimeSession 和轨迹查询；SSE、正式认证和 SDK 仍属于后续 Goal。
 
 ## OpenAPI
 
@@ -58,7 +58,7 @@ X-Actor-ID: <optional actor; defaults to development-user>
 
 生产环境明确拒绝上述开发 Header 和 bootstrap，返回 `403 DEVELOPMENT_TENANT_CONTEXT_DISABLED`。API Key/JWT 的正式身份、权限与限额在 Goal K 实现，因此当前控制面不得直接暴露到公网。
 
-## Goal C 控制面
+## Goal C/D 控制面
 
 | 资源 | 方法与路径 | 行为 |
 | --- | --- | --- |
@@ -76,12 +76,16 @@ X-Actor-ID: <optional actor; defaults to development-user>
 | Task | `POST .../tasks/{task_id}/transition` | 显式状态转换/分配 |
 | Run | `POST .../tasks/{task_id}/runs`、`GET .../runs/{run_id}` | 创建一次执行、读取 |
 | Run | `POST .../runs/{run_id}/transition\|cancel\|retry` | 状态转换、取消；Failed/TimedOut 创建重试 Run |
+| Runtime | `GET .../runs/{run_id}/runtime` | 读取 Provider/session/capability/checkpoint/usage 摘要 |
+| Runtime | `GET .../runs/{run_id}/trajectory` | 读取终态规范化 Provider 轨迹；未完成时返回稳定错误 |
 | RunStep | `POST .../runs/{run_id}/steps` | 追加步骤 |
 | RunStep | `POST .../steps/{step_id}/transition` | 步骤状态与结果转换 |
 | Event | `GET .../runs/{run_id}/events` | 按 sequence 读取 Run 事件 |
 | Audit | `GET /api/v1/audit?limit=100` | 读取当前租户审计记录 |
 
 更新和状态命令使用 `expected_revision`。并发冲突返回 `409 REVISION_CONFLICT`，非法状态转换返回 `409 INVALID_STATE_TRANSITION`，跨租户读取与不存在资源统一返回 `404 RESOURCE_NOT_FOUND`。唯一键或引用冲突返回 `409 DATA_CONFLICT`。
+
+Run 的 Provider 由不可变 AgentVersion 的 `run_config.runtime_provider` 选择。API 不直接调用 Provider；独立 Worker 领取 Pending Run 后推进状态。`POST .../cancel` 先提交数据库权威 Cancelled 并清除租约，Worker 随后合作取消 Provider，迟到结果不能覆盖终态。
 
 ## 当前安全边界
 

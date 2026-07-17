@@ -1,6 +1,6 @@
 # Goal D：Runtime Provider 与持久化 Worker 实施计划
 
-- 状态：In Progress
+- 状态：Completed / Verified
 - 日期：2026-07-17
 - 基线：Goal C commit `277f312`
 - Hermes 参考：本地 `/home/node7/xpk/hermes-agent`，版本 `0.18.2`，commit `bda8bd76a`
@@ -61,4 +61,3 @@
 ## 阶段成果
 
 完成后更新 Runtime/API/架构/状态机/测试文档、Goal Status、Feature Matrix，保存 `artifacts/goals/goal-d/<timestamp>/`，创建 Goal D Handoff。只有全部出口实际通过才标记 Verified。
-

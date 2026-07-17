@@ -39,13 +39,13 @@ flowchart LR
 
 第一版采用模块化单体控制面而不是微服务。API 与 Worker 是不同进程，共享同一领域包和数据库事务约束，未来可按负载拆分。
 
-## Goal B/C 已实现切片
+## Goal B–D 已实现切片
 
 当前可运行实现包含 FastAPI API、独立基础设施监督 Worker、React/Vite Web，以及由 Compose 管理的 PostgreSQL/pgvector、Redis、MinIO。Goal C 已在基础设施垂直切片上增加通用控制面：Tenant/Project、Agent/AgentVersion、Task/Run/RunStep、Event/AuditRecord 的持久化模型、事务服务和 REST API。
 
 API 将每个领域操作绑定到 `TenantContext`。租户业务事务先切换到无 `BYPASSRLS` 的 `nico_runtime` 角色，再用事务级 `app.tenant_id` 设置驱动 PostgreSQL `FORCE ROW LEVEL SECURITY`；复合外键同时阻止跨租户对象关联。状态变化、Event 和 AuditRecord 在一个事务内提交，客户端以 `expected_revision` 防止并发覆盖。
 
-Worker 仍只监督基础设施，不领取或执行 Run。Run 表已具备待执行状态、attempt、租约、心跳、检查点和预算字段，为 Goal D 的 Runtime Provider/Worker 执行闭环提供权威存储，但领取、心跳、恢复和 Hermes 均未提前实现。
+Goal D 将 Worker 升级为有界并发的持久化执行器。只有最小权限 `nico_worker_claimer` 能调用 `SECURITY DEFINER` 领取函数；正文加载和 RuntimeSession/RunStep/Event/Audit 写入随后回到 `TenantContext`、`nico_runtime` 与 `FORCE RLS` 事务。每次心跳和终态提交同时校验 owner、token 与未过期租约，API 取消会先清除权威租约，因此迟到 Worker 不能覆盖终态。
 
 ## 代码拓扑目标
 
@@ -82,26 +82,21 @@ sequenceDiagram
     participant D as PostgreSQL
     participant W as Worker
     participant R as Runtime Provider
-    participant T as Tool Gateway
-    participant O as Object Store
 
     C->>A: Create Task / Start Run
     A->>D: Task + Pending Run + Event (transaction)
     A-->>C: 202 + Run ID
     W->>D: Claim Run with lease
-    W->>D: Planning/Running + StepStarted
+    W->>D: Planning + RuntimeSession
     W->>R: create_session / run
-    R-->>W: model/tool intent events
-    W->>T: authorized tool call
-    T-->>W: bounded result/error
-    W->>D: Step + ToolCall + Event + cost
-    W->>O: large Artifact/trajectory payload
-    W->>D: Artifact metadata + terminal Run state
+    R-->>W: normalized runtime events/result
+    W->>D: Running + RunStep + Event/Audit + checkpoint
+    W->>D: trajectory + terminal Run/Task
     D-->>A: authoritative query state
     A-->>C: SSE events / final result
 ```
 
-Worker 通过数据库租约领取 Run。心跳过期后其他 Worker 可以恢复；每个副作用使用 Run/Step/ToolCall 幂等键。Redis 只负责低延迟事件扇出，断线客户端可依据 Event 序号从 PostgreSQL 补读。
+Worker 通过数据库租约领取 Run。心跳过期后其他 Worker 只能在 Provider 声明恢复能力且 RuntimeSession/checkpoint 存在时恢复；Provider event sequence 用于去重和连续性检查。Redis 仍不参与权威领取或状态提交。Tool Gateway、Artifact 外置和 SSE 扇出分别从 Goal E/J 进入，上图当前路径只实现到 Runtime 事件与 PostgreSQL 轨迹。
 
 ## 多租户边界
 
@@ -128,7 +123,7 @@ class AgentRuntimeProvider(Protocol):
     async def export_trajectory(self, run_id): ...
 ```
 
-Provider 返回规范化事件，不直接写领域表。`HermesRuntimeProvider` 位于 Adapter 层，负责把 Hermes 会话、工具事件和轨迹转换为平台协议。缺失的原生 pause/resume 能力必须通过平台检查点或显式 `NOT_SUPPORTED` 能力协商处理，禁止伪造成功。
+Provider 返回规范化事件，不接收 ORM 或数据库 Session。`MockRuntimeProvider` 完整实现协议并用于确定性验收。`HermesRuntimeProvider` 仅通过独立 CLI 子进程适配 Hermes 0.18.2，支持进程组硬取消、历史 session 恢复和脱敏 JSONL 导出；Hermes 没有可靠的运行中 pause，因此 capability 中不声明 pause，调用会返回稳定 `RUNTIME_CAPABILITY_UNSUPPORTED`。本机没有 Hermes CLI/模型凭据时只验证 Adapter 边界，不伪造真实推理成功。
 
 ## Tool 与沙箱边界
 
@@ -173,3 +168,4 @@ Plugin Manifest 注册 Role、Tool、Skill、Workflow、Evaluator、Knowledge、
 - [ADR-0004：Manifest 优先的受信插件](decisions/ADR-0004-trusted-plugin-model.md)
 - [ADR-0005：候选驱动的受控成长](decisions/ADR-0005-controlled-growth.md)
 - [ADR-0006：共享库多租户隔离](decisions/ADR-0006-multitenancy-isolation.md)
+- [ADR-0008：Runtime 租约与 Hermes 进程边界](decisions/ADR-0008-runtime-leases-and-hermes-process-boundary.md)

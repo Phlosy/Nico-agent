@@ -137,5 +137,5 @@ stateDiagram-v2
 - 客户端提交 `expected_revision` 防止并发覆盖。
 - 转换函数返回领域 Event；Repository 负责与状态原子持久化。
 - 非法转换返回稳定错误码 `INVALID_STATE_TRANSITION`，不得静默修正。
-- 运行中 Worker 失联不立即改变 Run；租约过期后由恢复器决定重新领取或 Failed。
+- 运行中 Worker 失联不立即改变 Run；租约过期后，新 Worker 只有在 Provider 声明 resume 且持久化 RuntimeSession 可用时恢复，否则稳定转为 Failed。
 - 状态机变更必须同步更新本文件、迁移、API Schema、SDK 和测试。

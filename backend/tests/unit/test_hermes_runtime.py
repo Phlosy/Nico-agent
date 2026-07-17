@@ -32,7 +32,7 @@ if capture:
         handle.write(json.dumps(args) + "\\n")
 
 if args and args[0] == "version":
-    print("Hermes Agent v0.18.2 (fake)")
+    print(f"Hermes Agent v{os.environ.get('FAKE_HERMES_VERSION', '0.18.2')} (fake)")
     raise SystemExit(0)
 
 if args[:2] == ["sessions", "export"]:
@@ -102,6 +102,7 @@ def _provider(tmp_path: Path) -> tuple[HermesRuntimeProvider, Path]:
 async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path: Path) -> None:
     provider, capture = _provider(tmp_path)
     request = _request()
+    assert await provider.probe_version() == "0.18.2"
     handle = await provider.create_session(request)
     events_task = asyncio.create_task(_events(provider, handle.external_session_id))
 
@@ -110,7 +111,6 @@ async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path
     trajectory = await provider.export_trajectory(handle.external_session_id)
     calls = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
 
-    assert await provider.probe_version() == "0.18.2"
     assert result.status is RuntimeSessionStatus.COMPLETED
     assert result.output == {"message": "fake Hermes answer"}
     assert result.external_session_id == "fake-session-001"
@@ -118,12 +118,13 @@ async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path
     assert events[-1].type is RuntimeEventType.RUN_COMPLETED
     assert trajectory.external_session_id == "fake-session-001"
     assert trajectory.messages[-1]["content"] == "exported answer"
-    chat_call = calls[0]
+    assert calls[0] == ["version"]
+    chat_call = calls[1]
     assert chat_call[0] == "chat"
     assert chat_call[chat_call.index("--model") + 1] == "fake-model"
     assert chat_call[chat_call.index("--provider") + 1] == "fake-provider"
     assert chat_call[chat_call.index("--toolsets") + 1] == "nico-disabled"
-    export_call = calls[1]
+    export_call = calls[2]
     assert export_call[:2] == ["sessions", "export"]
     assert "--redact" in export_call
 
@@ -137,7 +138,8 @@ async def test_hermes_resume_uses_persisted_session_and_continues_sequence(tmp_p
 
     result = await provider.run(handle.external_session_id, request)
     events = await events_task
-    call = json.loads(capture.read_text(encoding="utf-8").splitlines()[0])
+    calls = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
+    call = calls[1]
 
     assert result.status is RuntimeSessionStatus.COMPLETED
     assert result.external_session_id == "existing-session"
@@ -183,12 +185,25 @@ async def test_hermes_failure_is_stable_and_redacts_cli_secrets(tmp_path: Path) 
 async def test_missing_hermes_executable_returns_stable_error() -> None:
     provider = HermesRuntimeProvider(("/definitely/missing/hermes",))
     request = _request()
-    handle = await provider.create_session(request)
 
     with pytest.raises(RuntimeExecutionFailed) as captured:
-        await provider.run(handle.external_session_id, request)
+        await provider.create_session(request)
 
     assert captured.value.details["runtime_code"] == "HERMES_NOT_INSTALLED"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_hermes_version_fails_closed(tmp_path: Path) -> None:
+    script = tmp_path / "fake_hermes.py"
+    script.write_text(_FAKE_HERMES, encoding="utf-8")
+    provider = HermesRuntimeProvider(
+        (sys.executable, str(script)), environment={"FAKE_HERMES_VERSION": "0.19.0"}
+    )
+
+    with pytest.raises(RuntimeExecutionFailed) as captured:
+        await provider.create_session(_request())
+
+    assert captured.value.details["runtime_code"] == "HERMES_VERSION_UNSUPPORTED"
 
 
 async def _events(provider: HermesRuntimeProvider, external_id: str):
