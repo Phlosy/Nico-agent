@@ -19,6 +19,7 @@ from nico_agent.domain.models import (
     RunStep,
     RuntimeSession,
     Task,
+    Tenant,
 )
 from nico_agent.domain.states import RunStatus, RunStepStatus, TaskStatus
 from nico_agent.runtime.contracts import (
@@ -34,12 +35,15 @@ from nico_agent.runtime.contracts import (
 )
 from nico_agent.runtime.errors import RuntimeLeaseLost, RuntimeRecoveryUnsupported
 from nico_agent.runtime.registry import RuntimeProviderRegistry
+from nico_agent.tools.policy import build_tool_policy_snapshot
 
 _ACTIVE_RUN_STATUSES = {
     RunStatus.PENDING,
     RunStatus.PLANNING,
     RunStatus.RUNNING,
     RunStatus.PAUSED,
+    RunStatus.WAITING_FOR_TOOL,
+    RunStatus.WAITING_FOR_APPROVAL,
 }
 _TERMINAL_RUN_STATUSES = {
     RunStatus.COMPLETED,
@@ -85,7 +89,8 @@ class RuntimeExecutionService:
                     AgentVersion.id == run.agent_version_id,
                 )
             )
-            if task is None or version is None:
+            tenant = await session.scalar(select(Tenant).where(Tenant.id == claim.tenant_id))
+            if task is None or version is None or tenant is None:
                 raise RuntimeLeaseLost(str(claim.run_id))
 
             provider_name = self._provider_name(version)
@@ -122,9 +127,21 @@ class RuntimeExecutionService:
                     provider_version=descriptor.version,
                     protocol_version=descriptor.protocol_version,
                     capabilities=sorted(capability.value for capability in descriptor.capabilities),
+                    tool_policy_snapshot=build_tool_policy_snapshot(
+                        tenant.settings,
+                        version.tool_policy,
+                        plugin_refs=version.plugin_refs,
+                    ),
                 )
                 session.add(runtime_session)
                 await session.flush()
+            elif not runtime_session.tool_policy_snapshot:
+                runtime_session.tool_policy_snapshot = build_tool_policy_snapshot(
+                    tenant.settings,
+                    version.tool_policy,
+                    plugin_refs=version.plugin_refs,
+                )
+                runtime_session.revision += 1
 
             if RunStatus(run.status) is RunStatus.PENDING:
                 run.status = RunStatus.PLANNING.value

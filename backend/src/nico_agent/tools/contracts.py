@@ -21,6 +21,7 @@ _SEMVER = re.compile(
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 _PERMISSION = re.compile(r"^[a-z][a-z0-9]*(?:[._:-][a-z0-9]+)*$")
+_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,99}$")
 
 
 class ToolRisk(StrEnum):
@@ -47,7 +48,7 @@ class ToolRetryPolicy(BaseModel):
     @field_validator("retryable_codes")
     @classmethod
     def validate_codes(cls, value: frozenset[str]) -> frozenset[str]:
-        if len(value) > 20 or any(not _PERMISSION.fullmatch(item) for item in value):
+        if len(value) > 20 or any(not _ERROR_CODE.fullmatch(item) for item in value):
             raise ValueError("retryable_codes must contain at most 20 stable codes")
         return value
 
@@ -61,7 +62,7 @@ class ToolDefinitionSpec(BaseModel):
     input_schema: dict[str, Any]
     output_schema: dict[str, Any]
     permission: str = Field(min_length=1, max_length=150)
-    timeout_seconds: float = Field(gt=0, le=300)
+    timeout_seconds: int = Field(gt=0, le=300)
     retry_policy: ToolRetryPolicy = Field(default_factory=ToolRetryPolicy)
     isolation: ToolIsolation
     risk: ToolRisk = ToolRisk.LOW
@@ -137,6 +138,7 @@ class ToolExecutionContext(BaseModel):
     run_step_id: UUID
     actor_id: str = Field(min_length=1, max_length=200)
     correlation_id: UUID
+    tool_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolExecutionResult(BaseModel):
@@ -163,7 +165,13 @@ class ToolExecutor(Protocol):
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def canonical_hash(value: Any) -> str:

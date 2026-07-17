@@ -329,6 +329,9 @@ class RuntimeSession(Base, TimestampMixin):
     checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     usage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     trajectory: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    tool_policy_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     last_event_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -478,6 +481,8 @@ class ToolCall(Base, TimestampMixin):
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     caller: Mapped[str] = mapped_column(String(200), nullable=False)
+    execution_owner: Mapped[str | None] = mapped_column(String(200))
+    execution_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=ToolCallStatus.PENDING.value

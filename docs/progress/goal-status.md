@@ -8,7 +8,7 @@
 | B | Verified | 100% | `scripts/verify-goal-b.sh` 通过；故障/UI/清理验收通过 | `artifacts/goals/goal-b/20260716T154321Z/` | 无 |
 | C | Verified | 100% | `scripts/verify-goal-c.sh` 通过；31 后端单测、7 前端测试、10 真实集成与核心 API E2E 通过 | `artifacts/goals/goal-c/20260717T015402Z/` | 无 |
 | D | Verified | 100% | `scripts/verify-goal-d.sh` 通过；47 后端单测、7 前端测试、18 真实集成、Goal C/D Compose E2E 通过 | `artifacts/goals/goal-d/20260717T032610Z/` | 无；Hermes 真实推理因本机无 CLI/凭据未执行，不影响 Adapter 验收 |
-| E | In Progress | 5% | E1 合同、计划与 ADR 编写中 | 尚未创建 | 无；依赖 Goal D 已满足 |
+| E | In Progress | 30% | E1-E3 完成；67 后端单测、27 真实集成通过 | 尚未创建 | 无；文件/HTTP/DB/Python 工具与 Runtime 接入待后续增量 |
 | F | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal E Verified |
 | G | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal F Verified |
 | H | Not Started | 0% | 未执行 | 尚未创建 | 依赖 Goal G Verified |

@@ -38,6 +38,7 @@ from nico_agent.domain.models import (
     RuntimeSession,
     Task,
     Tenant,
+    ToolCall,
 )
 from nico_agent.domain.states import (
     AGENT_TRANSITIONS,
@@ -52,6 +53,7 @@ from nico_agent.domain.states import (
     RunStatus,
     RunStepStatus,
     TaskStatus,
+    ToolCallStatus,
     require_revision,
     transition_state,
 )
@@ -612,6 +614,56 @@ class ControlPlaneService:
                         runtime_session.status = "cancelled"
                         runtime_session.ended_at = now
                         runtime_session.revision += 1
+                    active_tool_calls = list(
+                        await session.scalars(
+                            select(ToolCall)
+                            .where(
+                                ToolCall.tenant_id == context.tenant_id,
+                                ToolCall.run_id == run.id,
+                                ToolCall.status.in_(["pending", "running"]),
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    for tool_call in active_tool_calls:
+                        tool_call.status = ToolCallStatus.CANCELLED.value
+                        tool_call.error = {
+                            "code": "TOOL_CANCELLED",
+                            "message": "the authoritative Run was cancelled",
+                        }
+                        tool_call.ended_at = now
+                        tool_call.revision += 1
+                        step = await session.scalar(
+                            select(RunStep)
+                            .where(
+                                RunStep.tenant_id == context.tenant_id,
+                                RunStep.id == tool_call.run_step_id,
+                            )
+                            .with_for_update()
+                        )
+                        if step is not None and RunStepStatus(step.status) in {
+                            RunStepStatus.PENDING,
+                            RunStepStatus.RUNNING,
+                            RunStepStatus.WAITING,
+                        }:
+                            step.status = RunStepStatus.CANCELLED.value
+                            step.error = tool_call.error
+                            step.ended_at = now
+                            step.revision += 1
+                        self._record(
+                            session,
+                            context,
+                            event_type="ToolCallCancelled",
+                            aggregate_type="tool_call",
+                            aggregate_id=tool_call.id,
+                            action="tool.call.cancel",
+                            payload={
+                                "status": tool_call.status,
+                                "code": "TOOL_CANCELLED",
+                                "run_step_id": str(tool_call.run_step_id),
+                            },
+                            run_id=run.id,
+                        )
             if command.result is not None:
                 run.result = command.result
             if command.error is not None:

@@ -15,6 +15,7 @@ from nico_agent.tools import (
     ToolRetryPolicy,
     ToolRisk,
 )
+from nico_agent.tools.contracts import canonical_json
 from nico_agent.tools.errors import ToolNotFound, ToolRegistryConflict, ToolSchemaViolation
 
 
@@ -133,3 +134,10 @@ def test_executor_context_contains_only_scoped_identity() -> None:
 
     assert "database" not in ToolExecutionContext.model_fields
     assert "secret" not in ToolExecutionContext.model_fields
+
+
+def test_canonical_json_rejects_non_finite_or_non_json_values() -> None:
+    with pytest.raises(ValueError):
+        canonical_json({"value": float("nan")})
+    with pytest.raises(TypeError):
+        canonical_json({"value": {1, 2}})
