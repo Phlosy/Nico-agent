@@ -10,6 +10,11 @@ from nico_agent.runtime.contracts import (
     RuntimeSessionHandle,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
+    RuntimeToolHandler,
+    RuntimeToolIntent,
+    RuntimeToolOutcome,
+    RuntimeToolSession,
+    RuntimeToolSpec,
     RuntimeTrajectory,
 )
 from nico_agent.runtime.hermes import HermesRuntimeProvider
@@ -30,4 +35,9 @@ __all__ = [
     "RuntimeSessionRequest",
     "RuntimeSessionStatus",
     "RuntimeTrajectory",
+    "RuntimeToolHandler",
+    "RuntimeToolIntent",
+    "RuntimeToolOutcome",
+    "RuntimeToolSession",
+    "RuntimeToolSpec",
 ]

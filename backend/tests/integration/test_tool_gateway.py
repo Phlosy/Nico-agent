@@ -227,6 +227,9 @@ async def test_gateway_success_is_redacted_audited_and_idempotent() -> None:
             caller="runtime:mock",
         )
 
+        authorized = await gateway.list_authorized(claim, worker_id=worker_id)
+        assert [item.reference for item in authorized] == [spec.reference]
+
         first = await gateway.execute(claim, worker_id=worker_id, request=request)
         second = await gateway.execute(claim, worker_id=worker_id, request=request)
 
@@ -260,7 +263,9 @@ async def test_gateway_success_is_redacted_audited_and_idempotent() -> None:
                 select(RuntimeSession).where(RuntimeSession.run_id == claim.run_id)
             )
             definition_count = await session.scalar(
-                select(func.count()).select_from(ToolDefinition)
+                select(func.count())
+                .select_from(ToolDefinition)
+                .where(ToolDefinition.tenant_id == claim.tenant_id)
             )
             event_count = await session.scalar(
                 select(func.count()).select_from(Event).where(Event.run_id == claim.run_id)

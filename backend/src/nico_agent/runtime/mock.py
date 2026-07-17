@@ -16,6 +16,8 @@ from nico_agent.runtime.contracts import (
     RuntimeSessionHandle,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
+    RuntimeToolHandler,
+    RuntimeToolIntent,
     RuntimeTrajectory,
 )
 from nico_agent.runtime.errors import RuntimeSessionNotFound
@@ -68,7 +70,12 @@ class MockRuntimeProvider:
             )
         return self._handle(external_id, session)
 
-    async def run(self, external_session_id: str, request: RuntimeSessionRequest) -> RuntimeResult:
+    async def run(
+        self,
+        external_session_id: str,
+        request: RuntimeSessionRequest,
+        tool_handler: RuntimeToolHandler | None = None,
+    ) -> RuntimeResult:
         session = self._session(external_session_id)
         if session.request.run_id != request.run_id:
             raise ValueError("runtime request does not match the created session")
@@ -89,6 +96,56 @@ class MockRuntimeProvider:
             session,
             RuntimeEventType.RUN_RESUMED if request.checkpoint else RuntimeEventType.RUN_STARTED,
         )
+
+        tool_results = []
+        tool_calls = behavior.get("tool_calls", [])
+        if not isinstance(tool_calls, list) or len(tool_calls) > 50:
+            raise ValueError("run_config.mock.tool_calls must be a list of at most 50 calls")
+        if tool_calls and tool_handler is None:
+            raise ValueError("mock runtime requested tools without a platform tool handler")
+        for index, value in enumerate(tool_calls, start=1):
+            if not isinstance(value, dict):
+                raise ValueError("run_config.mock.tool_calls entries must be objects")
+            intent = RuntimeToolIntent(
+                call_id=str(value.get("call_id", f"mock-tool-{index}")),
+                name=value.get("name"),
+                version=value.get("version"),
+                arguments=value.get("arguments", {}),
+                idempotency_key=str(value.get("idempotency_key", f"mock-tool-{index}")),
+            )
+            await self._emit(
+                session,
+                RuntimeEventType.TOOL_CALL_STARTED,
+                payload={"call_id": intent.call_id, "tool": f"{intent.name}@{intent.version}"},
+            )
+            assert tool_handler is not None
+            outcome = await tool_handler.execute_tool(intent)
+            tool_results.append(outcome.model_dump(mode="json"))
+            session.messages.append({"role": "tool", "content": tool_results[-1]})
+            await self._emit(
+                session,
+                RuntimeEventType.TOOL_CALL_COMPLETED,
+                payload={
+                    "call_id": intent.call_id,
+                    "tool": f"{intent.name}@{intent.version}",
+                    "status": outcome.status,
+                },
+            )
+            if outcome.status != "succeeded" and not behavior.get("continue_on_tool_error", False):
+                session.status = RuntimeSessionStatus.FAILED
+                session.result = RuntimeResult(
+                    status=session.status,
+                    error=outcome.error
+                    or {"code": "MOCK_TOOL_FAILED", "message": "mock tool call failed"},
+                    usage={"tool_calls": len(tool_results)},
+                    checkpoint=session.checkpoint,
+                )
+                await self._emit(
+                    session,
+                    RuntimeEventType.RUN_FAILED,
+                    payload={"error": session.result.error},
+                )
+                return session.result
 
         completed_steps = 0
         if request.checkpoint is not None:
@@ -138,7 +195,11 @@ class MockRuntimeProvider:
 
         output = behavior.get(
             "output",
-            {"message": f"Mock completed: {request.task_title}", "input": request.task_input},
+            {
+                "message": f"Mock completed: {request.task_title}",
+                "input": request.task_input,
+                "tool_results": tool_results,
+            },
         )
         if not isinstance(output, dict):
             raise ValueError("run_config.mock.output must be an object")
@@ -147,7 +208,12 @@ class MockRuntimeProvider:
         session.result = RuntimeResult(
             status=session.status,
             output=output,
-            usage={"steps": len(steps), "input_units": 1, "output_units": 1},
+            usage={
+                "steps": len(steps),
+                "tool_calls": len(tool_results),
+                "input_units": 1,
+                "output_units": 1,
+            },
             checkpoint=session.checkpoint,
         )
         session.usage = session.result.usage

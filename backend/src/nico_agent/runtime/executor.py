@@ -5,12 +5,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import replace
 
 from nico_agent.database import Database
-from nico_agent.runtime.contracts import AgentRuntimeProvider
+from nico_agent.mcp import McpGatewayHost
+from nico_agent.runtime.contracts import AgentRuntimeProvider, RuntimeCapability
 from nico_agent.runtime.errors import RuntimeLeaseLost
 from nico_agent.runtime.registry import RuntimeProviderRegistry
 from nico_agent.runtime.service import PreparedRuntime, RuntimeExecutionService
+from nico_agent.runtime.tools import GatewayRuntimeToolHandler
+from nico_agent.tools import ToolGateway
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,7 @@ class RuntimeWorker:
         worker_id: str,
         lease_seconds: int = 30,
         heartbeat_seconds: float = 10,
+        tool_gateway: ToolGateway | None = None,
     ) -> None:
         if lease_seconds < 5:
             raise ValueError("lease_seconds must be at least 5")
@@ -35,6 +40,7 @@ class RuntimeWorker:
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.service = RuntimeExecutionService(database)
+        self.tool_gateway = tool_gateway
 
     async def execute_once(self) -> bool:
         claim = await self.database.claim_next_run(self.worker_id, self.lease_seconds)
@@ -42,23 +48,38 @@ class RuntimeWorker:
             return False
         prepared: PreparedRuntime | None = None
         provider: AgentRuntimeProvider | None = None
+        mcp_host: McpGatewayHost | None = None
+        tool_handler: GatewayRuntimeToolHandler | None = None
         try:
             prepared = await self.service.prepare_claim(
                 claim, worker_id=self.worker_id, registry=self.registry
             )
             provider = self.registry.get(prepared.provider_name)
+            if (
+                self.tool_gateway is not None
+                and RuntimeCapability.PLATFORM_TOOLS in prepared.descriptor.capabilities
+            ):
+                tool_handler = GatewayRuntimeToolHandler(
+                    self.tool_gateway,
+                    claim,
+                    worker_id=self.worker_id,
+                    caller=f"runtime:{prepared.provider_name}",
+                )
+                mcp_host = McpGatewayHost(tool_handler)
+                tool_session = await mcp_host.start()
+                prepared = replace(
+                    prepared,
+                    request=prepared.request.model_copy(update={"tool_session": tool_session}),
+                )
             handle = await provider.create_session(prepared.request)
-            prepared = PreparedRuntime(
-                claim=prepared.claim,
-                provider_name=prepared.provider_name,
-                descriptor=prepared.descriptor,
-                request=prepared.request,
-                external_session_id=handle.external_session_id,
-                recovering=prepared.recovering,
-                timeout_seconds=prepared.timeout_seconds,
-            )
+            prepared = replace(prepared, external_session_id=handle.external_session_id)
             await self.service.bind_session(prepared, worker_id=self.worker_id, handle=handle)
-            await self._run_provider(provider, prepared, handle.external_session_id)
+            await self._run_provider(
+                provider,
+                prepared,
+                handle.external_session_id,
+                tool_handler=tool_handler,
+            )
         except RuntimeLeaseLost:
             logger.info(
                 "runtime lease lost; provider cancellation requested",
@@ -91,6 +112,9 @@ class RuntimeWorker:
                         code=getattr(exc, "code", type(exc).__name__.upper()),
                         message=self._safe_exception_message(exc),
                     )
+        finally:
+            if mcp_host is not None:
+                await mcp_host.close()
         return True
 
     @staticmethod
@@ -107,6 +131,8 @@ class RuntimeWorker:
         provider: AgentRuntimeProvider,
         prepared: PreparedRuntime,
         external_session_id: str,
+        *,
+        tool_handler: GatewayRuntimeToolHandler | None,
     ) -> None:
         stream_task = asyncio.create_task(
             self._forward_events(provider, prepared, external_session_id)
@@ -116,10 +142,10 @@ class RuntimeWorker:
         )
         try:
             if prepared.timeout_seconds is None:
-                result = await provider.run(external_session_id, prepared.request)
+                result = await provider.run(external_session_id, prepared.request, tool_handler)
             else:
                 async with asyncio.timeout(prepared.timeout_seconds):
-                    result = await provider.run(external_session_id, prepared.request)
+                    result = await provider.run(external_session_id, prepared.request, tool_handler)
             await stream_task
             trajectory = await provider.export_trajectory(external_session_id)
             await self.service.complete_claim(

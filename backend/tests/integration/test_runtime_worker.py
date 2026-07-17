@@ -6,9 +6,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from nico_agent.api import create_app
 from nico_agent.config import Settings
 from nico_agent.control_plane import ControlPlaneService
 from nico_agent.database import Database, TenantContext
@@ -24,6 +26,8 @@ from nico_agent.runtime.contracts import (
 from nico_agent.runtime.executor import RuntimeWorker
 from nico_agent.runtime.registry import RuntimeProviderRegistry
 from nico_agent.runtime.service import RuntimeExecutionService
+from nico_agent.tools import ToolGateway, ToolRegistry
+from nico_agent.tools.builtin import FileReadExecutor, FileWriteExecutor, WorkspaceManager
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -31,10 +35,21 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def seed_pending_run(database: Database, *, priority: int, run_config: dict):
+async def seed_pending_run(
+    database: Database,
+    *,
+    priority: int,
+    run_config: dict,
+    tenant_settings: dict | None = None,
+    tool_policy: dict | None = None,
+):
     suffix = uuid4().hex[:10]
     async with database.admin_transaction() as session:
-        tenant = Tenant(name=f"Worker {suffix}", slug=f"worker-{suffix}")
+        tenant = Tenant(
+            name=f"Worker {suffix}",
+            slug=f"worker-{suffix}",
+            settings=tenant_settings or {},
+        )
         session.add(tenant)
         await session.flush()
         project = Project(tenant_id=tenant.id, name=f"project-{suffix}")
@@ -53,6 +68,7 @@ async def seed_pending_run(database: Database, *, priority: int, run_config: dic
             role="runtime-test",
             mandate="Execute the deterministic runtime test",
             run_config=run_config,
+            tool_policy=tool_policy or {},
             content_hash="b" * 64,
         )
         session.add(version)
@@ -146,6 +162,102 @@ async def test_mock_worker_persists_complete_runtime_trajectory() -> None:
         assert step_count == 2
         assert event_count >= 10
         assert audit_count >= 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mock_runtime_executes_real_tools_only_through_gateway(tmp_path) -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    references = ["file.write@1.0.0", "file.read@1.0.0"]
+    permissions = ["filesystem.write", "filesystem.read"]
+    policy = {"allow": references, "permissions": permissions}
+    try:
+        seeded = await seed_pending_run(
+            database,
+            priority=200,
+            tenant_settings={"tool_policy": policy},
+            tool_policy=policy,
+            run_config={
+                "runtime_provider": "mock",
+                "mock": {
+                    "steps": ["use-tools"],
+                    "tool_calls": [
+                        {
+                            "name": "file.write",
+                            "version": "1.0.0",
+                            "arguments": {"path": "runtime/result.txt", "content": "gateway"},
+                        },
+                        {
+                            "name": "file.read",
+                            "version": "1.0.0",
+                            "arguments": {"path": "runtime/result.txt"},
+                        },
+                    ],
+                },
+            },
+        )
+        workspace = WorkspaceManager(tmp_path / "workspaces")
+        tool_registry = ToolRegistry([FileReadExecutor(workspace), FileWriteExecutor(workspace)])
+        worker = RuntimeWorker(
+            database,
+            RuntimeProviderRegistry([MockRuntimeProvider()]),
+            worker_id="mock-tools",
+            lease_seconds=5,
+            heartbeat_seconds=0.05,
+            tool_gateway=ToolGateway(database, tool_registry),
+        )
+
+        assert await worker.execute_once() is True
+        run = await _row(database, "runs", seeded["id"])
+        runtime_session = await _row(database, "runtime_sessions", seeded["id"])
+        async with database.admin_transaction() as session:
+            calls = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT tool_name, status, result FROM tool_calls "
+                            "WHERE run_id = :run_id ORDER BY started_at"
+                        ),
+                        {"run_id": seeded["id"]},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+
+        assert run["status"] == "completed"
+        assert [call["tool_name"] for call in calls] == ["file.write", "file.read"]
+        assert all(call["status"] == "succeeded" for call in calls)
+        assert calls[1]["result"]["content"] == "gateway"
+        assert run["result"]["tool_results"][1]["output"]["content"] == "gateway"
+        event_types = [event["type"] for event in runtime_session["trajectory"]["events"]]
+        assert "tool.call.started" in event_types
+        assert "tool.call.completed" in event_types
+
+        app = create_app(settings=settings, health_service=object(), database=database)
+        headers = {
+            "X-Tenant-ID": str(seeded["tenant_id"]),
+            "X-Actor-ID": "tool-api-test",
+        }
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            definitions_response = await client.get("/api/v1/tool-definitions", headers=headers)
+            calls_response = await client.get(
+                f"/api/v1/runs/{seeded['id']}/tool-calls", headers=headers
+            )
+        assert definitions_response.status_code == 200
+        assert [item["name"] for item in definitions_response.json()] == [
+            "file.read",
+            "file.write",
+        ]
+        assert calls_response.status_code == 200
+        assert [item["status"] for item in calls_response.json()] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert all("execution_lease_token" not in item for item in calls_response.json())
     finally:
         await engine.dispose()
 

@@ -39,6 +39,7 @@ from nico_agent.domain.models import (
     Task,
     Tenant,
     ToolCall,
+    ToolDefinition,
 )
 from nico_agent.domain.states import (
     AGENT_TRANSITIONS,
@@ -844,6 +845,30 @@ class ControlPlaneService:
                     select(Event)
                     .where(Event.tenant_id == context.tenant_id, Event.run_id == run_id)
                     .order_by(Event.sequence)
+                )
+            )
+
+    async def list_tool_definitions(self, context: TenantContext) -> list[ToolDefinition]:
+        async with self.database.tenant_transaction(context) as session:
+            return list(
+                await session.scalars(
+                    select(ToolDefinition)
+                    .where(ToolDefinition.tenant_id == context.tenant_id)
+                    .order_by(ToolDefinition.name, ToolDefinition.version)
+                )
+            )
+
+    async def list_run_tool_calls(self, context: TenantContext, run_id: UUID) -> list[ToolCall]:
+        async with self.database.tenant_transaction(context) as session:
+            await self._run(session, context, run_id)
+            return list(
+                await session.scalars(
+                    select(ToolCall)
+                    .where(
+                        ToolCall.tenant_id == context.tenant_id,
+                        ToolCall.run_id == run_id,
+                    )
+                    .order_by(ToolCall.created_at, ToolCall.id)
                 )
             )
 

@@ -21,6 +21,17 @@ from nico_agent.runtime import (
     RuntimeProviderRegistry,
 )
 from nico_agent.runtime.executor import RuntimeWorker
+from nico_agent.tools import ToolGateway, ToolRegistry
+from nico_agent.tools.builtin import (
+    DatabaseReadExecutor,
+    FileReadExecutor,
+    FileWriteExecutor,
+    HttpReadExecutor,
+    PythonSandboxExecutor,
+    ReportWriteExecutor,
+    SandboxRunnerClient,
+    WorkspaceManager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +73,50 @@ async def worker_main(settings: Settings | None = None) -> None:
         providers.append(MockRuntimeProvider())
     providers.append(
         HermesRuntimeProvider(
-            tuple(shlex.split(runtime_settings.hermes_command)), cwd=runtime_settings.hermes_cwd
+            tuple(shlex.split(runtime_settings.hermes_command)),
+            cwd=runtime_settings.hermes_cwd,
+            state_root=runtime_settings.hermes_state_root,
         )
     )
     registry = RuntimeProviderRegistry(providers)
+    workspace = WorkspaceManager(
+        runtime_settings.workspace_root,
+        max_file_bytes=runtime_settings.workspace_max_file_bytes,
+        max_total_bytes=runtime_settings.workspace_max_total_bytes,
+    )
+    sandbox_client = SandboxRunnerClient(
+        runtime_settings.sandbox_runner_url,
+        runtime_settings.sandbox_runner_token,
+    )
+    tool_registry = ToolRegistry(
+        [
+            FileReadExecutor(workspace),
+            FileWriteExecutor(workspace),
+            ReportWriteExecutor(workspace),
+            HttpReadExecutor(
+                max_response_bytes=runtime_settings.http_max_response_bytes,
+                connect_timeout=runtime_settings.http_connect_timeout_seconds,
+                read_timeout=runtime_settings.http_read_timeout_seconds,
+                max_redirects=runtime_settings.http_max_redirects,
+                allow_http_loopback=runtime_settings.http_allow_loopback,
+            ),
+            DatabaseReadExecutor(
+                connect_timeout=runtime_settings.database_tool_connect_timeout_seconds,
+                statement_timeout_ms=runtime_settings.database_tool_statement_timeout_ms,
+                max_rows=runtime_settings.database_tool_max_rows,
+                max_output_bytes=runtime_settings.database_tool_max_output_bytes,
+            ),
+            PythonSandboxExecutor(
+                sandbox_client,
+                wall_time_seconds=runtime_settings.sandbox_wall_time_seconds,
+                memory_bytes=runtime_settings.sandbox_memory_bytes,
+                nano_cpus=runtime_settings.sandbox_nano_cpus,
+                pids_limit=runtime_settings.sandbox_pids_limit,
+                output_bytes=runtime_settings.sandbox_output_bytes,
+            ),
+        ]
+    )
+    tool_gateway = ToolGateway(database, tool_registry)
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     for stop_signal in (signal.SIGTERM, signal.SIGINT):
@@ -89,6 +140,7 @@ async def worker_main(settings: Settings | None = None) -> None:
                     worker_id=f"{runtime_settings.worker_id}-{index + 1}",
                     lease_seconds=runtime_settings.worker_lease_seconds,
                     heartbeat_seconds=runtime_settings.worker_heartbeat_seconds,
+                    tool_gateway=tool_gateway,
                 ),
                 stopping,
                 poll_interval_seconds=runtime_settings.worker_poll_interval_seconds,

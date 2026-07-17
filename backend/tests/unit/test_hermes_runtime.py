@@ -15,6 +15,7 @@ from nico_agent.runtime.contracts import (
     RuntimeEventType,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
+    RuntimeToolSession,
 )
 from nico_agent.runtime.errors import RuntimeCapabilityUnsupported, RuntimeExecutionFailed
 from nico_agent.runtime.hermes import HermesRuntimeProvider
@@ -68,6 +69,7 @@ def _request(
     mode: str = "success",
     resume_session_id: str | None = None,
     event_sequence: int = 0,
+    tool_session: RuntimeToolSession | None = None,
 ) -> RuntimeSessionRequest:
     return RuntimeSessionRequest(
         tenant_id=uuid4(),
@@ -82,9 +84,10 @@ def _request(
         mandate="Complete the supplied task",
         boundaries=["do not expose secrets"],
         model_config_data={"model": "fake-model", "provider": "fake-provider"},
-        run_config={"hermes": {"toolsets": ["nico-disabled"]}},
+        run_config={"hermes": {}},
         resume_session_id=resume_session_id,
         event_sequence=event_sequence,
+        tool_session=tool_session,
     )
 
 
@@ -93,7 +96,9 @@ def _provider(tmp_path: Path) -> tuple[HermesRuntimeProvider, Path]:
     script.write_text(_FAKE_HERMES, encoding="utf-8")
     capture = tmp_path / "calls.jsonl"
     provider = HermesRuntimeProvider(
-        (sys.executable, str(script)), environment={"FAKE_HERMES_CAPTURE": str(capture)}
+        (sys.executable, str(script)),
+        environment={"FAKE_HERMES_CAPTURE": str(capture)},
+        state_root=tmp_path / "hermes-state",
     )
     return provider, capture
 
@@ -123,10 +128,43 @@ async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path
     assert chat_call[0] == "chat"
     assert chat_call[chat_call.index("--model") + 1] == "fake-model"
     assert chat_call[chat_call.index("--provider") + 1] == "fake-provider"
-    assert chat_call[chat_call.index("--toolsets") + 1] == "nico-disabled"
+    assert "--toolsets" not in chat_call
     export_call = calls[2]
     assert export_call[:2] == ["sessions", "export"]
     assert "--redact" in export_call
+
+
+@pytest.mark.asyncio
+async def test_hermes_uses_per_run_home_and_only_nico_mcp_toolset(tmp_path: Path) -> None:
+    provider, capture = _provider(tmp_path)
+    token = "mcp-session-token-that-is-never-an-argument"
+    request = _request(
+        tool_session=RuntimeToolSession(
+            socket_path="/tmp/nico-test.sock",
+            token=token,
+            server_command=(sys.executable, "-m", "nico_agent.mcp.server"),
+        )
+    )
+    handle = await provider.create_session(request)
+    session = provider._sessions[handle.external_session_id]
+    assert session.hermes_home is not None
+    config_path = session.hermes_home / "config.yaml"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert config_path.stat().st_mode & 0o777 == 0o600
+    assert config["platform_toolsets"]["cli"] == ["nico"]
+    assert list(config["mcp_servers"]) == ["nico"]
+    assert config["mcp_servers"]["nico"]["env"]["NICO_MCP_TOKEN"] == token
+    assert "terminal" in config["agent"]["disabled_toolsets"]
+
+    result = await provider.run(handle.external_session_id, request)
+    await provider.export_trajectory(handle.external_session_id)
+    calls = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
+    chat_call = calls[1]
+    assert result.status is RuntimeSessionStatus.COMPLETED
+    assert chat_call[chat_call.index("--toolsets") + 1] == "nico"
+    assert token not in " ".join(chat_call)
+    assert not config_path.exists()
 
 
 @pytest.mark.asyncio
@@ -153,6 +191,9 @@ async def test_hermes_process_group_cancel_and_pause_capability(tmp_path: Path) 
     provider, _ = _provider(tmp_path)
     request = _request(mode="cancel")
     handle = await provider.create_session(request)
+    session = provider._sessions[handle.external_session_id]
+    assert session.hermes_home is not None
+    config_path = session.hermes_home / "config.yaml"
     run_task = asyncio.create_task(provider.run(handle.external_session_id, request))
     await asyncio.sleep(0.1)
 
@@ -161,6 +202,7 @@ async def test_hermes_process_group_cancel_and_pause_capability(tmp_path: Path) 
 
     assert cancelled.status is RuntimeSessionStatus.CANCELLED
     assert result.status is RuntimeSessionStatus.CANCELLED
+    assert not config_path.exists()
     assert RuntimeCapability.PAUSE not in provider.descriptor.capabilities
     with pytest.raises(RuntimeCapabilityUnsupported):
         await provider.pause(handle.external_session_id)

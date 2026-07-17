@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +19,7 @@ class RuntimeCapability(StrEnum):
     STATUS = "status"
     TRAJECTORY = "trajectory"
     CHECKPOINT = "checkpoint"
+    PLATFORM_TOOLS = "platform_tools"
 
 
 class RuntimeSessionStatus(StrEnum):
@@ -45,6 +46,8 @@ class RuntimeEventType(StrEnum):
     STEP_STARTED = "step.started"
     OUTPUT_DELTA = "output.delta"
     STEP_COMPLETED = "step.completed"
+    TOOL_CALL_STARTED = "tool.call.started"
+    TOOL_CALL_COMPLETED = "tool.call.completed"
     CHECKPOINT_SAVED = "checkpoint.saved"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
@@ -84,6 +87,56 @@ class RuntimeSessionRequest(BaseModel):
     checkpoint: dict[str, Any] | None = None
     event_sequence: int = Field(default=0, ge=0)
     resume_session_id: str | None = Field(default=None, min_length=1, max_length=500)
+    tool_session: RuntimeToolSession | None = None
+
+
+class RuntimeToolSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    version: str
+    description: str
+    input_schema: dict[str, Any]
+
+    @property
+    def reference(self) -> str:
+        return f"{self.name}@{self.version}"
+
+
+class RuntimeToolIntent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=50)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class RuntimeToolOutcome(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_id: str
+    status: Literal["succeeded", "failed", "timed_out", "cancelled"]
+    output: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeToolSession(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    socket_path: str = Field(min_length=1, max_length=2000)
+    token: str = Field(min_length=32, max_length=500, repr=False)
+    server_command: tuple[str, ...] = Field(min_length=1)
+    server_name: str = Field(default="nico", pattern=r"^[a-z][a-z0-9_-]{0,62}$")
+
+
+@runtime_checkable
+class RuntimeToolHandler(Protocol):
+    async def list_tools(self) -> tuple[RuntimeToolSpec, ...]: ...
+
+    async def execute_tool(self, intent: RuntimeToolIntent) -> RuntimeToolOutcome: ...
 
 
 class RuntimeSessionHandle(BaseModel):
@@ -139,7 +192,10 @@ class AgentRuntimeProvider(Protocol):
     async def create_session(self, request: RuntimeSessionRequest) -> RuntimeSessionHandle: ...
 
     async def run(
-        self, external_session_id: str, request: RuntimeSessionRequest
+        self,
+        external_session_id: str,
+        request: RuntimeSessionRequest,
+        tool_handler: RuntimeToolHandler | None = None,
     ) -> RuntimeResult: ...
 
     async def pause(self, external_session_id: str) -> RuntimeSessionHandle: ...

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     worker_id: str = Field(default="nico-worker", min_length=1, max_length=180)
     hermes_command: str = Field(default="hermes", min_length=1, max_length=1000)
     hermes_cwd: str | None = None
+    hermes_state_root: str = Field(default="/tmp/nico-agent-hermes", min_length=1, max_length=2000)
     workspace_root: str = Field(default="/tmp/nico-agent-workspaces", min_length=1, max_length=2000)
     workspace_max_file_bytes: int = Field(default=1_048_576, ge=1, le=10_485_760)
     workspace_max_total_bytes: int = Field(default=10_485_760, ge=1, le=104_857_600)

@@ -11,7 +11,9 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -54,6 +56,7 @@ class _HermesSession:
     cancelled: bool = False
     stderr_lines: list[str] = field(default_factory=list)
     changed: asyncio.Condition = field(default_factory=asyncio.Condition)
+    hermes_home: Path | None = None
 
 
 class HermesRuntimeProvider:
@@ -70,6 +73,7 @@ class HermesRuntimeProvider:
                 RuntimeCapability.STATUS,
                 RuntimeCapability.TRAJECTORY,
                 RuntimeCapability.CHECKPOINT,
+                RuntimeCapability.PLATFORM_TOOLS,
             }
         ),
     )
@@ -81,6 +85,7 @@ class HermesRuntimeProvider:
         cwd: str | Path | None = None,
         environment: dict[str, str] | None = None,
         terminate_grace_seconds: float = 2.0,
+        state_root: str | Path = "/tmp/nico-agent-hermes",
     ) -> None:
         if not command or any(not item for item in command):
             raise ValueError("Hermes command must contain at least one non-empty argument")
@@ -88,6 +93,8 @@ class HermesRuntimeProvider:
         self._cwd = str(cwd) if cwd is not None else None
         self._environment = environment
         self._terminate_grace_seconds = terminate_grace_seconds
+        self._state_root = Path(state_root)
+        self._state_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._sessions: dict[str, _HermesSession] = {}
         self._compatible_version: str | None = None
         self._version_lock = asyncio.Lock()
@@ -123,7 +130,11 @@ class HermesRuntimeProvider:
         external_id = request.resume_session_id or f"hermes:pending:{request.run_id}"
         session = self._sessions.get(external_id)
         if session is None:
-            session = _HermesSession(request=request, external_id=external_id)
+            session = _HermesSession(
+                request=request,
+                external_id=external_id,
+                hermes_home=self._prepare_home(request),
+            )
             self._sessions[external_id] = session
             await self._emit(
                 session,
@@ -132,7 +143,12 @@ class HermesRuntimeProvider:
             )
         return self._handle(session)
 
-    async def run(self, external_session_id: str, request: RuntimeSessionRequest) -> RuntimeResult:
+    async def run(
+        self,
+        external_session_id: str,
+        request: RuntimeSessionRequest,
+        tool_handler=None,
+    ) -> RuntimeResult:
         session = self._session(external_session_id)
         if session.request.run_id != request.run_id:
             raise ValueError("runtime request does not match the created Hermes session")
@@ -149,7 +165,10 @@ class HermesRuntimeProvider:
         )
         command = self._chat_command(request)
         try:
-            session.process = await self._spawn(command)
+            session.process = await self._spawn(
+                command,
+                environment_overrides={"HERMES_HOME": str(session.hermes_home)},
+            )
         except RuntimeExecutionFailed:
             session.status = RuntimeSessionStatus.FAILED
             await self._emit(
@@ -160,6 +179,7 @@ class HermesRuntimeProvider:
                     "external_session_id": session.external_id,
                 },
             )
+            self._cleanup_home(session)
             raise
 
         stdout_task = asyncio.create_task(self._read_stdout(session))
@@ -234,6 +254,7 @@ class HermesRuntimeProvider:
             await self._terminate(process)
         session.status = RuntimeSessionStatus.CANCELLED
         await self._emit_once(session, RuntimeEventType.RUN_CANCELLED)
+        self._cleanup_home(session)
         return self._handle(session)
 
     async def get_status(self, external_session_id: str) -> RuntimeSessionHandle:
@@ -264,7 +285,7 @@ class HermesRuntimeProvider:
         export_metadata: dict[str, Any] = {}
         if not session.external_id.startswith("hermes:pending:"):
             try:
-                records = await self._export_jsonl(session.external_id)
+                records = await self._export_jsonl(session)
                 export_metadata["hermes_export"] = records
                 for record in records:
                     messages = record.get("messages")
@@ -272,32 +293,26 @@ class HermesRuntimeProvider:
                         session.messages = [item for item in messages if isinstance(item, dict)]
             except RuntimeExecutionFailed as exc:
                 export_metadata["export_error"] = exc.code
-        return RuntimeTrajectory(
-            provider=self.descriptor.name,
-            provider_version=self.descriptor.version,
-            external_session_id=session.external_id,
-            status=session.status,
-            events=list(session.events),
-            messages=list(session.messages),
-            usage=dict(session.usage),
-            metadata=export_metadata,
-        )
+        try:
+            return RuntimeTrajectory(
+                provider=self.descriptor.name,
+                provider_version=self.descriptor.version,
+                external_session_id=session.external_id,
+                status=session.status,
+                events=list(session.events),
+                messages=list(session.messages),
+                usage=dict(session.usage),
+                metadata=export_metadata,
+            )
+        finally:
+            self._cleanup_home(session)
 
     def _chat_command(self, request: RuntimeSessionRequest) -> tuple[str, ...]:
         command = [*self._command, "chat", "-q", self._prompt(request), "-Q"]
         model = request.model_config_data.get("model")
         provider = request.model_config_data.get("provider")
-        hermes_config = request.run_config.get("hermes", {})
-        if not isinstance(hermes_config, dict):
-            raise ValueError("run_config.hermes must be an object")
-        toolsets = hermes_config.get("toolsets", ["nico-disabled"])
-        if isinstance(toolsets, list):
-            if not all(isinstance(item, str) and item for item in toolsets):
-                raise ValueError("run_config.hermes.toolsets must contain non-empty strings")
-            toolsets = ",".join(toolsets)
-        if not isinstance(toolsets, str) or not toolsets:
-            raise ValueError("run_config.hermes.toolsets must be a string or list")
-        command.extend(("--toolsets", toolsets))
+        if request.tool_session is not None:
+            command.extend(("--toolsets", request.tool_session.server_name))
         if isinstance(model, str) and model:
             command.extend(("--model", model))
         if isinstance(provider, str) and provider:
@@ -346,7 +361,7 @@ class HermesRuntimeProvider:
             elif text:
                 session.stderr_lines.append(text[:1000])
 
-    async def _export_jsonl(self, session_id: str) -> list[dict[str, Any]]:
+    async def _export_jsonl(self, session: _HermesSession) -> list[dict[str, Any]]:
         command = (
             *self._command,
             "sessions",
@@ -355,10 +370,13 @@ class HermesRuntimeProvider:
             "--format",
             "jsonl",
             "--session-id",
-            session_id,
+            session.external_id,
             "--redact",
         )
-        process = await self._spawn(command)
+        process = await self._spawn(
+            command,
+            environment_overrides={"HERMES_HOME": str(session.hermes_home)},
+        )
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
             raise RuntimeExecutionFailed(
@@ -378,10 +396,30 @@ class HermesRuntimeProvider:
                 records.append(value)
         return records
 
-    async def _spawn(self, command: tuple[str, ...]) -> asyncio.subprocess.Process:
-        environment = os.environ.copy()
+    async def _spawn(
+        self,
+        command: tuple[str, ...],
+        *,
+        environment_overrides: dict[str, str] | None = None,
+    ) -> asyncio.subprocess.Process:
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("NICO_", "POSTGRES_", "DATABASE_", "REDIS_", "MINIO_"))
+            and key
+            not in {
+                "DOCKER_HOST",
+                "DOCKER_CONFIG",
+                "HERMES_HOME",
+                "HERMES_PROFILE",
+                "HERMES_CONFIG",
+                "HERMES_ENV",
+            }
+        }
         if self._environment:
             environment.update(self._environment)
+        if environment_overrides:
+            environment.update(environment_overrides)
         try:
             return await asyncio.create_subprocess_exec(
                 *command,
@@ -422,6 +460,65 @@ class HermesRuntimeProvider:
             return self._sessions[external_session_id]
         except KeyError as exc:
             raise RuntimeSessionNotFound(external_session_id) from exc
+
+    def _prepare_home(self, request: RuntimeSessionRequest) -> Path:
+        tenant_root = self._state_root / str(request.tenant_id)
+        tenant_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        home = tenant_root / str(request.run_id)
+        home.mkdir(mode=0o700, exist_ok=True)
+        config: dict[str, Any] = {
+            "platform_toolsets": {"cli": []},
+            "mcp_servers": {},
+            "agent": {
+                "disabled_toolsets": [
+                    "terminal",
+                    "web",
+                    "browser",
+                    "file",
+                    "memory",
+                    "skills",
+                    "delegate",
+                ]
+            },
+        }
+        if request.tool_session is not None:
+            tool_session = request.tool_session
+            config["platform_toolsets"]["cli"] = [tool_session.server_name]
+            config["mcp_servers"][tool_session.server_name] = {
+                "command": tool_session.server_command[0],
+                "args": list(tool_session.server_command[1:]),
+                "env": {
+                    "NICO_MCP_SOCKET": tool_session.socket_path,
+                    "NICO_MCP_TOKEN": tool_session.token,
+                },
+                "enabled": True,
+                "timeout": 300,
+                "connect_timeout": 15,
+                "supports_parallel_tool_calls": False,
+            }
+        encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=home)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.close(descriptor)
+            descriptor = -1
+            os.replace(temporary_name, home / "config.yaml")
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary_name)
+        return home
+
+    @staticmethod
+    def _cleanup_home(session: _HermesSession) -> None:
+        if session.hermes_home is not None:
+            shutil.rmtree(session.hermes_home, ignore_errors=True)
+            session.hermes_home = None
 
     def _handle(self, session: _HermesSession) -> RuntimeSessionHandle:
         return RuntimeSessionHandle(

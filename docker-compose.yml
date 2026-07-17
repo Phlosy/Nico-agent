@@ -129,12 +129,17 @@ services:
       NICO_WORKER_HEALTH_INTERVAL_SECONDS: ${NICO_WORKER_HEALTH_INTERVAL_SECONDS:-15}
       NICO_SANDBOX_RUNNER_URL: http://sandbox-runner:8090
       NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
+      NICO_WORKSPACE_ROOT: /var/lib/nico/workspaces
+      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
     command: ["python", "-m", "nico_agent.worker"]
     depends_on:
       api:
         condition: service_healthy
       sandbox-runner:
         condition: service_healthy
+    volumes:
+      - agent-workspaces:/var/lib/nico/workspaces
+      - hermes-state:/var/lib/nico/hermes
     restart: unless-stopped
 
   sandbox-runner:
@@ -189,3 +194,5 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  agent-workspaces:
+  hermes-state:

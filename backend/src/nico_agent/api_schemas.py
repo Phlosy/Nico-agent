@@ -286,6 +286,46 @@ class AuditRead(FromAttributesModel):
     created_at: datetime
 
 
+class ToolDefinitionRead(FromAttributesModel):
+    id: UUID
+    name: str
+    version: str
+    status: str
+    description: str
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+    permission: str
+    timeout_seconds: int
+    retry_policy: dict[str, Any]
+    isolation_policy: dict[str, Any]
+    risk: str
+    max_output_bytes: int
+    content_hash: str
+    revision: int
+    created_at: datetime
+
+
+class ToolCallRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    run_step_id: UUID
+    tool_definition_id: UUID
+    tool_name: str
+    tool_version: str
+    idempotency_key: str
+    caller: str
+    arguments: dict[str, Any]
+    status: str
+    attempts: list[dict[str, Any]]
+    result: dict[str, Any] | None
+    error: dict[str, Any] | None
+    usage: dict[str, Any]
+    started_at: datetime | None
+    ended_at: datetime | None
+    revision: int
+    created_at: datetime
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str

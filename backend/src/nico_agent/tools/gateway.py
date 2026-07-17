@@ -113,6 +113,40 @@ class ToolGateway:
         self.registry = registry
         self.secret_resolver = secret_resolver or EnvironmentSecretResolver()
 
+    async def list_authorized(
+        self,
+        claim: RunClaim,
+        *,
+        worker_id: str,
+    ) -> tuple[ToolDefinitionSpec, ...]:
+        """Return only exact tool versions currently executable under the Run lease."""
+
+        context = TenantContext(claim.tenant_id, f"worker:{worker_id}", uuid4())
+        authorized: list[ToolDefinitionSpec] = []
+        async with self.database.tenant_transaction(context) as session:
+            run = await self._owned_run(session, claim, worker_id)
+            runtime_session = await session.scalar(
+                select(RuntimeSession).where(
+                    RuntimeSession.tenant_id == claim.tenant_id,
+                    RuntimeSession.run_id == claim.run_id,
+                )
+            )
+            if runtime_session is None:
+                return ()
+            for spec in self.registry.definitions():
+                try:
+                    authorize_tool(runtime_session.tool_policy_snapshot, spec)
+                except ToolError:
+                    continue
+                executor = self.registry.get(spec.name, spec.version)
+                definition = await self._definition(session, context, executor, run.id)
+                try:
+                    await self._authorization(session, claim, spec, definition)
+                except ToolError:
+                    continue
+                authorized.append(spec)
+        return tuple(authorized)
+
     async def execute(
         self,
         claim: RunClaim,

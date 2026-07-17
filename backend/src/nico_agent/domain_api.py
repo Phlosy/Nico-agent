@@ -33,6 +33,8 @@ from nico_agent.api_schemas import (
     TaskTransition,
     TenantCreate,
     TenantRead,
+    ToolCallRead,
+    ToolDefinitionRead,
 )
 from nico_agent.config import Settings
 from nico_agent.control_plane import ControlPlaneService
@@ -307,6 +309,16 @@ async def transition_run_step(
 @router.get("/runs/{run_id}/events", response_model=list[EventRead])
 async def list_run_events(run_id: UUID, service: Service, context: Context):
     return await service.list_run_events(context, run_id)
+
+
+@router.get("/tool-definitions", response_model=list[ToolDefinitionRead])
+async def list_tool_definitions(service: Service, context: Context):
+    return await service.list_tool_definitions(context)
+
+
+@router.get("/runs/{run_id}/tool-calls", response_model=list[ToolCallRead])
+async def list_run_tool_calls(run_id: UUID, service: Service, context: Context):
+    return await service.list_run_tool_calls(context, run_id)
 
 
 @router.get("/audit", response_model=list[AuditRead])
