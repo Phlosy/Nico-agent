@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from nico_agent.config import get_settings
 from nico_agent.database import Base
+from nico_agent.domain import models  # noqa: F401 - register metadata for autogenerate
 
 config = context.config
 if config.config_file_name is not None:

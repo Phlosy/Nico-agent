@@ -1,14 +1,18 @@
 import os
+from uuid import uuid4
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from nico_agent.api import create_app
 from nico_agent.config import Settings
+from nico_agent.database import Database, TenantContext
+from nico_agent.domain.models import Project, Task, Tenant
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -22,7 +26,7 @@ def settings() -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_migration_enables_extensions_without_goal_c_tables(settings: Settings) -> None:
+async def test_migration_enables_extensions_and_core_schema(settings: Settings) -> None:
     engine = create_async_engine(settings.resolved_database_url)
     try:
         async with engine.connect() as connection:
@@ -53,8 +57,103 @@ async def test_migration_enables_extensions_without_goal_c_tables(settings: Sett
         await engine.dispose()
 
     assert extensions == {"pgcrypto", "vector"}
-    assert revision == "20260716_0001"
-    assert domain_tables == set()
+    assert revision == "20260717_0002"
+    assert domain_tables == {
+        "tenants",
+        "projects",
+        "agents",
+        "agent_versions",
+        "tasks",
+        "runs",
+        "run_steps",
+        "events",
+        "audit_records",
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_role_and_force_rls_cover_every_core_table(settings: Settings) -> None:
+    engine = create_async_engine(settings.resolved_database_url)
+    expected_tables = {
+        "tenants",
+        "projects",
+        "agents",
+        "agent_versions",
+        "tasks",
+        "runs",
+        "run_steps",
+        "events",
+        "audit_records",
+    }
+    try:
+        async with engine.connect() as connection:
+            role = (
+                await connection.execute(
+                    text(
+                        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'nico_runtime'"
+                    )
+                )
+            ).one()
+            protected = set(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT relname FROM pg_class "
+                            "WHERE relname = ANY(:tables) "
+                            "AND relrowsecurity AND relforcerowsecurity"
+                        ),
+                        {"tables": sorted(expected_tables)},
+                    )
+                ).scalars()
+            )
+    finally:
+        await engine.dispose()
+
+    assert role == (False, False)
+    assert protected == expected_tables
+
+
+@pytest.mark.asyncio
+async def test_rls_isolates_tenants_and_composite_keys_reject_cross_tenant_links(
+    settings: Settings,
+) -> None:
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    tenant_a = Tenant(name="Tenant A", slug=f"tenant-a-{uuid4()}")
+    tenant_b = Tenant(name="Tenant B", slug=f"tenant-b-{uuid4()}")
+    try:
+        async with database.admin_transaction() as session:
+            session.add_all([tenant_a, tenant_b])
+            await session.flush()
+
+        context_a = TenantContext(tenant_a.id, "integration-a", uuid4())
+        context_b = TenantContext(tenant_b.id, "integration-b", uuid4())
+        async with database.tenant_transaction(context_a) as session:
+            project_a = Project(tenant_id=tenant_a.id, name="private-a")
+            session.add(project_a)
+            await session.flush()
+
+        async with database.tenant_transaction(context_b) as session:
+            visible_projects = (await session.scalars(select(Project))).all()
+        assert visible_projects == []
+
+        with pytest.raises(IntegrityError):
+            async with database.tenant_transaction(context_b) as session:
+                session.add(
+                    Task(
+                        tenant_id=tenant_b.id,
+                        project_id=project_a.id,
+                        title="cross-tenant reference",
+                    )
+                )
+                await session.flush()
+
+        async with engine.begin() as connection:
+            await connection.execute(text("SET LOCAL ROLE nico_runtime"))
+            count = (await connection.execute(text("SELECT count(*) FROM projects"))).scalar_one()
+        assert count == 0
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
