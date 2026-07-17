@@ -1,6 +1,6 @@
 # Goal F：Memory 与 Skill 实施计划
 
-- 状态：In Progress（F3 pgvector 检索完成）
+- 状态：In Progress（F4 终态轨迹反思与候选生成完成）
 - 日期：2026-07-17
 - 基线：Goal E commit `431ad14`
 

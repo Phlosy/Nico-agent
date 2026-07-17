@@ -4,7 +4,7 @@
 
 | 层级 | 命令 | 覆盖 |
 | --- | --- | --- |
-| 后端单元 | `.venv/bin/pytest backend/tests/unit` | Goal A–E 回归，以及 Memory/Skill/Evaluation/Approval/Deployment 状态机、工具与 Runtime 合同 |
+| 后端单元 | `.venv/bin/pytest backend/tests/unit` | Goal A–E 回归，以及 Memory/Skill 状态机、切片/嵌入、轨迹快照、反思 DTO 与策略合同 |
 | 前端组件 | `npm --prefix frontend test` | API 运行时契约、加载、健康、503 降级、网络失败与手动重试 |
 | 静态/构建 | `scripts/test.sh` | Ruff、后端单测、前端测试、TypeScript 与 Vite 生产构建 |
 | 真实依赖 | `scripts/test-integration.sh` | 迁移升级—回滚—重放、RLS、最小 claimer、Runtime/Tool，以及 Goal F 来源闭合、发布闸门、Hash 绑定、灰度唯一和终态不可变 |
@@ -21,7 +21,7 @@
 
 Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
 
-Goal F F3 当前回归为后端 158 项单元、前端 7 项及 38 项真实依赖集成测试。除 F2 七类成长表外，新增覆盖 Unicode normalization、段落优先 chunk、稳定 Hash、384 维 L2 embedding、`vector(384)`、HNSW cosine profile、幂等索引、MemoryChunk 不可变、tenant/project/agent scope、跨租户 context、来源返回和失效排除。F4 之前不声称终态轨迹反思或候选生成已实现。
+Goal F F4 当前回归为后端 163 项单元、前端 7 项及 44 项真实依赖集成测试。除 F2/F3 的成长表、确定性 chunk/embed 和 scope-first pgvector 检索外，新增覆盖嵌套 DTO Hash 稳定性、递归脱敏、有界快照、成功/失败反思、策略所有的 tenant/project/agent scope、短期 working memory、精确工具/Runtime 来源、Candidate 不可召回、Event/Audit，以及并发重复生成幂等。验证、审批和发布应用服务仍属于 F5/F6，Goal F 整栈 E2E 属于 F8。
 
 ## 人工与故障验收
 

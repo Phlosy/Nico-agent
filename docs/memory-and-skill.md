@@ -1,6 +1,6 @@
 # Memory 与 Skill 边界
 
-Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F3 已将领域记录、数据库不变量和真实 pgvector 检索落地，代码状态见 Feature Matrix。
+Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F4 已将领域记录、真实 pgvector 检索和终态轨迹候选生成落地，代码状态见 Feature Matrix。
 
 ## 能力流
 
@@ -63,5 +63,6 @@ SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤�
 - F1：本文、ADR-0010 与实施计划已冻结。
 - F2：Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval、SkillDeployment 已落库；运行角色对全部新表启用 `FORCE RLS`。复合外键闭合同租户来源，触发器拒绝非终态来源、直接发布、Hash 错配、非法状态转换、正式内容改写和物理删除。
 - F3：确定性 chunk/embed、版本化 MemoryChunk、`vector(384)`、HNSW cosine 索引、幂等索引服务和 scope-first 检索已完成；本地 embedding 是可复现基线，不声称外部语义模型质量。
-- F4 起实现终态轨迹反思、候选成长链、验证/发布服务和 API。
+- F4：只读构造有界、递归脱敏、Hash 稳定的终态 TrajectorySnapshot；`ReflectionProvider` 只接收冻结 DTO。确定性基线反思器按成功/失败结果生成四类 MemoryCandidate 与结构化 SkillVersion draft，策略服务控制 scope/TTL，并在 Run 行锁下幂等写入 GrowthSource、Event 和 Audit。反思器没有 ORM、Session、Secret、工具或发布能力，重复/并发生成不会复制候选。
+- F5 起实现验证、Evaluation、Approval、Memory 生命周期和后续 Skill 发布/回滚服务与 API。
 - Goal G 才能启用 Team scope；Goal H 才能由 Plugin 注册反思器/evaluator；Goal K 才提供正式身份和细粒度审批授权。
