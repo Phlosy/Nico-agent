@@ -1,0 +1,6 @@
+POST /api/v1/memories/89eb5b59-c625-4380-997d-13226cfeed17/publish expected=400 actual=400
+GET /api/v1/skills/2997cf8d-d653-4582-aba7-38fef567cb32/resolve?run_id=27c60caa-b3b4-4c67-8ae5-b12ee9463b7d expected=400 actual=400
+POST /api/v1/growth-approvals/89edfe46-45fa-4080-b703-2807ec294f73/decision expected=403 actual=403
+GET /api/v1/memories/89eb5b59-c625-4380-997d-13226cfeed17 expected=404 actual=404
+GET /api/v1/skills/2997cf8d-d653-4582-aba7-38fef567cb32 expected=404 actual=404
+POST /api/v1/runs/27c60caa-b3b4-4c67-8ae5-b12ee9463b7d/growth-candidates expected=404 actual=404

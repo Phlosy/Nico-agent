@@ -1,0 +1,8 @@
+python3 scripts/check-docs.py
+npx --yes markdownlint-cli2@0.22.1 "*.md" "backend/*.md" "docs/*.md" ".github/*.md"
+bash -n scripts/*.sh
+git diff --check
+docker compose config --quiet
+.venv/bin/pytest -q backend/tests/unit/test_conversation_contracts.py backend/tests/unit/test_cli_sse.py backend/tests/unit/test_cli_chat.py backend/tests/unit/test_cli_client.py backend/tests/unit/test_cli_app.py backend/tests/unit/test_api.py
+scripts/e2e-cli-goal-c.sh
+NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-c/20260719T104013Z scripts/verify-cli-goal-c.sh

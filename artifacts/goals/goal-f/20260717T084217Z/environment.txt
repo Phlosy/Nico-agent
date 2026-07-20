@@ -1,0 +1,6 @@
+2026-07-17T08:42:17Z
+92ddf48e69072b613e429438667806a9e5ddd538
+?? artifacts/goals/goal-f/
+Python 3.12.7
+Docker version 29.3.0, build 5927d80
+Docker Compose version v5.1.0

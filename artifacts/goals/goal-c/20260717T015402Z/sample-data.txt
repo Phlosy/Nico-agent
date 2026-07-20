@@ -1,0 +1,30 @@
+     entity     | count 
+----------------+-------
+ agents         |     7
+ agent_versions |     7
+ audit_records  |    68
+ events         |    68
+ runs           |     4
+ run_steps      |     2
+ tasks          |     4
+ tenants        |     9
+(8 rows)
+
+   tablename    |    policyname    
+----------------+------------------
+ agent_versions | tenant_isolation
+ agents         | tenant_isolation
+ audit_records  | tenant_isolation
+ events         | tenant_isolation
+ projects       | tenant_isolation
+ run_steps      | tenant_isolation
+ runs           | tenant_isolation
+ tasks          | tenant_isolation
+ tenants        | tenant_isolation
+(9 rows)
+
+   rolname    | rolsuper | rolbypassrls 
+--------------+----------+--------------
+ nico_runtime | f        | f
+(1 row)
+

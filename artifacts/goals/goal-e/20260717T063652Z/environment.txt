@@ -1,0 +1,6 @@
+2026-07-17T06:36:52Z
+b8703b1faeee635cf135bbe6bddf2a8625c44263
+?? artifacts/goals/goal-e/
+Python 3.12.7
+Docker version 29.3.0, build 5927d80
+Docker Compose version v5.1.0

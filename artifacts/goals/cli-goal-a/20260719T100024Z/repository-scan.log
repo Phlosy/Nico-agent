@@ -1,0 +1,52 @@
+CURRENT PROJECT SCRIPTS
+[project.scripts]
+nico-api = "nico_agent.main:run"
+nico-worker = "nico_agent.worker:run"
+nico-sandbox-runner = "nico_agent.sandbox.api:run"
+
+CURRENT DOMAIN OBJECTS
+214:class Task(Base, TimestampMixin):
+261:class Run(Base, TimestampMixin):
+341:class RuntimeSession(Base, TimestampMixin):
+581:class AgentMessage(Base, TimestampMixin):
+651:class RunBudgetLedger(Base, TimestampMixin):
+737:class Artifact(Base, TimestampMixin):
+886:class ContextSnapshot(Base):
+947:class RuntimeKnowledgeUsage(Base, TimestampMixin):
+1155:class RunStep(Base, TimestampMixin):
+1343:class RuntimeEvaluation(Base):
+2040:class Approval(Base, TimestampMixin):
+CURRENT RELEVANT ROUTES
+backend/src/nico_agent/artifact_api.py:64:@router.post("/runs/{run_id}/artifacts", status_code=201)
+backend/src/nico_agent/artifact_api.py:99:@router.get("/runs/{run_id}/artifacts", response_model=list[ArtifactRead])
+backend/src/nico_agent/artifact_api.py:104:@router.get("/runs/{run_id}/artifacts/{artifact_id}/content")
+backend/src/nico_agent/coordination/api.py:35:@router.get("/runs/{run_id}/delegations", response_model=list[DelegationRead])
+backend/src/nico_agent/coordination/api.py:40:@router.get("/runs/{run_id}/children", response_model=list[RunRead])
+backend/src/nico_agent/coordination/api.py:45:@router.get("/runs/{run_id}/messages", response_model=list[AgentMessageRead])
+backend/src/nico_agent/coordination/api.py:50:@router.post("/runs/{run_id}/tree-cancel", response_model=RunRead)
+backend/src/nico_agent/plan_api.py:103:@router.get("/runs/{run_id}/plans", response_model=list[PlanRead])
+backend/src/nico_agent/plan_api.py:108:@router.get("/runs/{run_id}/plans/{plan_id}", response_model=PlanRead)
+backend/src/nico_agent/plan_api.py:113:@router.get("/runs/{run_id}/plans/{plan_id}/steps", response_model=list[PlanStepRead])
+backend/src/nico_agent/growth_api.py:248:@router.get("/growth-approvals/{approval_id}", response_model=ApprovalRead)
+backend/src/nico_agent/growth_api.py:253:@router.post("/growth-approvals/{approval_id}/decision", response_model=ApprovalReference)
+backend/src/nico_agent/growth_api.py:269:@router.post("/growth-approvals/{approval_id}/cancel", response_model=ApprovalReference)
+backend/src/nico_agent/model_api.py:267:@router.get("/runs/{run_id}/model-calls", response_model=list[ModelCallRead])
+backend/src/nico_agent/model_api.py:272:@router.get("/runs/{run_id}/contexts", response_model=list[ContextSnapshotRead])
+backend/src/nico_agent/model_api.py:285:@router.get("/runs/{run_id}/events/stream")
+backend/src/nico_agent/domain_api.py:251:@router.post("/tasks", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
+backend/src/nico_agent/domain_api.py:256:@router.get("/tasks/{task_id}", response_model=TaskRead)
+backend/src/nico_agent/domain_api.py:261:@router.post("/tasks/{task_id}/transition", response_model=TaskRead)
+backend/src/nico_agent/domain_api.py:268:@router.post("/tasks/{task_id}/runs", response_model=RunRead, status_code=201)
+backend/src/nico_agent/domain_api.py:273:@router.get("/runs/{run_id}", response_model=RunRead)
+backend/src/nico_agent/domain_api.py:278:@router.get("/runs/{run_id}/runtime", response_model=RuntimeSessionRead)
+backend/src/nico_agent/domain_api.py:283:@router.get("/runs/{run_id}/trajectory", response_model=RuntimeTrajectory)
+backend/src/nico_agent/domain_api.py:288:@router.post("/runs/{run_id}/transition", response_model=RunRead)
+backend/src/nico_agent/domain_api.py:293:@router.post("/runs/{run_id}/cancel", response_model=RunRead)
+backend/src/nico_agent/domain_api.py:298:@router.post("/runs/{run_id}/retry", response_model=RunRead, status_code=201)
+backend/src/nico_agent/domain_api.py:303:@router.post("/runs/{run_id}/steps", response_model=RunStepRead, status_code=201)
+backend/src/nico_agent/domain_api.py:308:@router.post("/runs/{run_id}/steps/{step_id}/transition", response_model=RunStepRead)
+backend/src/nico_agent/domain_api.py:319:@router.get("/runs/{run_id}/events", response_model=list[EventRead])
+backend/src/nico_agent/domain_api.py:324:@router.get("/runs/{run_id}/steps", response_model=list[RunStepRead])
+backend/src/nico_agent/domain_api.py:334:@router.get("/runs/{run_id}/tool-calls", response_model=list[ToolCallRead])
+ABSENT CONVERSATION SYMBOLS
+No Conversation, ConversationTurn, or ToolApprovalRequest class found.

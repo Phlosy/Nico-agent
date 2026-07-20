@@ -1,0 +1,627 @@
+[nico] validating Goal G source, shell and Compose configuration
+[nico] running full source, migration and real-dependency regression gates
+[nico] preparing backend environment
+Obtaining file:///home/node7/xpk/Nico-agent/backend
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: alembic==1.18.5 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.18.5)
+Requirement already satisfied: asyncpg==0.31.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.31.0)
+Requirement already satisfied: fastapi==0.139.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.139.2)
+Requirement already satisfied: httpx==0.28.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.28.1)
+Requirement already satisfied: jsonschema==4.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (4.26.0)
+Requirement already satisfied: pgvector==0.5.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.5.0)
+Requirement already satisfied: pydantic-settings==2.14.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (2.14.2)
+Requirement already satisfied: redis==8.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (8.0.1)
+Requirement already satisfied: sqlalchemy==2.0.51 in ./.venv/lib/python3.12/site-packages (from sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (2.0.51)
+Requirement already satisfied: uvicorn==0.51.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.51.0)
+Requirement already satisfied: mcp==1.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.26.0)
+Requirement already satisfied: pytest==9.1.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (9.1.1)
+Requirement already satisfied: pytest-asyncio==1.4.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.4.0)
+Requirement already satisfied: ruff==0.15.22 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.15.22)
+Requirement already satisfied: starlette==1.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.0.1)
+Requirement already satisfied: Mako in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (1.3.12)
+Requirement already satisfied: typing-extensions>=4.12 in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (4.16.0)
+Requirement already satisfied: pydantic>=2.9.0 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (2.13.4)
+Requirement already satisfied: typing-inspection>=0.4.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.0.4)
+Requirement already satisfied: anyio in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (4.14.2)
+Requirement already satisfied: certifi in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (2026.6.17)
+Requirement already satisfied: httpcore==1.* in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (1.0.9)
+Requirement already satisfied: idna in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (3.18)
+Requirement already satisfied: attrs>=22.2.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (26.1.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (0.37.0)
+Requirement already satisfied: rpds-py>=0.25.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2026.6.3)
+Requirement already satisfied: httpx-sse>=0.4 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.4.3)
+Requirement already satisfied: pyjwt>=2.10.1 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.13.0)
+Requirement already satisfied: python-multipart>=0.0.9 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.0.32)
+Requirement already satisfied: sse-starlette>=1.6.1 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (3.4.5)
+Requirement already satisfied: python-dotenv>=0.21.0 in ./.venv/lib/python3.12/site-packages (from pydantic-settings==2.14.2->nico-agent-platform==0.2.0) (1.2.2)
+Requirement already satisfied: iniconfig>=1.0.1 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.3.0)
+Requirement already satisfied: packaging>=22 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (26.2)
+Requirement already satisfied: pluggy<2,>=1.5 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (1.6.0)
+Requirement already satisfied: pygments>=2.7.2 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.20.0)
+Requirement already satisfied: greenlet>=1 in ./.venv/lib/python3.12/site-packages (from sqlalchemy==2.0.51->sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (3.5.3)
+Requirement already satisfied: click>=7.0 in ./.venv/lib/python3.12/site-packages (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (8.4.2)
+Requirement already satisfied: h11>=0.8 in ./.venv/lib/python3.12/site-packages (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.16.0)
+Requirement already satisfied: httptools>=0.8.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.8.0)
+Requirement already satisfied: pyyaml>=5.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (6.0.3)
+Requirement already satisfied: uvloop>=0.15.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.22.1)
+Requirement already satisfied: watchfiles>=0.20 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (1.2.0)
+Requirement already satisfied: websockets>=13.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (16.1)
+Requirement already satisfied: annotated-types>=0.6.0 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (0.7.0)
+Requirement already satisfied: pydantic-core==2.46.4 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (2.46.4)
+Requirement already satisfied: cryptography>=3.4.0 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (49.0.0)
+Requirement already satisfied: cffi>=2.0.0 in ./.venv/lib/python3.12/site-packages (from cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.1.0)
+Requirement already satisfied: pycparser in ./.venv/lib/python3.12/site-packages (from cffi>=2.0.0->cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (3.0)
+Requirement already satisfied: MarkupSafe>=0.9.2 in ./.venv/lib/python3.12/site-packages (from Mako->alembic==1.18.5->nico-agent-platform==0.2.0) (3.0.3)
+Building wheels for collected packages: nico-agent-platform
+  Building editable for nico-agent-platform (pyproject.toml): started
+  Building editable for nico-agent-platform (pyproject.toml): finished with status 'done'
+  Created wheel for nico-agent-platform: filename=nico_agent_platform-0.2.0-0.editable-py3-none-any.whl size=2223 sha256=5d9ba63a425b3c4c91efc62bfd35caa1250dd266d0bc7b35456b4dfcbc08461c
+  Stored in directory: /tmp/pip-ephem-wheel-cache-yczkjjos/wheels/17/e9/6f/71b9b670152a91c6248eed18bc3906ee8f4c6db86470fc7d5e
+Successfully built nico-agent-platform
+Installing collected packages: nico-agent-platform
+  Attempting uninstall: nico-agent-platform
+    Found existing installation: nico-agent-platform 0.2.0
+    Uninstalling nico-agent-platform-0.2.0:
+      Successfully uninstalled nico-agent-platform-0.2.0
+Successfully installed nico-agent-platform-0.2.0
+[nico] running backend lint, format check and unit tests
+All checks passed!
+129 files already formatted
+============================= test session starts ==============================
+platform linux -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/node7/xpk/Nico-agent/backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 197 items
+
+backend/tests/unit/test_api.py ..........                                [  5%]
+backend/tests/unit/test_config.py ....                                   [  7%]
+backend/tests/unit/test_database_read_tool.py .....................      [ 17%]
+backend/tests/unit/test_domain_states.py .............................   [ 32%]
+backend/tests/unit/test_growth_reflection.py .....                       [ 35%]
+backend/tests/unit/test_growth_validation.py ....                        [ 37%]
+backend/tests/unit/test_health.py ....                                   [ 39%]
+backend/tests/unit/test_hermes_runtime.py ........                       [ 43%]
+backend/tests/unit/test_http_read_tool.py ........................       [ 55%]
+backend/tests/unit/test_logging.py .                                     [ 55%]
+backend/tests/unit/test_mcp_gateway.py ....                              [ 57%]
+backend/tests/unit/test_memory_primitives.py ........                    [ 61%]
+backend/tests/unit/test_model_gateway.py ..........                      [ 67%]
+backend/tests/unit/test_native_direct_runtime.py .......                 [ 70%]
+backend/tests/unit/test_python_sandbox.py ......                         [ 73%]
+backend/tests/unit/test_runtime_contract.py .........                    [ 78%]
+backend/tests/unit/test_runtime_contract_v2.py .......                   [ 81%]
+backend/tests/unit/test_skill_release.py ...                             [ 83%]
+backend/tests/unit/test_tool_contract.py ............                    [ 89%]
+backend/tests/unit/test_tool_policy.py ....                              [ 91%]
+backend/tests/unit/test_worker.py ...                                    [ 92%]
+backend/tests/unit/test_workspace_tools.py ..............                [100%]
+
+============================= 197 passed in 5.12s ==============================
+[nico] preparing frontend environment
+
+added 118 packages, and audited 119 packages in 2s
+
+29 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[nico] running frontend component tests and production build
+
+> nico-agent-web@0.1.0 test
+> vitest run
+
+
+ RUN  v4.1.10 /home/node7/xpk/Nico-agent/frontend
+
+
+ Test Files  2 passed (2)
+      Tests  7 passed (7)
+   Start at  17:11:52
+   Duration  1.77s (transform 158ms, setup 230ms, import 508ms, tests 309ms, environment 1.35s)
+
+
+> nico-agent-web@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v8.1.5 building client environment for production...
+[2Ktransforming...✓ 64 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.65 kB │ gzip:  0.42 kB
+dist/assets/index-C1bRnsq-.css    9.88 kB │ gzip:  3.00 kB
+dist/assets/index-ZEBLnbKr.js   230.85 kB │ gzip: 72.48 kB
+
+✓ built in 243ms
+[nico] local test suite passed
+Obtaining file:///home/node7/xpk/Nico-agent/backend
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: alembic==1.18.5 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.18.5)
+Requirement already satisfied: asyncpg==0.31.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.31.0)
+Requirement already satisfied: fastapi==0.139.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.139.2)
+Requirement already satisfied: httpx==0.28.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.28.1)
+Requirement already satisfied: jsonschema==4.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (4.26.0)
+Requirement already satisfied: pgvector==0.5.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.5.0)
+Requirement already satisfied: pydantic-settings==2.14.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (2.14.2)
+Requirement already satisfied: redis==8.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (8.0.1)
+Requirement already satisfied: sqlalchemy==2.0.51 in ./.venv/lib/python3.12/site-packages (from sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (2.0.51)
+Requirement already satisfied: uvicorn==0.51.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.51.0)
+Requirement already satisfied: mcp==1.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.26.0)
+Requirement already satisfied: pytest==9.1.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (9.1.1)
+Requirement already satisfied: pytest-asyncio==1.4.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.4.0)
+Requirement already satisfied: ruff==0.15.22 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.15.22)
+Requirement already satisfied: starlette==1.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.0.1)
+Requirement already satisfied: Mako in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (1.3.12)
+Requirement already satisfied: typing-extensions>=4.12 in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (4.16.0)
+Requirement already satisfied: pydantic>=2.9.0 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (2.13.4)
+Requirement already satisfied: typing-inspection>=0.4.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.0.4)
+Requirement already satisfied: anyio in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (4.14.2)
+Requirement already satisfied: certifi in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (2026.6.17)
+Requirement already satisfied: httpcore==1.* in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (1.0.9)
+Requirement already satisfied: idna in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (3.18)
+Requirement already satisfied: attrs>=22.2.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (26.1.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (0.37.0)
+Requirement already satisfied: rpds-py>=0.25.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2026.6.3)
+Requirement already satisfied: httpx-sse>=0.4 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.4.3)
+Requirement already satisfied: pyjwt>=2.10.1 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.13.0)
+Requirement already satisfied: python-multipart>=0.0.9 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.0.32)
+Requirement already satisfied: sse-starlette>=1.6.1 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (3.4.5)
+Requirement already satisfied: python-dotenv>=0.21.0 in ./.venv/lib/python3.12/site-packages (from pydantic-settings==2.14.2->nico-agent-platform==0.2.0) (1.2.2)
+Requirement already satisfied: iniconfig>=1.0.1 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.3.0)
+Requirement already satisfied: packaging>=22 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (26.2)
+Requirement already satisfied: pluggy<2,>=1.5 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (1.6.0)
+Requirement already satisfied: pygments>=2.7.2 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.20.0)
+Requirement already satisfied: greenlet>=1 in ./.venv/lib/python3.12/site-packages (from sqlalchemy==2.0.51->sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (3.5.3)
+Requirement already satisfied: click>=7.0 in ./.venv/lib/python3.12/site-packages (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (8.4.2)
+Requirement already satisfied: h11>=0.8 in ./.venv/lib/python3.12/site-packages (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.16.0)
+Requirement already satisfied: httptools>=0.8.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.8.0)
+Requirement already satisfied: pyyaml>=5.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (6.0.3)
+Requirement already satisfied: uvloop>=0.15.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.22.1)
+Requirement already satisfied: watchfiles>=0.20 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (1.2.0)
+Requirement already satisfied: websockets>=13.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (16.1)
+Requirement already satisfied: annotated-types>=0.6.0 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (0.7.0)
+Requirement already satisfied: pydantic-core==2.46.4 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (2.46.4)
+Requirement already satisfied: cryptography>=3.4.0 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (49.0.0)
+Requirement already satisfied: cffi>=2.0.0 in ./.venv/lib/python3.12/site-packages (from cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.1.0)
+Requirement already satisfied: pycparser in ./.venv/lib/python3.12/site-packages (from cffi>=2.0.0->cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (3.0)
+Requirement already satisfied: MarkupSafe>=0.9.2 in ./.venv/lib/python3.12/site-packages (from Mako->alembic==1.18.5->nico-agent-platform==0.2.0) (3.0.3)
+Building wheels for collected packages: nico-agent-platform
+  Building editable for nico-agent-platform (pyproject.toml): started
+  Building editable for nico-agent-platform (pyproject.toml): finished with status 'done'
+  Created wheel for nico-agent-platform: filename=nico_agent_platform-0.2.0-0.editable-py3-none-any.whl size=2223 sha256=7ade67c9169b8e80fd4758430d483d310781783ebba1ee221f1d23db4056934e
+  Stored in directory: /tmp/pip-ephem-wheel-cache-vug5jpwm/wheels/17/e9/6f/71b9b670152a91c6248eed18bc3906ee8f4c6db86470fc7d5e
+Successfully built nico-agent-platform
+Installing collected packages: nico-agent-platform
+  Attempting uninstall: nico-agent-platform
+    Found existing installation: nico-agent-platform 0.2.0
+    Uninstalling nico-agent-platform-0.2.0:
+      Successfully uninstalled nico-agent-platform-0.2.0
+Successfully installed nico-agent-platform-0.2.0
+[nico] starting real PostgreSQL, Redis and MinIO dependencies
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+[nico] MinIO is ready
+[nico] applying Alembic migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+[nico] proving the extension migration can roll back and reapply
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 20260718_0010 -> 20260717_0009, Add the native model runtime persistence baseline.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0009 -> 20260717_0008, Add database guards for reviewed Skill release and scoped canaries.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0008 -> 20260717_0007, Add concurrency-safe idempotency keys for growth evaluations and reviews.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0007 -> 20260717_0006, Add immutable versioned pgvector chunks for active Memory.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0006 -> 20260717_0005, Add tenant-scoped controlled Memory and Skill growth records.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0005 -> 20260717_0004, Freeze per-Run tool policy and bind ToolCall execution to a Run lease.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0004 -> 20260717_0003, Add versioned tools and immutable ToolCall execution records.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0003 -> 20260717_0002, Add RuntimeSession persistence and the least-privilege Run claimer.
+INFO  [alembic.runtime.migration] Running downgrade 20260717_0002 -> 20260716_0001, Create the tenant-scoped core control-plane schema.
+INFO  [alembic.runtime.migration] Running downgrade 20260716_0001 -> , Enable platform PostgreSQL extensions.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 20260716_0001, Enable platform PostgreSQL extensions.
+INFO  [alembic.runtime.migration] Running upgrade 20260716_0001 -> 20260717_0002, Create the tenant-scoped core control-plane schema.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0002 -> 20260717_0003, Add RuntimeSession persistence and the least-privilege Run claimer.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0003 -> 20260717_0004, Add versioned tools and immutable ToolCall execution records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0004 -> 20260717_0005, Freeze per-Run tool policy and bind ToolCall execution to a Run lease.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0005 -> 20260717_0006, Add tenant-scoped controlled Memory and Skill growth records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0006 -> 20260717_0007, Add immutable versioned pgvector chunks for active Memory.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0007 -> 20260717_0008, Add concurrency-safe idempotency keys for growth evaluations and reviews.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0008 -> 20260717_0009, Add database guards for reviewed Skill release and scoped canaries.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0009 -> 20260718_0010, Add the native model runtime persistence baseline.
+[nico] running real dependency integration tests
+============================= test session starts ==============================
+platform linux -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/node7/xpk/Nico-agent/backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 62 items
+
+backend/tests/integration/test_control_plane_api.py .....                [  8%]
+backend/tests/integration/test_database_read_tool.py .                   [  9%]
+backend/tests/integration/test_growth_api.py .                           [ 11%]
+backend/tests/integration/test_growth_candidate_generation.py ......     [ 20%]
+backend/tests/integration/test_growth_persistence.py .......             [ 32%]
+backend/tests/integration/test_growth_review_lifecycle.py .........      [ 46%]
+backend/tests/integration/test_hermes_mcp_boundary.py .                  [ 48%]
+backend/tests/integration/test_infrastructure.py ........                [ 61%]
+backend/tests/integration/test_model_runtime_api.py .                    [ 62%]
+backend/tests/integration/test_native_runtime_persistence.py .           [ 64%]
+backend/tests/integration/test_python_sandbox.py .                       [ 66%]
+backend/tests/integration/test_runtime_leasing.py ...                    [ 70%]
+backend/tests/integration/test_runtime_worker.py .....                   [ 79%]
+backend/tests/integration/test_skill_release_lifecycle.py ....           [ 85%]
+backend/tests/integration/test_tool_gateway.py ......                    [ 95%]
+backend/tests/integration/test_tool_persistence.py ...                   [100%]
+
+============================= 62 passed in 20.93s ==============================
+[nico] integration suite passed
+[nico] starting the platform in the background
+ Image nico-agent-platform-api Building 
+ Image nico-agent-platform-sandbox-runner Building 
+ Image nico-agent-platform-web Building 
+ Image nico-agent-platform-worker-state-init Building 
+ Image nico-agent-platform-worker Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 2.43kB done
+#1 DONE 0.0s
+
+#2 [web internal] load build definition from Dockerfile
+#2 transferring dockerfile: 429B done
+#2 DONE 0.0s
+
+#3 [sandbox-runner internal] load build definition from Dockerfile
+#3 transferring dockerfile: 580B done
+#3 DONE 0.0s
+
+#4 [worker internal] load metadata for docker.io/library/python:3.12-slim
+#4 ...
+
+#5 [web internal] load metadata for docker.io/library/nginx:1.28-alpine
+#5 DONE 1.2s
+
+#4 [api internal] load metadata for docker.io/library/python:3.12-slim
+#4 DONE 1.2s
+
+#6 [web internal] load metadata for docker.io/library/node:20-alpine
+#6 DONE 1.2s
+
+#7 [api internal] load .dockerignore
+#7 transferring context: 102B done
+#7 DONE 0.0s
+
+#8 [web internal] load .dockerignore
+#8 transferring context: 68B done
+#8 DONE 0.0s
+
+#9 [web runtime 1/3] FROM docker.io/library/nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+#9 DONE 0.0s
+
+#10 [web build 1/6] FROM docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+#10 DONE 0.0s
+
+#11 [web internal] load build context
+#11 transferring context: 690B done
+#11 DONE 0.0s
+
+#12 [api 1/9] FROM docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+#12 resolve docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de 0.0s done
+#12 DONE 0.0s
+
+#13 [web build 6/6] RUN npm run build
+#13 CACHED
+
+#14 [web build 3/6] COPY package.json package-lock.json ./
+#14 CACHED
+
+#15 [web runtime 2/3] COPY nginx.conf /etc/nginx/conf.d/default.conf
+#15 CACHED
+
+#16 [web build 5/6] COPY . .
+#16 CACHED
+
+#17 [web build 2/6] WORKDIR /app
+#17 CACHED
+
+#18 [web build 4/6] RUN npm ci
+#18 CACHED
+
+#19 [web runtime 3/3] COPY --from=build /app/dist /usr/share/nginx/html
+#19 CACHED
+
+#20 [web] exporting to image
+#20 exporting layers done
+#20 writing image sha256:e110c5ef9ebd594e1e1c691549d4ff9dd4663f4716b27698348cd101b2ffe209 done
+#20 naming to docker.io/library/nico-agent-platform-web done
+#20 DONE 0.0s
+
+#21 [api internal] load build context
+#21 transferring context: 18.93kB 0.0s done
+#21 DONE 0.0s
+
+#22 [worker 4/9] COPY pyproject.toml README.md ./
+#22 CACHED
+
+#23 [worker 3/9] RUN groupadd --system nico && useradd --system --gid nico --home-dir /app nico
+#23 CACHED
+
+#24 [worker 2/9] WORKDIR /app
+#24 CACHED
+
+#25 [worker 7/9] COPY logging.json ./logging.json
+#25 CACHED
+
+#26 [worker 8/9] COPY migrations ./migrations
+#26 CACHED
+
+#27 [worker 5/9] COPY src ./src
+#27 CACHED
+
+#28 [worker 6/9] COPY alembic.ini ./alembic.ini
+#28 CACHED
+
+#29 [sandbox-runner 9/9] RUN python -m pip install --no-cache-dir .
+#29 CACHED
+
+#30 [web] resolving provenance for metadata file
+#30 DONE 0.0s
+
+#31 [sandbox-runner] exporting to image
+#31 exporting layers done
+#31 writing image sha256:cacc0581c8fb4b4923d21f9ac8120f67ef8ce921b643022486861a29bf481a4a done
+#31 naming to docker.io/library/nico-agent-platform-sandbox-runner done
+#31 DONE 0.0s
+
+#32 [worker-state-init] exporting to image
+#32 exporting layers done
+#32 writing image sha256:2cfbda3e4de520ed92929d8e20c9e508e619d214d07e9b2766d96c620743f81c done
+#32 naming to docker.io/library/nico-agent-platform-worker-state-init done
+#32 DONE 0.0s
+
+#33 [worker] exporting to image
+#33 exporting layers done
+#33 writing image sha256:734619965ae591f7c042addb997cef11333648dfcb02a0ec5cc5d5f2a73f295a done
+#33 naming to docker.io/library/nico-agent-platform-worker done
+#33 DONE 0.0s
+
+#34 [api] exporting to image
+#34 exporting layers done
+#34 writing image sha256:280d06ba1dd308b12e736d847f3f0bf6d6e019fa815481a7b8426311a586545c done
+#34 naming to docker.io/library/nico-agent-platform-api done
+#34 DONE 0.0s
+
+#35 [sandbox-runner] resolving provenance for metadata file
+#35 DONE 0.1s
+
+#36 [api] resolving provenance for metadata file
+#36 DONE 0.0s
+
+#37 [worker-state-init] resolving provenance for metadata file
+#37 DONE 0.0s
+
+#38 [worker] resolving provenance for metadata file
+#38 DONE 0.0s
+ Image nico-agent-platform-worker-state-init Built 
+ Image nico-agent-platform-api Built 
+ Image nico-agent-platform-sandbox-runner Built 
+ Image nico-agent-platform-worker Built 
+ Image nico-agent-platform-web Built 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-sandbox-runner-1 Running 
+ Container nico-agent-platform-web-1 Running 
+ Container nico-agent-platform-worker-1 Recreate 
+ Container nico-agent-platform-worker-1 Recreated 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Starting 
+ Container nico-agent-platform-worker-state-init-1 Started 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-init-1 Waiting 
+ Container nico-agent-platform-postgres-1 Waiting 
+ Container nico-agent-platform-redis-1 Waiting 
+ Container nico-agent-platform-postgres-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Exited 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-redis-1 Healthy 
+ Container nico-agent-platform-api-1 Starting 
+ Container nico-agent-platform-api-1 Started 
+ Container nico-agent-platform-api-1 Waiting 
+ Container nico-agent-platform-sandbox-runner-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Waiting 
+ Container nico-agent-platform-api-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Exited 
+ Container nico-agent-platform-sandbox-runner-1 Healthy 
+ Container nico-agent-platform-api-1 Healthy 
+ Container nico-agent-platform-api-1 Healthy 
+ Container nico-agent-platform-worker-1 Starting 
+ Container nico-agent-platform-worker-1 Started 
+[nico] API is ready
+[nico] Web is ready
+[nico] api container is healthy
+[nico] web container is healthy
+NAME                                   IMAGE                                                                                                COMMAND                  SERVICE          CREATED              STATUS                        PORTS
+nico-agent-platform-api-1              nico-agent-platform-api                                                                              "/bin/sh -ec 'alembi…"   api              About a minute ago   Up 6 seconds (healthy)        0.0.0.0:18000->8000/tcp, [::]:18000->8000/tcp
+nico-agent-platform-minio-1            quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   "/usr/bin/docker-ent…"   minio            13 hours ago         Up 13 hours (healthy)         0.0.0.0:19010->9000/tcp, [::]:19010->9000/tcp, 0.0.0.0:19011->9001/tcp, [::]:19011->9001/tcp
+nico-agent-platform-postgres-1         pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb       "docker-entrypoint.s…"   postgres         13 hours ago         Up 13 hours (healthy)         0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp
+nico-agent-platform-redis-1            redis:7.2.14-alpine@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8          "docker-entrypoint.s…"   redis            13 hours ago         Up 13 hours (healthy)         0.0.0.0:16379->6379/tcp, [::]:16379->6379/tcp
+nico-agent-platform-sandbox-runner-1   nico-agent-platform-sandbox-runner                                                                   "uvicorn nico_agent.…"   sandbox-runner   About a minute ago   Up About a minute (healthy)   8000/tcp
+nico-agent-platform-web-1              nico-agent-platform-web                                                                              "/docker-entrypoint.…"   web              13 hours ago         Up 13 hours (healthy)         80/tcp, 0.0.0.0:18080->8080/tcp, [::]:18080->8080/tcp
+nico-agent-platform-worker-1           nico-agent-platform-worker                                                                           "python -m nico_agen…"   worker           8 seconds ago        Up Less than a second         8000/tcp
+NAME                                   IMAGE                                                                                                COMMAND                  SERVICE          CREATED              STATUS                        PORTS
+nico-agent-platform-api-1              nico-agent-platform-api                                                                              "/bin/sh -ec 'alembi…"   api              About a minute ago   Up 7 seconds (healthy)        0.0.0.0:18000->8000/tcp, [::]:18000->8000/tcp
+nico-agent-platform-minio-1            quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   "/usr/bin/docker-ent…"   minio            13 hours ago         Up 13 hours (healthy)         0.0.0.0:19010->9000/tcp, [::]:19010->9000/tcp, 0.0.0.0:19011->9001/tcp, [::]:19011->9001/tcp
+nico-agent-platform-postgres-1         pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb       "docker-entrypoint.s…"   postgres         13 hours ago         Up 13 hours (healthy)         0.0.0.0:15432->5432/tcp, [::]:15432->5432/tcp
+nico-agent-platform-redis-1            redis:7.2.14-alpine@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8          "docker-entrypoint.s…"   redis            13 hours ago         Up 13 hours (healthy)         0.0.0.0:16379->6379/tcp, [::]:16379->6379/tcp
+nico-agent-platform-sandbox-runner-1   nico-agent-platform-sandbox-runner                                                                   "uvicorn nico_agent.…"   sandbox-runner   About a minute ago   Up About a minute (healthy)   8000/tcp
+nico-agent-platform-web-1              nico-agent-platform-web                                                                              "/docker-entrypoint.…"   web              13 hours ago         Up 13 hours (healthy)         80/tcp, 0.0.0.0:18080->8080/tcp, [::]:18080->8080/tcp
+nico-agent-platform-worker-1           nico-agent-platform-worker                                                                           "python -m nico_agen…"   worker           9 seconds ago        Up 1 second                   8000/tcp
+[nico] E2E passed; the platform remains running at http://localhost:18080 (cleanup with scripts/cleanup.sh)
+[nico] running the hermetic OpenAI-compatible Compose acceptance
+[nico] starting the hermetic Goal G model, API and native worker
+ Image nico-agent-platform-worker-state-init Building 
+ Image nico-agent-platform-fake-model Building 
+ Image nico-agent-platform-sandbox-runner Building 
+ Image nico-agent-platform-worker Building 
+ Image nico-agent-platform-api Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 2.45kB done
+#1 DONE 0.0s
+
+#2 [sandbox-runner internal] load build definition from Dockerfile
+#2 transferring dockerfile: 580B done
+#2 DONE 0.0s
+
+#3 [worker internal] load metadata for docker.io/library/python:3.12-slim
+#3 DONE 0.3s
+
+#4 [worker-state-init internal] load .dockerignore
+#4 transferring context: 102B done
+#4 DONE 0.0s
+
+#5 [api 1/9] FROM docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+#5 resolve docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de done
+#5 DONE 0.0s
+
+#6 [fake-model internal] load build context
+#6 transferring context: 14.16kB 0.0s done
+#6 DONE 0.0s
+
+#7 [api 8/9] COPY migrations ./migrations
+#7 CACHED
+
+#8 [api 2/9] WORKDIR /app
+#8 CACHED
+
+#9 [api 4/9] COPY pyproject.toml README.md ./
+#9 CACHED
+
+#10 [api 3/9] RUN groupadd --system nico && useradd --system --gid nico --home-dir /app nico
+#10 CACHED
+
+#11 [api 6/9] COPY alembic.ini ./alembic.ini
+#11 CACHED
+
+#12 [api 7/9] COPY logging.json ./logging.json
+#12 CACHED
+
+#13 [api 5/9] COPY src ./src
+#13 CACHED
+
+#14 [api 9/9] RUN python -m pip install --no-cache-dir .
+#14 CACHED
+
+#15 [fake-model] exporting to image
+#15 exporting layers done
+#15 writing image sha256:2a8ec86551a7285efad0ef099fd2af9281084c8fcd5cf8983c6c310a9af58647 done
+#15 naming to docker.io/library/nico-agent-platform-fake-model done
+#15 DONE 0.0s
+
+#16 [api] exporting to image
+#16 exporting layers done
+#16 writing image sha256:280d06ba1dd308b12e736d847f3f0bf6d6e019fa815481a7b8426311a586545c done
+#16 naming to docker.io/library/nico-agent-platform-api done
+#16 DONE 0.0s
+
+#17 [worker-state-init] exporting to image
+#17 exporting layers done
+#17 writing image sha256:2cfbda3e4de520ed92929d8e20c9e508e619d214d07e9b2766d96c620743f81c done
+#17 naming to docker.io/library/nico-agent-platform-worker-state-init done
+#17 DONE 0.0s
+
+#18 [worker] exporting to image
+#18 exporting layers done
+#18 writing image sha256:734619965ae591f7c042addb997cef11333648dfcb02a0ec5cc5d5f2a73f295a done
+#18 naming to docker.io/library/nico-agent-platform-worker done
+#18 DONE 0.0s
+
+#19 [sandbox-runner] exporting to image
+#19 exporting layers done
+#19 writing image sha256:cacc0581c8fb4b4923d21f9ac8120f67ef8ce921b643022486861a29bf481a4a done
+#19 naming to docker.io/library/nico-agent-platform-sandbox-runner done
+#19 DONE 0.0s
+
+#20 [api] resolving provenance for metadata file
+#20 DONE 0.0s
+
+#21 [worker-state-init] resolving provenance for metadata file
+#21 DONE 0.0s
+
+#22 [sandbox-runner] resolving provenance for metadata file
+#22 DONE 0.0s
+
+#23 [fake-model] resolving provenance for metadata file
+#23 DONE 0.0s
+
+#24 [worker] resolving provenance for metadata file
+#24 DONE 0.0s
+ Image nico-agent-platform-sandbox-runner Built 
+ Image nico-agent-platform-worker-state-init Built 
+ Image nico-agent-platform-fake-model Built 
+ Image nico-agent-platform-api Built 
+ Image nico-agent-platform-worker Built 
+ Container nico-agent-platform-sandbox-runner-1 Running 
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-api-1 Running 
+ Container nico-agent-platform-worker-1 Recreate 
+ Container nico-agent-platform-worker-1 Recreated 
+ Container nico-agent-platform-worker-state-init-1 Starting 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-fake-model-1 Starting 
+ Container nico-agent-platform-worker-state-init-1 Started 
+ Container nico-agent-platform-fake-model-1 Started 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+ Container nico-agent-platform-postgres-1 Waiting 
+ Container nico-agent-platform-redis-1 Waiting 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-init-1 Waiting 
+ Container nico-agent-platform-redis-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Exited 
+ Container nico-agent-platform-postgres-1 Healthy 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-worker-state-init-1 Waiting 
+ Container nico-agent-platform-api-1 Waiting 
+ Container nico-agent-platform-sandbox-runner-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Exited 
+ Container nico-agent-platform-sandbox-runner-1 Healthy 
+ Container nico-agent-platform-api-1 Healthy 
+ Container nico-agent-platform-worker-1 Starting 
+ Container nico-agent-platform-worker-1 Started 
+[nico] fake-model container is healthy
+[nico] api container is healthy
+[nico] creating a default nico_native Run through the public API
+[nico] waiting for native Run 6e76aa38-6933-49ee-baff-599b6d3cd6fe
+[nico] PASS Goal G hermetic native direct execution
+[nico] PASS Goal G code-complete native runtime; external live-model verification remains credentialed

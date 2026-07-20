@@ -1,0 +1,14 @@
+current_profile = "local"
+
+[profiles."default"]
+base_url = "http://localhost:18000"
+actor_id = "nico-cli"
+timeout_seconds = 30.0
+verify_tls = true
+
+[profiles."local"]
+base_url = "http://localhost:18000"
+tenant_id = "a69d1c1d-202d-4cb8-9f8f-ed3ef80a5f75"
+actor_id = "cli-goal-f"
+timeout_seconds = 30.0
+verify_tls = true

@@ -1,0 +1,103 @@
+/help
+/inspect
+/exit
+╭───────────────────────────────── Nico Agent ─────────────────────────────────╮
+│     .-====-.    Agent   Nico Demo Agent                                      │
+│    / /\_/\ \    Version 1                                                    │
+│   | ( o.o ) |   Runtime mock                                                 │
+│   |  > ^ <  |   Project Nico Demo                                            │
+│    '-====-'     Tools   policy default                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[?12l[?25hyou › /help
+                        Nico Slash Commands                        
+┏━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Group ┃ Command        ┃ Description                            ┃
+┡━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 会话  │ /help          │ 显示命令帮助                           │
+│ 会话  │ /new           │ 创建并切换到新会话                     │
+│ 会话  │ /continue      │ 切换到最近活跃会话                     │
+│ 会话  │ /resume        │ 切换到指定会话：/resume ID             │
+│ 会话  │ /history       │ 查看当前会话历史                       │
+│ 会话  │ /conversations │ 列出活跃会话                           │
+│ 会话  │ /title         │ 修改标题：/title TEXT                  │
+│ 会话  │ /compact       │ 压缩已完成历史并保留可审计摘要         │
+│ 会话  │ /attach        │ 暂存本地文件到下一轮：/attach PATH     │
+│ 会话  │ /download      │ 下载产物：/download ARTIFACT_ID [PATH] │
+│ 会话  │ /exit          │ 退出交互模式                           │
+│ 状态  │ /status        │ 查看当前会话和最后一次运行             │
+│ 状态  │ /agent         │ 查看当前 Agent                         │
+│ 状态  │ /version       │ 查看冻结的 Agent 版本                  │
+│ 状态  │ /runtime       │ 查看 Runtime 会话                      │
+│ 状态  │ /usage         │ 查看 Token 与费用用量                  │
+│ 状态  │ /context       │ 查看上下文快照                         │
+│ 检查  │ /plan          │ 查看运行计划                           │
+│ 检查  │ /steps         │ 查看运行步骤                           │
+│ 检查  │ /tools         │ 查看工具调用                           │
+│ 检查  │ /approvals     │ 查看当前运行的工具审批                 │
+│ 检查  │ /children      │ 查看子运行                             │
+│ 检查  │ /messages      │ 查看 Agent 消息                        │
+│ 检查  │ /artifacts     │ 查看产物清单                           │
+│ 检查  │ /audit         │ 查看相关审计记录                       │
+│ 检查  │ /inspect       │ 汇总检查当前运行                       │
+│ 控制  │ /cancel        │ 取消正在运行的最后一轮                 │
+│ 控制  │ /retry         │ 重试失败的最后一轮                     │
+│ 控制  │ /approve       │ 批准工具：/approve ID once|run         │
+│ 控制  │ /reject        │ 拒绝工具：/reject ID [REASON]          │
+└───────┴────────────────┴────────────────────────────────────────┘
+you › /inspect
+╭──────────────────────────────────── Run ─────────────────────────────────────╮
+│ {                                                                            │
+│   "id": "4758cfb8-17c6-4756-9b88-74cf13499b4e",                              │
+│   "task_id": "a49f7541-9a5c-45e8-8e61-6cc8f310da85",                         │
+│   "agent_id": "dcbbfdb4-903b-4536-88a9-86e8ed334905",                        │
+│   "agent_version_id": "124ab9d3-154c-48dd-b0e1-067e939ca2d5",                │
+│   "retry_of_run_id": null,                                                   │
+│   "attempt": 1,                                                              │
+│   "status": "completed",                                                     │
+│   "max_steps": 64,                                                           │
+│   "token_budget": null,                                                      │
+│   "timeout_seconds": null,                                                   │
+│   "budgets": {},                                                             │
+│   "checkpoint": {                                                            │
+│     "completed_steps": 2                                                     │
+│   },                                                                         │
+│   "checkpoint_schema_version": 1,                                            │
+│   "checkpoint_revision": 2,                                                  │
+│   "checkpoint_hash": null,                                                   │
+│   "cost": {                                                                  │
+│     "steps": 2,                                                              │
+│     "tool_calls": 0,                                                         │
+│     "input_units": 1,                                                        │
+│     "output_units": 1                                                        │
+│   },                                                                         │
+│   "result": {                                                                │
+│     "message": "Nico completed a recoverable, auditable demo Run.",          │
+│     "runtime": "mock",                                                       │
+│     "summary": "AgentVersion -> Task -> Run -> Worker -> Result"             │
+│   },                                                                         │
+│   "error": null,                                                             │
+│   "started_at": "2026-07-19T12:26:34.262186Z",                               │
+│   "ended_at": "2026-07-19T12:26:34.391854Z",                                 │
+│   "revision": 6,                                                             │
+│   "created_at": "2026-07-19T12:26:33.511830Z",                               │
+│   "updated_at": "2026-07-19T12:26:34.392653Z"                                │
+│ }                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Plan Revisions: no records
+                                   Run Steps                                    
+┏━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ Sequence ┃ Kind           ┃ Status    ┃ Started At        ┃ Ended At         ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
+│ 1        │ validate task  │ completed │ 2026-07-19T12:26… │ 2026-07-19T12:2… │
+│ 2        │ produce result │ completed │ 2026-07-19T12:26… │ 2026-07-19T12:2… │
+└──────────┴────────────────┴───────────┴───────────────────┴──────────────────┘
+Tool Calls: no records
+Artifacts: no records
+                            Usage                             
+┏━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Source   ┃ Steps ┃ Tool Calls ┃ Input Units ┃ Output Units ┃
+┡━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ runtime  │ 2     │ 0          │ 1           │ 1            │
+│ run cost │ 2     │ 0          │ 1           │ 1            │
+└──────────┴───────┴────────────┴─────────────┴──────────────┘
+you › /exit

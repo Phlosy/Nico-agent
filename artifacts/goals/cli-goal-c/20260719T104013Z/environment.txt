@@ -1,0 +1,14 @@
+accepted_at_utc=2026-07-19T10:40:13Z
+repository=/home/node7/xpk/Nico-agent
+branch=feat/agent-platform-goal-f
+base_commit=f66b28e42631cb47cc4fb76bd3f9d0dea727cdf8
+os=Linux 6.8.0-134-generic x86_64 GNU/Linux
+python=3.12.7
+nico=0.2.0
+node=20.19.5
+npm=10.8.2
+docker=29.3.0
+docker_compose=5.1.0
+alembic_head=20260719_0017
+runtime_e2e=mock 1.0
+external_credentials=none

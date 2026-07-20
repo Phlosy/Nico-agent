@@ -1,0 +1,9 @@
+scripts/verify-cli-goal-a.sh
+scripts/test.sh
+python3 scripts/check-docs.py
+npx --yes markdownlint-cli2@0.22.1 "*.md" "backend/*.md" "docs/*.md" ".github/*.md"
+docker compose config --quiet
+git diff --check
+curl -fsS http://localhost:18000/api/v1/health/ready
+curl -fsS http://localhost:18000/openapi.json
+rg repository/API/model capability markers

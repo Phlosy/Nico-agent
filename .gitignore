@@ -1,0 +1,25 @@
+.env
+.nico/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Generated documentation and local editor output
+docs/_build/
+docs/site/
+docs/.cache/
+docs/**/*.tmp
+docs/**/*.bak
+docs/**/*~
+
+*.log
+!artifacts/goals/**/*.log
+.DS_Store

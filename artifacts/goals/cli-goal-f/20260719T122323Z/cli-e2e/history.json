@@ -1,0 +1,66 @@
+[
+  {
+    "id": "dc211b69-4999-4370-a62f-c60846f50380",
+    "conversation_id": "378f77db-7b8a-4e0e-ba7a-0bcdf5941904",
+    "sequence": 1,
+    "user_input": "建立附件测试会话",
+    "task_id": "4def5295-1b81-4bd2-80f8-8eecb15a7f28",
+    "run_id": "ca336945-d7da-4631-ba71-aa1fec03295d",
+    "status": "completed",
+    "run_status": "completed",
+    "run_revision": 6,
+    "assistant_output": {
+      "message": "Nico completed a recoverable, auditable demo Run.",
+      "runtime": "mock",
+      "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+    },
+    "artifact_refs": [],
+    "usage": {
+      "steps": 2,
+      "tool_calls": 0,
+      "input_units": 1,
+      "output_units": 1
+    },
+    "error": null,
+    "revision": 3,
+    "created_at": "2026-07-19T12:26:49.686415Z",
+    "updated_at": "2026-07-19T12:26:50.167794Z"
+  },
+  {
+    "id": "36c23f2a-9be8-417d-9465-b083aca70522",
+    "conversation_id": "378f77db-7b8a-4e0e-ba7a-0bcdf5941904",
+    "sequence": 2,
+    "user_input": "请读取附件引用并继续",
+    "task_id": "21554505-a0b4-4537-989f-2402966b9eaa",
+    "run_id": "2a3646fc-9321-4470-bcdd-04dc0a794e72",
+    "status": "completed",
+    "run_status": "completed",
+    "run_revision": 6,
+    "assistant_output": {
+      "message": "Nico completed a recoverable, auditable demo Run.",
+      "runtime": "mock",
+      "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+    },
+    "artifact_refs": [
+      {
+        "name": "notes.txt",
+        "sha256": "eedb5854a0474f27f5fb33166227b83a335edc0534ae64b87db0d4cb07c28562",
+        "summary": "blue-gold-white attachment bytes\n",
+        "size_bytes": 33,
+        "artifact_id": "aa30a359-618b-4cd7-a99e-28dab36bcbfb",
+        "content_type": "text/plain",
+        "owner_run_id": "2a3646fc-9321-4470-bcdd-04dc0a794e72"
+      }
+    ],
+    "usage": {
+      "steps": 2,
+      "tool_calls": 0,
+      "input_units": 1,
+      "output_units": 1
+    },
+    "error": null,
+    "revision": 3,
+    "created_at": "2026-07-19T12:26:51.573559Z",
+    "updated_at": "2026-07-19T12:26:52.363876Z"
+  }
+]

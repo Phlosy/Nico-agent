@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "assetId": "nico-logo",
+  "assetName": "Nico blue-golden-white pixel kitten avatar",
+  "assetKind": "front-facing kitten head avatar",
+  "status": "generated",
+  "generationModel": "gpt-image-2",
+  "generationBatch": "nico-brand-20260717",
+  "promptFile": "assets/branding/image2/prompts/nico-logo.txt",
+  "rawFile": "assets/branding/image2/raw/nico-logo.png",
+  "keyColor": "#ff00ff",
+  "matte": {
+    "transparentDistance": 75,
+    "opaqueDistance": 165
+  },
+  "canvas": {
+    "width": 512,
+    "height": 512,
+    "padding": 40,
+    "anchor": "bottom-center"
+  },
+  "grid": {
+    "columns": 1,
+    "rows": 1,
+    "directions": [
+      "front"
+    ],
+    "states": [
+      "base"
+    ]
+  },
+  "targetDirections": [
+    "front"
+  ],
+  "targetStates": [
+    "base"
+  ],
+  "outputDir": "assets/branding/image2/normalized",
+  "versionTag": "v1",
+  "license": "Project-owned OpenAI-generated brand asset; photo references used only for coat and facial anatomy",
+  "paletteFile": "assets/branding/nico-palette.json",
+  "registeredAt": "2026-07-17T17:15:10.779707+00:00",
+  "rawSha256": "9f07aae21e33fa26191e5ba1566c684b117f919bcda0860fb3df0a0aaa75abc7"
+}

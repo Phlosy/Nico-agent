@@ -1,0 +1,25 @@
+# Final acceptance gate (output in verify.log)
+NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-b/20260719T101257Z scripts/verify-cli-goal-b.sh
+
+# Goal A regression after Goal B implementation
+scripts/verify-cli-goal-a.sh
+
+# Environment and database state
+.venv/bin/python --version
+.venv/bin/nico --version
+docker --version
+docker compose version
+docker compose exec -T api alembic current
+docker compose ps
+
+# Focused commands also executed by the final gate
+.venv/bin/pytest backend/tests/unit/test_cli_*.py
+scripts/e2e-cli-goal-b.sh
+
+# Integrity gates
+python3 scripts/check-docs.py
+npx --yes markdownlint-cli2@0.22.1 "*.md" "backend/*.md" "docs/*.md" ".github/*.md"
+bash -n scripts/*.sh
+git diff --check
+docker compose config --quiet
+

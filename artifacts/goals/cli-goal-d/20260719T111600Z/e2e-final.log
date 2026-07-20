@@ -1,0 +1,400 @@
+Obtaining file:///home/node7/xpk/Nico-agent/backend
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: alembic==1.18.5 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.18.5)
+Requirement already satisfied: asyncpg==0.31.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.31.0)
+Requirement already satisfied: fastapi==0.139.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.139.2)
+Requirement already satisfied: httpx==0.28.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.28.1)
+Requirement already satisfied: jsonschema==4.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (4.26.0)
+Requirement already satisfied: minio==7.2.20 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (7.2.20)
+Requirement already satisfied: pgvector==0.5.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.5.0)
+Requirement already satisfied: platformdirs==4.3.8 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (4.3.8)
+Requirement already satisfied: prompt-toolkit==3.0.51 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (3.0.51)
+Requirement already satisfied: pydantic-settings==2.14.2 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (2.14.2)
+Requirement already satisfied: redis==8.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (8.0.1)
+Requirement already satisfied: rich==14.1.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (14.1.0)
+Requirement already satisfied: sqlalchemy==2.0.51 in ./.venv/lib/python3.12/site-packages (from sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (2.0.51)
+Requirement already satisfied: typer==0.16.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.16.0)
+Requirement already satisfied: uvicorn==0.51.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.51.0)
+Requirement already satisfied: mcp==1.26.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.26.0)
+Requirement already satisfied: pytest==9.1.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (9.1.1)
+Requirement already satisfied: pytest-asyncio==1.4.0 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.4.0)
+Requirement already satisfied: ruff==0.15.22 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (0.15.22)
+Requirement already satisfied: starlette==1.0.1 in ./.venv/lib/python3.12/site-packages (from nico-agent-platform==0.2.0) (1.0.1)
+Requirement already satisfied: Mako in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (1.3.12)
+Requirement already satisfied: typing-extensions>=4.12 in ./.venv/lib/python3.12/site-packages (from alembic==1.18.5->nico-agent-platform==0.2.0) (4.16.0)
+Requirement already satisfied: pydantic>=2.9.0 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (2.13.4)
+Requirement already satisfied: typing-inspection>=0.4.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.4.2)
+Requirement already satisfied: annotated-doc>=0.0.2 in ./.venv/lib/python3.12/site-packages (from fastapi==0.139.2->nico-agent-platform==0.2.0) (0.0.4)
+Requirement already satisfied: anyio in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (4.14.2)
+Requirement already satisfied: certifi in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (2026.6.17)
+Requirement already satisfied: httpcore==1.* in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (1.0.9)
+Requirement already satisfied: idna in ./.venv/lib/python3.12/site-packages (from httpx==0.28.1->nico-agent-platform==0.2.0) (3.18)
+Requirement already satisfied: attrs>=22.2.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (26.1.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (0.37.0)
+Requirement already satisfied: rpds-py>=0.25.0 in ./.venv/lib/python3.12/site-packages (from jsonschema==4.26.0->nico-agent-platform==0.2.0) (2026.6.3)
+Requirement already satisfied: httpx-sse>=0.4 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.4.3)
+Requirement already satisfied: pyjwt>=2.10.1 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.13.0)
+Requirement already satisfied: python-multipart>=0.0.9 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (0.0.32)
+Requirement already satisfied: sse-starlette>=1.6.1 in ./.venv/lib/python3.12/site-packages (from mcp==1.26.0->nico-agent-platform==0.2.0) (3.4.5)
+Requirement already satisfied: argon2-cffi in ./.venv/lib/python3.12/site-packages (from minio==7.2.20->nico-agent-platform==0.2.0) (25.1.0)
+Requirement already satisfied: pycryptodome in ./.venv/lib/python3.12/site-packages (from minio==7.2.20->nico-agent-platform==0.2.0) (3.23.0)
+Requirement already satisfied: urllib3 in ./.venv/lib/python3.12/site-packages (from minio==7.2.20->nico-agent-platform==0.2.0) (2.7.0)
+Requirement already satisfied: wcwidth in ./.venv/lib/python3.12/site-packages (from prompt-toolkit==3.0.51->nico-agent-platform==0.2.0) (0.8.2)
+Requirement already satisfied: python-dotenv>=0.21.0 in ./.venv/lib/python3.12/site-packages (from pydantic-settings==2.14.2->nico-agent-platform==0.2.0) (1.2.2)
+Requirement already satisfied: iniconfig>=1.0.1 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.3.0)
+Requirement already satisfied: packaging>=22 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (26.2)
+Requirement already satisfied: pluggy<2,>=1.5 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (1.6.0)
+Requirement already satisfied: pygments>=2.7.2 in ./.venv/lib/python3.12/site-packages (from pytest==9.1.1->nico-agent-platform==0.2.0) (2.20.0)
+Requirement already satisfied: markdown-it-py>=2.2.0 in ./.venv/lib/python3.12/site-packages (from rich==14.1.0->nico-agent-platform==0.2.0) (4.2.0)
+Requirement already satisfied: greenlet>=1 in ./.venv/lib/python3.12/site-packages (from sqlalchemy==2.0.51->sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0) (3.5.3)
+Requirement already satisfied: click>=8.0.0 in ./.venv/lib/python3.12/site-packages (from typer==0.16.0->nico-agent-platform==0.2.0) (8.4.2)
+Requirement already satisfied: shellingham>=1.3.0 in ./.venv/lib/python3.12/site-packages (from typer==0.16.0->nico-agent-platform==0.2.0) (1.5.4)
+Requirement already satisfied: h11>=0.8 in ./.venv/lib/python3.12/site-packages (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.16.0)
+Requirement already satisfied: httptools>=0.8.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.8.0)
+Requirement already satisfied: pyyaml>=5.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (6.0.3)
+Requirement already satisfied: uvloop>=0.15.1 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (0.22.1)
+Requirement already satisfied: watchfiles>=0.20 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (1.2.0)
+Requirement already satisfied: websockets>=13.0 in ./.venv/lib/python3.12/site-packages (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0) (16.1)
+Requirement already satisfied: annotated-types>=0.6.0 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (0.7.0)
+Requirement already satisfied: pydantic-core==2.46.4 in ./.venv/lib/python3.12/site-packages (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0) (2.46.4)
+Requirement already satisfied: mdurl~=0.1 in ./.venv/lib/python3.12/site-packages (from markdown-it-py>=2.2.0->rich==14.1.0->nico-agent-platform==0.2.0) (0.1.2)
+Requirement already satisfied: cryptography>=3.4.0 in ./.venv/lib/python3.12/site-packages (from pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (49.0.0)
+Requirement already satisfied: cffi>=2.0.0 in ./.venv/lib/python3.12/site-packages (from cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (2.1.0)
+Requirement already satisfied: pycparser in ./.venv/lib/python3.12/site-packages (from cffi>=2.0.0->cryptography>=3.4.0->pyjwt[crypto]>=2.10.1->mcp==1.26.0->nico-agent-platform==0.2.0) (3.0)
+Requirement already satisfied: argon2-cffi-bindings in ./.venv/lib/python3.12/site-packages (from argon2-cffi->minio==7.2.20->nico-agent-platform==0.2.0) (25.1.0)
+Requirement already satisfied: MarkupSafe>=0.9.2 in ./.venv/lib/python3.12/site-packages (from Mako->alembic==1.18.5->nico-agent-platform==0.2.0) (3.0.3)
+Building wheels for collected packages: nico-agent-platform
+  Building editable for nico-agent-platform (pyproject.toml): started
+  Building editable for nico-agent-platform (pyproject.toml): finished with status 'done'
+  Created wheel for nico-agent-platform: filename=nico_agent_platform-0.2.0-0.editable-py3-none-any.whl size=2328 sha256=90d55200cdc5eefd70c5384bc5fc646e76458413eac61618ea3e9baf2a4e7594
+  Stored in directory: /tmp/pip-ephem-wheel-cache-9k8ds46f/wheels/17/e9/6f/71b9b670152a91c6248eed18bc3906ee8f4c6db86470fc7d5e
+Successfully built nico-agent-platform
+Installing collected packages: nico-agent-platform
+  Attempting uninstall: nico-agent-platform
+    Found existing installation: nico-agent-platform 0.2.0
+    Uninstalling nico-agent-platform-0.2.0:
+      Successfully uninstalled nico-agent-platform-0.2.0
+Successfully installed nico-agent-platform-0.2.0
+[nico] building the Goal D API/Worker baseline
+ Image nico-agent-platform-worker-state-init Building 
+ Image nico-agent-platform-worker Building 
+ Image nico-agent-platform-sandbox-runner Building 
+ Image nico-agent-platform-api Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.98kB done
+#1 DONE 0.0s
+
+#2 [sandbox-runner internal] load build definition from Dockerfile
+#2 transferring dockerfile: 580B done
+#2 DONE 0.0s
+
+#3 [sandbox-runner internal] load metadata for docker.io/library/python:3.12-slim
+#3 DONE 0.7s
+
+#4 [api internal] load .dockerignore
+#4 transferring context: 102B done
+#4 DONE 0.0s
+
+#5 [sandbox-runner 1/9] FROM docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+#5 resolve docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de done
+#5 DONE 0.0s
+
+#6 [sandbox-runner internal] load build context
+#6 transferring context: 44.94kB 0.0s done
+#6 DONE 0.0s
+
+#7 [sandbox-runner 2/9] WORKDIR /app
+#7 CACHED
+
+#8 [sandbox-runner 3/9] RUN groupadd --system nico && useradd --system --gid nico --home-dir /app nico
+#8 CACHED
+
+#9 [api 4/9] COPY pyproject.toml README.md ./
+#9 CACHED
+
+#10 [sandbox-runner 5/9] COPY src ./src
+#10 DONE 0.1s
+
+#11 [worker 6/9] COPY alembic.ini ./alembic.ini
+#11 DONE 0.0s
+
+#12 [worker 7/9] COPY logging.json ./logging.json
+#12 DONE 0.0s
+
+#13 [api 8/9] COPY migrations ./migrations
+#13 DONE 0.0s
+
+#14 [worker 9/9] RUN python -m pip install --no-cache-dir .
+#14 1.961 Processing /app
+#14 1.964   Installing build dependencies: started
+#14 7.017   Installing build dependencies: finished with status 'done'
+#14 7.019   Getting requirements to build wheel: started
+#14 7.721   Getting requirements to build wheel: finished with status 'done'
+#14 7.724   Preparing metadata (pyproject.toml): started
+#14 8.482   Preparing metadata (pyproject.toml): finished with status 'done'
+#14 9.198 Collecting alembic==1.18.5 (from nico-agent-platform==0.2.0)
+#14 9.649   Downloading alembic-1.18.5-py3-none-any.whl.metadata (7.2 kB)
+#14 10.09 Collecting asyncpg==0.31.0 (from nico-agent-platform==0.2.0)
+#14 10.24   Downloading asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl.metadata (4.4 kB)
+#14 10.56 Collecting fastapi==0.139.2 (from nico-agent-platform==0.2.0)
+#14 10.71   Downloading fastapi-0.139.2-py3-none-any.whl.metadata (26 kB)
+#14 11.02 Collecting httpx==0.28.1 (from nico-agent-platform==0.2.0)
+#14 11.17   Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+#14 11.41 Collecting jsonschema==4.26.0 (from nico-agent-platform==0.2.0)
+#14 11.56   Downloading jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
+#14 11.82 Collecting minio==7.2.20 (from nico-agent-platform==0.2.0)
+#14 11.97   Downloading minio-7.2.20-py3-none-any.whl.metadata (6.5 kB)
+#14 12.15 Collecting pgvector==0.5.0 (from nico-agent-platform==0.2.0)
+#14 12.30   Downloading pgvector-0.5.0-py3-none-any.whl.metadata (19 kB)
+#14 12.56 Collecting platformdirs==4.3.8 (from nico-agent-platform==0.2.0)
+#14 12.71   Downloading platformdirs-4.3.8-py3-none-any.whl.metadata (12 kB)
+#14 12.99 Collecting prompt-toolkit==3.0.51 (from nico-agent-platform==0.2.0)
+#14 13.14   Downloading prompt_toolkit-3.0.51-py3-none-any.whl.metadata (6.4 kB)
+#14 13.34 Collecting pydantic-settings==2.14.2 (from nico-agent-platform==0.2.0)
+#14 13.49   Downloading pydantic_settings-2.14.2-py3-none-any.whl.metadata (3.4 kB)
+#14 13.75 Collecting redis==8.0.1 (from nico-agent-platform==0.2.0)
+#14 13.90   Downloading redis-8.0.1-py3-none-any.whl.metadata (13 kB)
+#14 14.21 Collecting rich==14.1.0 (from nico-agent-platform==0.2.0)
+#14 14.36   Downloading rich-14.1.0-py3-none-any.whl.metadata (18 kB)
+#14 15.24 Collecting sqlalchemy==2.0.51 (from sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0)
+#14 15.39   Downloading sqlalchemy-2.0.51-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (9.5 kB)
+#14 15.62 Collecting typer==0.16.0 (from nico-agent-platform==0.2.0)
+#14 15.77   Downloading typer-0.16.0-py3-none-any.whl.metadata (15 kB)
+#14 16.02 Collecting uvicorn==0.51.0 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 16.18   Downloading uvicorn-0.51.0-py3-none-any.whl.metadata (6.6 kB)
+#14 16.42 Collecting Mako (from alembic==1.18.5->nico-agent-platform==0.2.0)
+#14 16.57   Downloading mako-1.3.12-py3-none-any.whl.metadata (2.9 kB)
+#14 16.75 Collecting typing-extensions>=4.12 (from alembic==1.18.5->nico-agent-platform==0.2.0)
+#14 16.90   Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+#14 17.13 Collecting starlette>=0.46.0 (from fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 17.28   Downloading starlette-1.3.1-py3-none-any.whl.metadata (6.4 kB)
+#14 17.59 Collecting pydantic>=2.9.0 (from fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 17.74   Downloading pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+#14 18.21 Collecting typing-inspection>=0.4.2 (from fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 18.36   Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+#14 18.52 Collecting annotated-doc>=0.0.2 (from fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 18.67   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
+#14 18.87 Collecting anyio (from httpx==0.28.1->nico-agent-platform==0.2.0)
+#14 19.02   Downloading anyio-4.14.2-py3-none-any.whl.metadata (4.6 kB)
+#14 19.21 Collecting certifi (from httpx==0.28.1->nico-agent-platform==0.2.0)
+#14 19.36   Downloading certifi-2026.6.17-py3-none-any.whl.metadata (2.5 kB)
+#14 19.55 Collecting httpcore==1.* (from httpx==0.28.1->nico-agent-platform==0.2.0)
+#14 19.70   Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+#14 19.88 Collecting idna (from httpx==0.28.1->nico-agent-platform==0.2.0)
+#14 20.03   Downloading idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+#14 20.21 Collecting attrs>=22.2.0 (from jsonschema==4.26.0->nico-agent-platform==0.2.0)
+#14 20.36   Downloading attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+#14 20.54 Collecting jsonschema-specifications>=2023.03.6 (from jsonschema==4.26.0->nico-agent-platform==0.2.0)
+#14 20.69   Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
+#14 20.89 Collecting referencing>=0.28.4 (from jsonschema==4.26.0->nico-agent-platform==0.2.0)
+#14 21.04   Downloading referencing-0.37.0-py3-none-any.whl.metadata (2.8 kB)
+#14 21.59 Collecting rpds-py>=0.25.0 (from jsonschema==4.26.0->nico-agent-platform==0.2.0)
+#14 21.74   Downloading rpds_py-2026.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.1 kB)
+#14 21.92 Collecting argon2-cffi (from minio==7.2.20->nico-agent-platform==0.2.0)
+#14 22.07   Downloading argon2_cffi-25.1.0-py3-none-any.whl.metadata (4.1 kB)
+#14 22.34 Collecting pycryptodome (from minio==7.2.20->nico-agent-platform==0.2.0)
+#14 22.49   Downloading pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (3.4 kB)
+#14 22.67 Collecting urllib3 (from minio==7.2.20->nico-agent-platform==0.2.0)
+#14 22.82   Downloading urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+#14 23.00 Collecting wcwidth (from prompt-toolkit==3.0.51->nico-agent-platform==0.2.0)
+#14 23.15   Downloading wcwidth-0.8.2-py3-none-any.whl.metadata (43 kB)
+#14 23.41 Collecting python-dotenv>=0.21.0 (from pydantic-settings==2.14.2->nico-agent-platform==0.2.0)
+#14 23.56   Downloading python_dotenv-1.2.2-py3-none-any.whl.metadata (27 kB)
+#14 23.77 Collecting markdown-it-py>=2.2.0 (from rich==14.1.0->nico-agent-platform==0.2.0)
+#14 23.92   Downloading markdown_it_py-4.2.0-py3-none-any.whl.metadata (7.4 kB)
+#14 24.13 Collecting pygments<3.0.0,>=2.13.0 (from rich==14.1.0->nico-agent-platform==0.2.0)
+#14 24.28   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+#14 24.63 Collecting greenlet>=1 (from sqlalchemy==2.0.51->sqlalchemy[asyncio]==2.0.51->nico-agent-platform==0.2.0)
+#14 24.78   Downloading greenlet-3.5.3-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (3.8 kB)
+#14 24.96 Collecting click>=8.0.0 (from typer==0.16.0->nico-agent-platform==0.2.0)
+#14 25.11   Downloading click-8.4.2-py3-none-any.whl.metadata (2.6 kB)
+#14 25.28 Collecting shellingham>=1.3.0 (from typer==0.16.0->nico-agent-platform==0.2.0)
+#14 25.43   Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
+#14 25.64 Collecting h11>=0.8 (from uvicorn==0.51.0->uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 25.79   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+#14 26.01 Collecting httptools>=0.8.0 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 26.16   Downloading httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (3.5 kB)
+#14 26.38 Collecting pyyaml>=5.1 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 26.53   Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+#14 26.75 Collecting uvloop>=0.15.1 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 26.90   Downloading uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (4.9 kB)
+#14 27.18 Collecting watchfiles>=0.20 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 27.32   Downloading watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.9 kB)
+#14 27.66 Collecting websockets>=13.0 (from uvicorn[standard]==0.51.0->nico-agent-platform==0.2.0)
+#14 27.81   Downloading websockets-16.1.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
+#14 27.99 Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich==14.1.0->nico-agent-platform==0.2.0)
+#14 28.14   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+#14 28.30 Collecting annotated-types>=0.6.0 (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 28.45   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+#14 29.52 Collecting pydantic-core==2.46.4 (from pydantic>=2.9.0->fastapi==0.139.2->nico-agent-platform==0.2.0)
+#14 29.67   Downloading pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+#14 29.90 Collecting argon2-cffi-bindings (from argon2-cffi->minio==7.2.20->nico-agent-platform==0.2.0)
+#14 30.05   Downloading argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.metadata (7.4 kB)
+#14 30.29 Collecting MarkupSafe>=0.9.2 (from Mako->alembic==1.18.5->nico-agent-platform==0.2.0)
+#14 30.44   Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
+#14 30.73 Collecting cffi>=1.0.1 (from argon2-cffi-bindings->argon2-cffi->minio==7.2.20->nico-agent-platform==0.2.0)
+#14 30.88   Downloading cffi-2.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.5 kB)
+#14 31.04 Collecting pycparser (from cffi>=1.0.1->argon2-cffi-bindings->argon2-cffi->minio==7.2.20->nico-agent-platform==0.2.0)
+#14 31.19   Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+#14 31.35 Downloading alembic-1.18.5-py3-none-any.whl (264 kB)
+#14 31.73 Downloading asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl (3.5 MB)
+#14 32.28    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.5/3.5 MB 7.0 MB/s eta 0:00:00
+#14 32.43 Downloading fastapi-0.139.2-py3-none-any.whl (130 kB)
+#14 32.59 Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#14 32.75 Downloading jsonschema-4.26.0-py3-none-any.whl (90 kB)
+#14 32.90 Downloading minio-7.2.20-py3-none-any.whl (93 kB)
+#14 33.05 Downloading pgvector-0.5.0-py3-none-any.whl (30 kB)
+#14 33.20 Downloading platformdirs-4.3.8-py3-none-any.whl (18 kB)
+#14 33.36 Downloading prompt_toolkit-3.0.51-py3-none-any.whl (387 kB)
+#14 33.52 Downloading pydantic_settings-2.14.2-py3-none-any.whl (61 kB)
+#14 33.67 Downloading redis-8.0.1-py3-none-any.whl (502 kB)
+#14 33.84 Downloading rich-14.1.0-py3-none-any.whl (243 kB)
+#14 34.00 Downloading sqlalchemy-2.0.51-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.4 MB)
+#14 34.16    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 21.0 MB/s eta 0:00:00
+#14 34.31 Downloading typer-0.16.0-py3-none-any.whl (46 kB)
+#14 34.46 Downloading uvicorn-0.51.0-py3-none-any.whl (73 kB)
+#14 34.62 Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#14 34.78 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
+#14 34.93 Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
+#14 35.08 Downloading click-8.4.2-py3-none-any.whl (119 kB)
+#14 35.24 Downloading greenlet-3.5.3-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (614 kB)
+#14 35.26    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 614.2/614.2 kB 47.7 MB/s eta 0:00:00
+#14 35.41 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#14 35.56 Downloading httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (523 kB)
+#14 35.73 Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+#14 35.88 Downloading markdown_it_py-4.2.0-py3-none-any.whl (91 kB)
+#14 36.04 Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+#14 36.20 Downloading pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#14 36.25    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 52.0 MB/s eta 0:00:00
+#14 36.40 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
+#14 36.44    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 53.2 MB/s eta 0:00:00
+#14 36.59 Downloading python_dotenv-1.2.2-py3-none-any.whl (22 kB)
+#14 36.74 Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+#14 36.77    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 807.9/807.9 kB 54.4 MB/s eta 0:00:00
+#14 36.92 Downloading referencing-0.37.0-py3-none-any.whl (26 kB)
+#14 37.07 Downloading rpds_py-2026.6.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (366 kB)
+#14 37.23 Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
+#14 37.38 Downloading starlette-1.3.1-py3-none-any.whl (73 kB)
+#14 37.54 Downloading anyio-4.14.2-py3-none-any.whl (125 kB)
+#14 37.69 Downloading idna-3.18-py3-none-any.whl (65 kB)
+#14 37.85 Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#14 38.00 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+#14 38.15 Downloading uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+#14 38.33    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 25.0 MB/s eta 0:00:00
+#14 38.48 Downloading watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+#14 38.65 Downloading websockets-16.1.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (187 kB)
+#14 38.80 Downloading argon2_cffi-25.1.0-py3-none-any.whl (14 kB)
+#14 38.96 Downloading certifi-2026.6.17-py3-none-any.whl (133 kB)
+#14 39.11 Downloading mako-1.3.12-py3-none-any.whl (78 kB)
+#14 39.26 Downloading pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.3 MB)
+#14 39.31    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 57.5 MB/s eta 0:00:00
+#14 39.47 Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+#14 39.62 Downloading wcwidth-0.8.2-py3-none-any.whl (323 kB)
+#14 39.79 Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+#14 39.94 Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+#14 40.09 Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+#14 40.24 Downloading argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (87 kB)
+#14 40.39 Downloading cffi-2.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+#14 40.55 Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+#14 40.67 Building wheels for collected packages: nico-agent-platform
+#14 40.67   Building wheel for nico-agent-platform (pyproject.toml): started
+#14 41.55   Building wheel for nico-agent-platform (pyproject.toml): finished with status 'done'
+#14 41.56   Created wheel for nico-agent-platform: filename=nico_agent_platform-0.2.0-py3-none-any.whl size=265609 sha256=2311bbd632f5dd970105f0429506cdbc7279ae0d2e429990aff220ccf247ad2c
+#14 41.56   Stored in directory: /tmp/pip-ephem-wheel-cache-jxthhlm5/wheels/54/1b/b7/aa63e25c8f14f4f2ae7b04e6097bdecb770e455c5c1ee0a600
+#14 41.56 Successfully built nico-agent-platform
+#14 41.70 Installing collected packages: websockets, wcwidth, uvloop, urllib3, typing-extensions, shellingham, rpds-py, redis, pyyaml, python-dotenv, pygments, pycryptodome, pycparser, platformdirs, pgvector, mdurl, MarkupSafe, idna, httptools, h11, greenlet, click, certifi, attrs, asyncpg, annotated-types, annotated-doc, uvicorn, typing-inspection, sqlalchemy, referencing, pydantic-core, prompt-toolkit, markdown-it-py, Mako, httpcore, cffi, anyio, watchfiles, starlette, rich, pydantic, jsonschema-specifications, httpx, argon2-cffi-bindings, alembic, typer, pydantic-settings, jsonschema, fastapi, argon2-cffi, minio, nico-agent-platform
+#14 48.27 Successfully installed Mako-1.3.12 MarkupSafe-3.0.3 alembic-1.18.5 annotated-doc-0.0.4 annotated-types-0.7.0 anyio-4.14.2 argon2-cffi-25.1.0 argon2-cffi-bindings-25.1.0 asyncpg-0.31.0 attrs-26.1.0 certifi-2026.6.17 cffi-2.1.0 click-8.4.2 fastapi-0.139.2 greenlet-3.5.3 h11-0.16.0 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 idna-3.18 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 markdown-it-py-4.2.0 mdurl-0.1.2 minio-7.2.20 nico-agent-platform-0.2.0 pgvector-0.5.0 platformdirs-4.3.8 prompt-toolkit-3.0.51 pycparser-3.0 pycryptodome-3.23.0 pydantic-2.13.4 pydantic-core-2.46.4 pydantic-settings-2.14.2 pygments-2.20.0 python-dotenv-1.2.2 pyyaml-6.0.3 redis-8.0.1 referencing-0.37.0 rich-14.1.0 rpds-py-2026.6.3 shellingham-1.5.4 sqlalchemy-2.0.51 starlette-1.3.1 typer-0.16.0 typing-extensions-4.16.0 typing-inspection-0.4.2 urllib3-2.7.0 uvicorn-0.51.0 uvloop-0.22.1 watchfiles-1.2.0 wcwidth-0.8.2 websockets-16.1.1
+#14 48.27 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#14 DONE 48.8s
+
+#15 [worker] exporting to image
+#15 exporting layers
+#15 exporting layers 1.6s done
+#15 writing image sha256:0e3a96ba90c69a0545907df59ec980c489f99ad377c99f2243ddedc4a2fb9a53 done
+#15 naming to docker.io/library/nico-agent-platform-worker done
+#15 DONE 1.6s
+
+#16 [sandbox-runner] exporting to image
+#16 exporting layers 1.6s done
+#16 writing image sha256:a665d7dc39255649401f54c5eb11b53ca76e025f96c6ad8b05b1939c12a2c692 done
+#16 naming to docker.io/library/nico-agent-platform-sandbox-runner done
+#16 DONE 1.6s
+
+#17 [api] exporting to image
+#17 exporting layers 1.6s done
+#17 writing image sha256:a63e56ea5d12adce5d62ce967b5531f8aecb78262403e3261bb14eaccabdf05f done
+#17 naming to docker.io/library/nico-agent-platform-api done
+#17 DONE 1.6s
+
+#18 [worker-state-init] exporting to image
+#18 exporting layers 1.6s done
+#18 writing image sha256:44df26fab0f3b9af18a5898e22e1584a67ccd8f085276211997a5f90493d4314 done
+#18 naming to docker.io/library/nico-agent-platform-worker-state-init done
+#18 DONE 1.6s
+
+#19 [sandbox-runner] resolving provenance for metadata file
+#19 DONE 0.0s
+
+#20 [api] resolving provenance for metadata file
+#20 DONE 0.0s
+
+#21 [worker-state-init] resolving provenance for metadata file
+#21 DONE 0.0s
+
+#22 [worker] resolving provenance for metadata file
+#22 DONE 0.0s
+ Image nico-agent-platform-sandbox-runner Built 
+ Image nico-agent-platform-worker-state-init Built 
+ Image nico-agent-platform-worker Built 
+ Image nico-agent-platform-api Built 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-worker-state-init-1 Recreate 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-sandbox-runner-1 Recreate 
+ Container nico-agent-platform-api-1 Recreate 
+ Container nico-agent-platform-worker-state-init-1 Recreated 
+ Container nico-agent-platform-sandbox-runner-1 Recreated 
+ Container nico-agent-platform-api-1 Recreated 
+ Container nico-agent-platform-worker-1 Recreate 
+ Container nico-agent-platform-worker-1 Recreated 
+ Container nico-agent-platform-worker-state-init-1 Starting 
+ Container nico-agent-platform-sandbox-runner-1 Starting 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Started 
+ Container nico-agent-platform-sandbox-runner-1 Started 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-init-1 Waiting 
+ Container nico-agent-platform-postgres-1 Waiting 
+ Container nico-agent-platform-redis-1 Waiting 
+ Container nico-agent-platform-minio-init-1 Exited 
+ Container nico-agent-platform-postgres-1 Healthy 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-redis-1 Healthy 
+ Container nico-agent-platform-api-1 Starting 
+ Container nico-agent-platform-api-1 Started 
+ Container nico-agent-platform-worker-state-init-1 Waiting 
+ Container nico-agent-platform-api-1 Waiting 
+ Container nico-agent-platform-sandbox-runner-1 Waiting 
+ Container nico-agent-platform-worker-state-init-1 Exited 
+ Container nico-agent-platform-sandbox-runner-1 Healthy 
+ Container nico-agent-platform-api-1 Healthy 
+ Container nico-agent-platform-worker-1 Starting 
+ Container nico-agent-platform-worker-1 Started 
+[nico] api container is healthy
+[nico] Nico API is ready
+[nico] proving attached exec and command-local JSON
+[nico] reattaching to the detached Run and resuming from an Event cursor
+[nico] capturing non-TTY, colour TTY, and interactive slash inspection views
+PASS CLI Goal D exec/detach/watch/slash/Rich/coin-cat run_id=23fa4003-a1ae-4918-9106-714dbc94b2c3

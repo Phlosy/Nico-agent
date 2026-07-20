@@ -1,0 +1,4 @@
+bash -n scripts/*.sh
+docker compose config --quiet
+scripts/verify-goal-e.sh
+scripts/e2e-goal-f.sh

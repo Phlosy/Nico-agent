@@ -1,0 +1,6 @@
+Date: 2026-07-19 UTC
+Repository: Nico-agent
+Stage: CLI Goal E
+Alembic head: 20260719_0018
+Runtime topology: Docker Compose API + Worker + PostgreSQL + Redis + private MinIO + Sandbox Runner
+Acceptance: hermetic Mock Runtime for CLI E2E; Native fake model for persisted context integration

@@ -1,0 +1,28 @@
+╭───────────────────────────────── Nico Agent ─────────────────────────────────╮
+│     .-====-.    Agent   Nico Demo Agent                                      │
+│    / /\_/\ \    Version 1                                                    │
+│   | ( o.o ) |   Runtime mock                                                 │
+│   |  > ^ <  |   Project Nico Demo                                            │
+│    '-====-'     Tools   policy default                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+· TaskCreated  #1270  running
+· RunCreated  #1271
+· ConversationTurnQueued  #1272
+· RuntimeProviderResolved  #1273
+▸ RunPlanningStarted  #1274
+· RuntimeSessionBound  #1275
+· RuntimeSessionCreated  #1276
+· RuntimeRunStarted  #1277
+▸ RuntimeStepStarted  #1278
+validate task complete
+✓ RuntimeStepCompleted  #1280
+· RuntimeCheckpointSaved  #1281
+▸ RuntimeStepStarted  #1282
+produce result complete
+✓ RuntimeStepCompleted  #1284
+· RuntimeCheckpointSaved  #1285
+✓ RuntimeRunCompleted  #1286
+✓ RunCompleted  #1287  completed
+╭──────────────────────────────────── Nico ────────────────────────────────────╮
+│ Nico completed a recoverable, auditable demo Run.                            │
+╰──────────────────────────────────────────────────────────────────────────────╯

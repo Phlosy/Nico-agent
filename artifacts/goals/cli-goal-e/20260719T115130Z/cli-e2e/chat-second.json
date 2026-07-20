@@ -1,0 +1,294 @@
+{
+  "conversation": {
+    "id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1",
+    "project_id": "6a0a72b1-ecc6-4181-9cc3-986f8548be0f",
+    "agent_id": "1cf14d6b-a67a-4e45-a2fb-e89ffddea444",
+    "agent_version_id": "19c800cc-74a5-4fee-8bb3-5e80970eb182",
+    "title": "CLI Goal C 20260719115036-205424",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": "4f71078b-e07e-418c-9d7d-c9dc0a360265",
+    "created_by": "cli-goal-c",
+    "revision": 2,
+    "created_at": "2026-07-19T11:50:39.949281Z",
+    "updated_at": "2026-07-19T11:50:39.994591Z"
+  },
+  "turn": {
+    "id": "776b99fc-8494-4d5c-b19a-da0586898dec",
+    "conversation_id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1",
+    "sequence": 2,
+    "user_input": "Second durable conversation turn",
+    "task_id": "3633a9f4-e455-475b-b4b9-42e97b4340e5",
+    "run_id": "27c7f385-9da1-4717-972e-9cafd072493e",
+    "status": "completed",
+    "run_status": "completed",
+    "run_revision": 6,
+    "assistant_output": {
+      "message": "Nico completed a recoverable, auditable demo Run.",
+      "runtime": "mock",
+      "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+    },
+    "artifact_refs": [],
+    "usage": {
+      "steps": 2,
+      "tool_calls": 0,
+      "input_units": 1,
+      "output_units": 1
+    },
+    "error": null,
+    "revision": 3,
+    "created_at": "2026-07-19T11:50:41.855474Z",
+    "updated_at": "2026-07-19T11:50:42.484356Z"
+  },
+  "events": [
+    {
+      "id": "a2f28899-5bdb-4cba-9cce-a5b3771e79eb",
+      "sequence": 1182,
+      "type": "TaskCreated",
+      "payload": {
+        "status": "running",
+        "conversation_turn_id": "776b99fc-8494-4d5c-b19a-da0586898dec"
+      },
+      "created_at": "2026-07-19T11:50:41.830093+00:00"
+    },
+    {
+      "id": "867c7aba-ff4d-407b-bcb2-67d3f4fea536",
+      "sequence": 1183,
+      "type": "RunCreated",
+      "payload": {
+        "attempt": 1,
+        "task_id": "3633a9f4-e455-475b-b4b9-42e97b4340e5"
+      },
+      "created_at": "2026-07-19T11:50:41.830093+00:00"
+    },
+    {
+      "id": "e275f6cc-214c-423a-bda4-e05f76541189",
+      "sequence": 1184,
+      "type": "ConversationTurnQueued",
+      "payload": {
+        "run_id": "27c7f385-9da1-4717-972e-9cafd072493e",
+        "task_id": "3633a9f4-e455-475b-b4b9-42e97b4340e5",
+        "sequence": 2,
+        "conversation_id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1"
+      },
+      "created_at": "2026-07-19T11:50:41.830093+00:00"
+    },
+    {
+      "id": "4fdd98db-09e3-4c52-bedb-3b6f175b25fb",
+      "sequence": 1185,
+      "type": "RuntimeProviderResolved",
+      "payload": {
+        "legacy": false,
+        "source": "agent_version",
+        "provider": "mock",
+        "removal_version": null
+      },
+      "created_at": "2026-07-19T11:50:42.324554+00:00"
+    },
+    {
+      "id": "7e38b43f-dd68-4086-a987-581e65eab63f",
+      "sequence": 1186,
+      "type": "RunPlanningStarted",
+      "payload": {
+        "revision": 2,
+        "worker_id": "nico-worker-1"
+      },
+      "created_at": "2026-07-19T11:50:42.324554+00:00"
+    },
+    {
+      "id": "89af3f2f-39c4-43aa-bc39-b4ebf49e8036",
+      "sequence": 1187,
+      "type": "RuntimeSessionBound",
+      "payload": {
+        "provider": "mock",
+        "external_session_id": "mock:27c7f385-9da1-4717-972e-9cafd072493e"
+      },
+      "created_at": "2026-07-19T11:50:42.360368+00:00"
+    },
+    {
+      "id": "feede660-615c-4958-8bc5-fde2651c7cf9",
+      "sequence": 1188,
+      "type": "RuntimeSessionCreated",
+      "payload": {
+        "type": "session.created",
+        "message": null,
+        "payload": {
+          "run_id": "27c7f385-9da1-4717-972e-9cafd072493e"
+        },
+        "occurred_at": "2026-07-19T11:50:42.358970+00:00",
+        "provider_sequence": 1
+      },
+      "created_at": "2026-07-19T11:50:42.371279+00:00"
+    },
+    {
+      "id": "771b1cd2-21c5-4b79-ad1f-2e9e22f4a787",
+      "sequence": 1189,
+      "type": "RuntimeRunStarted",
+      "payload": {
+        "type": "run.started",
+        "message": null,
+        "payload": {},
+        "occurred_at": "2026-07-19T11:50:42.369743+00:00",
+        "provider_sequence": 2
+      },
+      "created_at": "2026-07-19T11:50:42.382278+00:00"
+    },
+    {
+      "id": "a2cc1ab0-bcf5-422c-8edb-920de6173c98",
+      "sequence": 1190,
+      "type": "RuntimeStepStarted",
+      "payload": {
+        "type": "step.started",
+        "message": null,
+        "payload": {
+          "name": "validate task",
+          "index": 1
+        },
+        "occurred_at": "2026-07-19T11:50:42.369794+00:00",
+        "provider_sequence": 3
+      },
+      "created_at": "2026-07-19T11:50:42.392979+00:00"
+    },
+    {
+      "id": "10096d2d-8859-4959-b432-e1f63e6c65ce",
+      "sequence": 1191,
+      "type": "RuntimeOutputDelta",
+      "payload": {
+        "type": "output.delta",
+        "message": "validate task complete",
+        "payload": {
+          "index": 1
+        },
+        "occurred_at": "2026-07-19T11:50:42.369819+00:00",
+        "provider_sequence": 4
+      },
+      "created_at": "2026-07-19T11:50:42.406119+00:00"
+    },
+    {
+      "id": "2359ad18-8b3b-4fbd-89af-7cf842344bf2",
+      "sequence": 1192,
+      "type": "RuntimeStepCompleted",
+      "payload": {
+        "type": "step.completed",
+        "message": null,
+        "payload": {
+          "name": "validate task",
+          "index": 1
+        },
+        "occurred_at": "2026-07-19T11:50:42.369837+00:00",
+        "provider_sequence": 5
+      },
+      "created_at": "2026-07-19T11:50:42.415983+00:00"
+    },
+    {
+      "id": "4eeb3ddb-1907-47e9-99a8-c2a88e60fef0",
+      "sequence": 1193,
+      "type": "RuntimeCheckpointSaved",
+      "payload": {
+        "type": "checkpoint.saved",
+        "message": null,
+        "payload": {
+          "completed_steps": 1
+        },
+        "occurred_at": "2026-07-19T11:50:42.369853+00:00",
+        "provider_sequence": 6
+      },
+      "created_at": "2026-07-19T11:50:42.427981+00:00"
+    },
+    {
+      "id": "828cd3aa-2c31-4248-bd75-de1187ac682a",
+      "sequence": 1194,
+      "type": "RuntimeStepStarted",
+      "payload": {
+        "type": "step.started",
+        "message": null,
+        "payload": {
+          "name": "produce result",
+          "index": 2
+        },
+        "occurred_at": "2026-07-19T11:50:42.369868+00:00",
+        "provider_sequence": 7
+      },
+      "created_at": "2026-07-19T11:50:42.437891+00:00"
+    },
+    {
+      "id": "72bbb78f-6c5e-4527-977f-0dbfafc5c37a",
+      "sequence": 1195,
+      "type": "RuntimeOutputDelta",
+      "payload": {
+        "type": "output.delta",
+        "message": "produce result complete",
+        "payload": {
+          "index": 2
+        },
+        "occurred_at": "2026-07-19T11:50:42.369883+00:00",
+        "provider_sequence": 8
+      },
+      "created_at": "2026-07-19T11:50:42.449025+00:00"
+    },
+    {
+      "id": "49689951-3950-435a-9ac4-937ac92660e3",
+      "sequence": 1196,
+      "type": "RuntimeStepCompleted",
+      "payload": {
+        "type": "step.completed",
+        "message": null,
+        "payload": {
+          "name": "produce result",
+          "index": 2
+        },
+        "occurred_at": "2026-07-19T11:50:42.369895+00:00",
+        "provider_sequence": 9
+      },
+      "created_at": "2026-07-19T11:50:42.457023+00:00"
+    },
+    {
+      "id": "e6b477bd-9c44-4478-822d-ca16c120feee",
+      "sequence": 1197,
+      "type": "RuntimeCheckpointSaved",
+      "payload": {
+        "type": "checkpoint.saved",
+        "message": null,
+        "payload": {
+          "completed_steps": 2
+        },
+        "occurred_at": "2026-07-19T11:50:42.369908+00:00",
+        "provider_sequence": 10
+      },
+      "created_at": "2026-07-19T11:50:42.467858+00:00"
+    },
+    {
+      "id": "6cbca218-a48a-46f6-b3fd-375bc4522022",
+      "sequence": 1198,
+      "type": "RuntimeRunCompleted",
+      "payload": {
+        "type": "run.completed",
+        "message": null,
+        "payload": {
+          "output": {
+            "message": "Nico completed a recoverable, auditable demo Run.",
+            "runtime": "mock",
+            "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+          }
+        },
+        "occurred_at": "2026-07-19T11:50:42.369955+00:00",
+        "provider_sequence": 11
+      },
+      "created_at": "2026-07-19T11:50:42.476935+00:00"
+    },
+    {
+      "id": "e5f281f0-8af2-4264-80ba-9863f41bed29",
+      "sequence": 1199,
+      "type": "RunCompleted",
+      "payload": {
+        "status": "completed",
+        "revision": 6
+      },
+      "created_at": "2026-07-19T11:50:42.484356+00:00"
+    }
+  ],
+  "events_truncated": false
+}

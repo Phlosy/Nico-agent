@@ -1,0 +1,6 @@
+Python 3.12.7
+v20.19.5
+Docker version 29.3.0, build 5927d80
+Docker Compose version v5.1.0
+nico-agent 0.2.0
+a662cc3

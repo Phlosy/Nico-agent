@@ -1,0 +1,75 @@
+{
+  "conversation": {
+    "id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1",
+    "project_id": "6a0a72b1-ecc6-4181-9cc3-986f8548be0f",
+    "agent_id": "1cf14d6b-a67a-4e45-a2fb-e89ffddea444",
+    "agent_version_id": "19c800cc-74a5-4fee-8bb3-5e80970eb182",
+    "title": "CLI Goal C 20260719115036-205424",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": "776b99fc-8494-4d5c-b19a-da0586898dec",
+    "created_by": "cli-goal-c",
+    "revision": 3,
+    "created_at": "2026-07-19T11:50:39.949281Z",
+    "updated_at": "2026-07-19T11:50:41.856515Z"
+  },
+  "turns": [
+    {
+      "id": "4f71078b-e07e-418c-9d7d-c9dc0a360265",
+      "conversation_id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1",
+      "sequence": 1,
+      "user_input": "First durable conversation turn",
+      "task_id": "ea2cdfd0-3577-42cb-a178-1711434d374d",
+      "run_id": "ef43e698-6eb0-4699-a11e-f121088f57cb",
+      "status": "completed",
+      "run_status": "completed",
+      "run_revision": 6,
+      "assistant_output": {
+        "message": "Nico completed a recoverable, auditable demo Run.",
+        "runtime": "mock",
+        "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+      },
+      "artifact_refs": [],
+      "usage": {
+        "steps": 2,
+        "tool_calls": 0,
+        "input_units": 1,
+        "output_units": 1
+      },
+      "error": null,
+      "revision": 3,
+      "created_at": "2026-07-19T11:50:39.992452Z",
+      "updated_at": "2026-07-19T11:50:40.294682Z"
+    },
+    {
+      "id": "776b99fc-8494-4d5c-b19a-da0586898dec",
+      "conversation_id": "fbb4693b-5cf7-4ca1-b384-ce8740645bc1",
+      "sequence": 2,
+      "user_input": "Second durable conversation turn",
+      "task_id": "3633a9f4-e455-475b-b4b9-42e97b4340e5",
+      "run_id": "27c7f385-9da1-4717-972e-9cafd072493e",
+      "status": "completed",
+      "run_status": "completed",
+      "run_revision": 6,
+      "assistant_output": {
+        "message": "Nico completed a recoverable, auditable demo Run.",
+        "runtime": "mock",
+        "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+      },
+      "artifact_refs": [],
+      "usage": {
+        "steps": 2,
+        "tool_calls": 0,
+        "input_units": 1,
+        "output_units": 1
+      },
+      "error": null,
+      "revision": 3,
+      "created_at": "2026-07-19T11:50:41.855474Z",
+      "updated_at": "2026-07-19T11:50:42.484356Z"
+    }
+  ]
+}

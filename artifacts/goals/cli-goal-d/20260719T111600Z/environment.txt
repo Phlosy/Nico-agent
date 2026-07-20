@@ -1,0 +1,10 @@
+date_utc=2026-07-19
+goal=CLI-D
+python=3.12.7
+pytest=9.1.1
+node=20.19.5
+npm=10.8.2
+docker=29.3.0
+runtime=docker-compose
+database_head=20260719_0017
+cli_version=0.2.0

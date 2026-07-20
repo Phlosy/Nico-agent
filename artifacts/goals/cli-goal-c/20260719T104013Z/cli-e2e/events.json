@@ -1,0 +1,337 @@
+[
+  {
+    "id": "02fc9c94-a8d6-4ae3-aac2-ad9b81516c0a",
+    "sequence": 1013,
+    "event_type": "TaskStatusChanged",
+    "aggregate_type": "task",
+    "aggregate_id": "db7fcb15-7844-4d94-a296-cc08550b4b63",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "nico-demo",
+    "payload": {
+      "status": "running",
+      "revision": 2
+    },
+    "correlation_id": "3566bb15-32f4-4888-8b12-19aeedcfb6df",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:12.505237Z"
+  },
+  {
+    "id": "5fd69fb1-01ae-41cd-9278-20d2428d0f3e",
+    "sequence": 1014,
+    "event_type": "RunCreated",
+    "aggregate_type": "run",
+    "aggregate_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "nico-demo",
+    "payload": {
+      "attempt": 1,
+      "task_id": "db7fcb15-7844-4d94-a296-cc08550b4b63"
+    },
+    "correlation_id": "3566bb15-32f4-4888-8b12-19aeedcfb6df",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:12.505237Z"
+  },
+  {
+    "id": "39d5ef71-c8ad-4d1a-880c-e32778047f2a",
+    "sequence": 1015,
+    "event_type": "RuntimeProviderResolved",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "legacy": false,
+      "source": "agent_version",
+      "provider": "mock",
+      "removal_version": null
+    },
+    "correlation_id": "bacb8011-398f-43e2-8e76-91b01915ea21",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.023806Z"
+  },
+  {
+    "id": "bae4ed22-9a70-44d5-a139-8845e3695017",
+    "sequence": 1016,
+    "event_type": "RunPlanningStarted",
+    "aggregate_type": "run",
+    "aggregate_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "revision": 2,
+      "worker_id": "nico-worker-1"
+    },
+    "correlation_id": "bacb8011-398f-43e2-8e76-91b01915ea21",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.023806Z"
+  },
+  {
+    "id": "cae2e8d7-a0b4-4c7a-bf86-d508e439b3c7",
+    "sequence": 1017,
+    "event_type": "RuntimeSessionBound",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "provider": "mock",
+      "external_session_id": "mock:7912648d-1b50-470f-90d5-fe8ce382d7c6"
+    },
+    "correlation_id": "1b8c0697-d0e5-4021-a835-b90d912eab5c",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.051787Z"
+  },
+  {
+    "id": "47e60d80-d669-41f3-a6e6-a3803bf9577d",
+    "sequence": 1018,
+    "event_type": "RuntimeSessionCreated",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "session.created",
+      "message": null,
+      "payload": {
+        "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6"
+      },
+      "occurred_at": "2026-07-19T10:54:13.050346+00:00",
+      "provider_sequence": 1
+    },
+    "correlation_id": "63791e34-3898-40bc-b58f-2cb46a7332cb",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.063906Z"
+  },
+  {
+    "id": "043565c6-aeb3-4dc5-bdb3-d874fd17c2c6",
+    "sequence": 1019,
+    "event_type": "RuntimeRunStarted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "run.started",
+      "message": null,
+      "payload": {},
+      "occurred_at": "2026-07-19T10:54:13.062318+00:00",
+      "provider_sequence": 2
+    },
+    "correlation_id": "da3ea1a0-c91c-4362-936f-b08b1f2c6d6c",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.075353Z"
+  },
+  {
+    "id": "2b5108ad-3eef-46b2-ac24-e9f102e14736",
+    "sequence": 1020,
+    "event_type": "RuntimeStepStarted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "step.started",
+      "message": null,
+      "payload": {
+        "name": "validate task",
+        "index": 1
+      },
+      "occurred_at": "2026-07-19T10:54:13.062370+00:00",
+      "provider_sequence": 3
+    },
+    "correlation_id": "3c059c4f-5e35-429b-ba12-e8af5b0a58b5",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.087979Z"
+  },
+  {
+    "id": "22884ffc-bad2-4681-9b4e-8cf622fd3c34",
+    "sequence": 1021,
+    "event_type": "RuntimeOutputDelta",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "output.delta",
+      "message": "validate task complete",
+      "payload": {
+        "index": 1
+      },
+      "occurred_at": "2026-07-19T10:54:13.062393+00:00",
+      "provider_sequence": 4
+    },
+    "correlation_id": "e0d31315-49b1-4ddb-91e9-a35dfe16e8be",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.101891Z"
+  },
+  {
+    "id": "8b3a9499-709c-4cd5-b5e9-5a1e791eb5ba",
+    "sequence": 1022,
+    "event_type": "RuntimeStepCompleted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "step.completed",
+      "message": null,
+      "payload": {
+        "name": "validate task",
+        "index": 1
+      },
+      "occurred_at": "2026-07-19T10:54:13.062408+00:00",
+      "provider_sequence": 5
+    },
+    "correlation_id": "74cf30c5-33d7-4ad4-8daf-f2b199fbc90a",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.111645Z"
+  },
+  {
+    "id": "5585ba35-661b-49db-adf1-ddc36fec6127",
+    "sequence": 1023,
+    "event_type": "RuntimeCheckpointSaved",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "checkpoint.saved",
+      "message": null,
+      "payload": {
+        "completed_steps": 1
+      },
+      "occurred_at": "2026-07-19T10:54:13.062424+00:00",
+      "provider_sequence": 6
+    },
+    "correlation_id": "54956a63-33cb-44e2-8ce0-64a827da9613",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.122612Z"
+  },
+  {
+    "id": "0a0588ca-389d-4fbb-9218-818646cf3543",
+    "sequence": 1024,
+    "event_type": "RuntimeStepStarted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "step.started",
+      "message": null,
+      "payload": {
+        "name": "produce result",
+        "index": 2
+      },
+      "occurred_at": "2026-07-19T10:54:13.062441+00:00",
+      "provider_sequence": 7
+    },
+    "correlation_id": "ed810cb9-2711-4bd9-9835-968efa9d8fd9",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.131572Z"
+  },
+  {
+    "id": "87300972-fbe2-4e1f-8c94-bf9b0f545430",
+    "sequence": 1025,
+    "event_type": "RuntimeOutputDelta",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "output.delta",
+      "message": "produce result complete",
+      "payload": {
+        "index": 2
+      },
+      "occurred_at": "2026-07-19T10:54:13.062454+00:00",
+      "provider_sequence": 8
+    },
+    "correlation_id": "b8aa1298-a706-4f60-85a5-81febf7e9849",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.142657Z"
+  },
+  {
+    "id": "ea4c0a50-6a70-4338-9adf-e92bdbd8e219",
+    "sequence": 1026,
+    "event_type": "RuntimeStepCompleted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "step.completed",
+      "message": null,
+      "payload": {
+        "name": "produce result",
+        "index": 2
+      },
+      "occurred_at": "2026-07-19T10:54:13.062466+00:00",
+      "provider_sequence": 9
+    },
+    "correlation_id": "4f0fa2ad-4266-4625-8c26-32fd49f99485",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.150723Z"
+  },
+  {
+    "id": "b3924f17-ed8e-432d-b344-791d6551816c",
+    "sequence": 1027,
+    "event_type": "RuntimeCheckpointSaved",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "checkpoint.saved",
+      "message": null,
+      "payload": {
+        "completed_steps": 2
+      },
+      "occurred_at": "2026-07-19T10:54:13.062480+00:00",
+      "provider_sequence": 10
+    },
+    "correlation_id": "e2cca9b1-1208-4680-9122-3c04aa96ce46",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.159978Z"
+  },
+  {
+    "id": "cfdd3055-dd33-4459-9981-8564e4b085c8",
+    "sequence": 1028,
+    "event_type": "RuntimeRunCompleted",
+    "aggregate_type": "runtime_session",
+    "aggregate_id": "97d11c9d-5cad-447a-b44e-75a5714d1de1",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "type": "run.completed",
+      "message": null,
+      "payload": {
+        "output": {
+          "message": "Nico completed a recoverable, auditable demo Run.",
+          "runtime": "mock",
+          "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+        }
+      },
+      "occurred_at": "2026-07-19T10:54:13.062524+00:00",
+      "provider_sequence": 11
+    },
+    "correlation_id": "4ab122f6-f029-441f-bf38-1d24a2e6cf77",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.167585Z"
+  },
+  {
+    "id": "151e0c55-9d97-4cee-a5a9-c20ae35f9e84",
+    "sequence": 1029,
+    "event_type": "RunCompleted",
+    "aggregate_type": "run",
+    "aggregate_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "run_id": "7912648d-1b50-470f-90d5-fe8ce382d7c6",
+    "actor_id": "worker:nico-worker-1",
+    "payload": {
+      "status": "completed",
+      "revision": 6
+    },
+    "correlation_id": "3bfd2230-bbff-4ac7-a302-167542d171ab",
+    "causation_id": null,
+    "created_at": "2026-07-19T10:54:13.173855Z"
+  }
+]

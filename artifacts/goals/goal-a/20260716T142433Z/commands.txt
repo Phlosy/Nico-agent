@@ -1,0 +1,16 @@
+# Goal A executed commands (UTC 2026-07-16)
+wc -l <attachment>/pasted-text.txt
+sed -n <ranges> <attachment>/pasted-text.txt
+git branch --show-current
+git symbolic-ref refs/remotes/origin/HEAD
+git remote -v
+git status --short
+git log --oneline --decorate -8
+find . -maxdepth 3 -type f
+cmp <attachment>/pasted-text.txt docs/plans/agent-platform-implementation-taskbook.md
+sha256sum <attachment>/pasted-text.txt docs/plans/agent-platform-implementation-taskbook.md
+bash -n scripts/verify-goal-a.sh
+bash scripts/verify-goal-a.sh
+git diff --cached --check
+validate all repository-local Markdown link targets
+review the staged Goal A diff against the taskbook and Goal A plan

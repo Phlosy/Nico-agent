@@ -1,0 +1,7 @@
+.venv/bin/pytest backend/tests/unit/test_cli_*.py
+scripts/test.sh
+scripts/test-integration.sh
+scripts/e2e-cli-goal-b.sh
+scripts/e2e-cli-goal-c.sh
+scripts/e2e-cli-goal-d.sh
+NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-d/20260719T111600Z scripts/verify-cli-goal-d.sh

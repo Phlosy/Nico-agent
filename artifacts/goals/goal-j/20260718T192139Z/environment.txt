@@ -1,0 +1,113 @@
+2026-07-18T19:21:39Z
+f66b28e42631cb47cc4fb76bd3f9d0dea727cdf8
+ M .env.example
+ M .gitignore
+ M README.md
+ M backend/README.md
+ M backend/pyproject.toml
+ M backend/src/nico_agent/api.py
+ M backend/src/nico_agent/api_schemas.py
+ M backend/src/nico_agent/config.py
+ M backend/src/nico_agent/control_plane.py
+ M backend/src/nico_agent/database.py
+ M backend/src/nico_agent/domain/models.py
+ M backend/src/nico_agent/domain/states.py
+ M backend/src/nico_agent/domain_api.py
+ M backend/src/nico_agent/growth/api_service.py
+ M backend/src/nico_agent/growth/read_service.py
+ M backend/src/nico_agent/growth_api.py
+ M backend/src/nico_agent/memory/service.py
+ M backend/src/nico_agent/runtime/__init__.py
+ M backend/src/nico_agent/runtime/contracts.py
+ M backend/src/nico_agent/runtime/executor.py
+ M backend/src/nico_agent/runtime/registry.py
+ M backend/src/nico_agent/runtime/service.py
+ M backend/src/nico_agent/runtime/tools.py
+ M backend/src/nico_agent/tools/contracts.py
+ M backend/src/nico_agent/tools/gateway.py
+ M backend/src/nico_agent/tools/policy.py
+ M backend/src/nico_agent/worker.py
+ M backend/tests/integration/test_control_plane_api.py
+ M backend/tests/integration/test_infrastructure.py
+ M backend/tests/integration/test_tool_gateway.py
+ M backend/tests/unit/test_api.py
+ M backend/tests/unit/test_config.py
+ M backend/tests/unit/test_python_sandbox.py
+ M backend/tests/unit/test_worker.py
+ M docker-compose.yml
+ M docs/api.md
+ M docs/architecture.md
+ M docs/domain-model.md
+ M docs/memory-and-skill.md
+ M docs/progress/feature-matrix.md
+ M docs/progress/goal-status.md
+ M docs/repository-assessment.md
+ M docs/roadmap.md
+ M docs/runtime.md
+ M docs/state-machines.md
+ M docs/testing.md
+ M docs/tool-gateway.md
+ M frontend/index.html
+ M frontend/src/App.test.tsx
+ M frontend/src/App.tsx
+ M frontend/src/styles.css
+?? .github/
+?? .markdownlint-cli2.jsonc
+?? CODE_OF_CONDUCT.md
+?? CONTRIBUTING.md
+?? SECURITY.md
+?? artifacts/goals/goal-g/
+?? artifacts/goals/goal-h/
+?? artifacts/goals/goal-i/
+?? artifacts/goals/goal-j/
+?? assets/
+?? backend/migrations/versions/20260718_0010_native_model_runtime.py
+?? backend/migrations/versions/20260718_0011_react_checkpoint.py
+?? backend/migrations/versions/20260718_0012_planning_reflection.py
+?? backend/migrations/versions/20260718_0013_multi_agent_coordination.py
+?? backend/migrations/versions/20260718_0014_shared_artifacts.py
+?? backend/src/nico_agent/artifact_api.py
+?? backend/src/nico_agent/artifacts/
+?? backend/src/nico_agent/coordination/
+?? backend/src/nico_agent/model_api.py
+?? backend/src/nico_agent/model_api_schemas.py
+?? backend/src/nico_agent/models/
+?? backend/src/nico_agent/plan_api.py
+?? backend/src/nico_agent/runtime/native/
+?? backend/src/nico_agent/testing/
+?? backend/tests/integration/test_coordination_service.py
+?? backend/tests/integration/test_model_runtime_api.py
+?? backend/tests/integration/test_multi_agent_runtime.py
+?? backend/tests/integration/test_native_plan_runtime.py
+?? backend/tests/integration/test_native_react_runtime.py
+?? backend/tests/integration/test_native_runtime_persistence.py
+?? backend/tests/unit/test_coordination_policy.py
+?? backend/tests/unit/test_model_gateway.py
+?? backend/tests/unit/test_native_aggregation.py
+?? backend/tests/unit/test_native_direct_runtime.py
+?? backend/tests/unit/test_native_plan_loop.py
+?? backend/tests/unit/test_native_planning.py
+?? backend/tests/unit/test_native_react_loop.py
+?? backend/tests/unit/test_runtime_contract_v2.py
+?? docs/assets/
+?? docs/configuration.md
+?? docs/getting-started.md
+?? docs/handoffs/2026-07-18-goal-g-handoff.md
+?? docs/handoffs/2026-07-18-goal-h-handoff.md
+?? docs/handoffs/2026-07-18-goal-i-handoff.md
+?? docs/plans/2026-07-18-001-nico-native-runtime-architecture-migration-plan.md
+?? docs/security.md
+?? docs/troubleshooting.md
+?? frontend/public/
+?? scripts/demo.sh
+?? scripts/e2e-goal-g.sh
+?? scripts/e2e-goal-h.sh
+?? scripts/e2e-goal-i.sh
+?? scripts/e2e-goal-j.sh
+?? scripts/verify-goal-g.sh
+?? scripts/verify-goal-h.sh
+?? scripts/verify-goal-i.sh
+?? scripts/verify-goal-j.sh
+Python 3.12.7
+Docker version 29.3.0, build 5927d80
+Docker Compose version v5.1.0

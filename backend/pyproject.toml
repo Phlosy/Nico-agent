@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nico-agent-platform"
+version = "0.2.0"
+description = "Self-hosted Agent Runtime for reliable execution and controlled growth"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic==1.18.5",
+  "asyncpg==0.31.0",
+  "fastapi==0.139.2",
+  "httpx==0.28.1",
+  "jsonschema==4.26.0",
+  "minio==7.2.20",
+  "pgvector==0.5.0",
+  "platformdirs==4.3.8",
+  "prompt-toolkit==3.0.51",
+  "pydantic-settings==2.14.2",
+  "redis==8.0.1",
+  "rich==14.1.0",
+  "sqlalchemy[asyncio]==2.0.51",
+  "typer==0.16.0",
+  "uvicorn[standard]==0.51.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mcp==1.26.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.15.22",
+  "starlette==1.0.1",
+]
+
+[project.scripts]
+nico = "nico_agent.cli.app:run"
+nico-api = "nico_agent.main:run"
+nico-worker = "nico_agent.worker:run"
+nico-sandbox-runner = "nico_agent.sandbox.api:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
