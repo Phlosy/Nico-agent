@@ -92,6 +92,9 @@ async def test_verified_probe_activates_endpoint_and_starter_agent_atomically() 
             tenant_id, project_id = tenant.id, project.id
         context = TenantContext(tenant_id, "activation-test", uuid4())
         probe = await _verified_probe(database, service, context)
+        before = await service.setup_readiness(context)
+        assert before.needs_setup is True
+        assert before.reason == "verified_native_route_required"
         target = ProviderActivationTarget(
             project_id=project_id,
             starter_agent_name=f"starter-{suffix}",
@@ -127,6 +130,13 @@ async def test_verified_probe_activates_endpoint_and_starter_agent_atomically() 
 
         assert repeated == result
         assert result.endpoint_reused is False
+        after = await service.setup_readiness(context)
+        connections = await service.list_connections(context)
+        assert after.needs_setup is False
+        assert after.verified_native_route_count == 1
+        assert len(connections) == 1
+        assert connections[0].credential_ref == "secret:provider-activation-test"
+        assert connections[0].active_agents[0]["id"] == str(result.agent_id)
         async with database.tenant_transaction(context) as session:
             endpoint = await session.get(ModelEndpoint, result.endpoint_id)
             agent = await session.get(Agent, result.agent_id)
@@ -264,7 +274,7 @@ async def test_stale_preview_rolls_back_without_partial_activation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_local_secret_activation_requires_matching_live_maintenance_attempt() -> None:
+async def test_supplied_local_maintenance_attempt_must_still_be_live() -> None:
     settings = Settings(environment="test", _env_file=None)
     engine = create_async_engine(settings.resolved_database_url)
     database = Database(engine)

@@ -29,8 +29,10 @@ from nico_agent.provider_onboarding.contracts import (
     ProviderActivationCreate,
     ProviderActivationPreview,
     ProviderActivationRead,
+    ProviderConnectionRead,
     ProviderPreviewCreate,
     ProviderProbeCreate,
+    ProviderSetupReadiness,
     canonical_candidate_hash,
 )
 
@@ -186,12 +188,7 @@ class ProviderOnboardingService:
                     "PROVIDER_PREVIEW_STALE",
                     "the Provider activation preview changed; review it again",
                 )
-            if probe.credential_ref.startswith("env:"):
-                if command.maintenance_attempt_id is None:
-                    raise DomainConflict(
-                        "PROVIDER_MAINTENANCE_REQUIRED",
-                        "local Provider credentials require an active maintenance attempt",
-                    )
+            if command.maintenance_attempt_id is not None:
                 active = await session.scalar(
                     text("SELECT provider_maintenance_attempt_active(:attempt_id)"),
                     {"attempt_id": command.maintenance_attempt_id},
@@ -333,6 +330,129 @@ class ProviderOnboardingService:
             )
             await session.flush()
             return result
+
+    async def list_connections(
+        self,
+        context: TenantContext,
+    ) -> list[ProviderConnectionRead]:
+        async with self.database.tenant_transaction(context) as session:
+            endpoints = list(
+                await session.scalars(
+                    select(ModelEndpoint)
+                    .where(ModelEndpoint.tenant_id == context.tenant_id)
+                    .order_by(ModelEndpoint.stable_key, ModelEndpoint.revision.desc())
+                )
+            )
+            latest: dict[str, ModelEndpoint] = {}
+            for endpoint in endpoints:
+                latest.setdefault(endpoint.stable_key, endpoint)
+            active_rows = list(
+                (
+                    await session.execute(
+                        select(Agent, AgentVersion)
+                        .join(
+                            AgentVersion,
+                            (AgentVersion.tenant_id == Agent.tenant_id)
+                            & (AgentVersion.agent_id == Agent.id)
+                            & (AgentVersion.id == Agent.current_version_id),
+                        )
+                        .where(Agent.tenant_id == context.tenant_id)
+                    )
+                ).all()
+            )
+            agents_by_endpoint: dict[UUID, list[dict[str, Any]]] = {}
+            for agent, version in active_rows:
+                if version.model_endpoint_id is not None:
+                    agents_by_endpoint.setdefault(version.model_endpoint_id, []).append(
+                        {
+                            "id": str(agent.id),
+                            "name": agent.name,
+                            "display_name": agent.display_name,
+                            "status": agent.status,
+                            "model": version.model_name,
+                        }
+                    )
+            return [
+                ProviderConnectionRead(
+                    endpoint_id=endpoint.id,
+                    stable_key=endpoint.stable_key,
+                    provider_key=endpoint.provider_key,
+                    display_name=endpoint.display_name,
+                    protocol=endpoint.protocol,
+                    base_url=endpoint.base_url,
+                    credential_ref=endpoint.credential_ref,
+                    catalog_revision=endpoint.catalog_revision,
+                    provider_options=endpoint.provider_options,
+                    revision=endpoint.revision,
+                    status=endpoint.status,
+                    enabled=endpoint.enabled,
+                    verified=endpoint.verified_at is not None,
+                    verified_at=endpoint.verified_at,
+                    allowed_models=tuple(endpoint.allowed_models),
+                    active_agents=tuple(agents_by_endpoint.get(endpoint.id, [])),
+                )
+                for endpoint in latest.values()
+            ]
+
+    async def setup_readiness(self, context: TenantContext) -> ProviderSetupReadiness:
+        async with self.database.tenant_transaction(context) as session:
+            project_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Project)
+                    .where(
+                        Project.tenant_id == context.tenant_id,
+                        Project.status == "active",
+                    )
+                )
+                or 0
+            )
+            agent_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .where(Agent.tenant_id == context.tenant_id)
+                )
+                or 0
+            )
+            route_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .join(
+                        AgentVersion,
+                        (AgentVersion.tenant_id == Agent.tenant_id)
+                        & (AgentVersion.agent_id == Agent.id)
+                        & (AgentVersion.id == Agent.current_version_id),
+                    )
+                    .join(
+                        ModelEndpoint,
+                        (ModelEndpoint.tenant_id == AgentVersion.tenant_id)
+                        & (ModelEndpoint.id == AgentVersion.model_endpoint_id),
+                    )
+                    .where(
+                        Agent.tenant_id == context.tenant_id,
+                        Agent.status == "ready",
+                        AgentVersion.runtime_provider == "nico_native",
+                        ModelEndpoint.enabled.is_(True),
+                        ModelEndpoint.status == "active",
+                        ModelEndpoint.verified_at.is_not(None),
+                    )
+                )
+                or 0
+            )
+            reason = "ready"
+            if project_count == 0:
+                reason = "project_required"
+            elif route_count == 0:
+                reason = "verified_native_route_required"
+            return ProviderSetupReadiness(
+                needs_setup=route_count == 0,
+                reason=reason,
+                project_count=project_count,
+                agent_count=agent_count,
+                verified_native_route_count=route_count,
+            )
 
     async def _build_preview(
         self,

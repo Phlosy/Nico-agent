@@ -113,6 +113,66 @@ class FakeClient:
         }
 
 
+class FakeProviderClient(FakeClient):
+    def provider_setup_readiness(self):
+        return {
+            "needs_setup": True,
+            "reason": "verified_native_route_required",
+            "project_count": 1,
+        }
+
+    def provider_catalog(self):
+        return {
+            "schema_version": 1,
+            "catalog_revision": "2026-07-20",
+            "providers": [
+                {
+                    "key": "openai",
+                    "display_name": "OpenAI",
+                    "protocol": "openai_compatible",
+                    "locations": [
+                        {
+                            "key": "global",
+                            "base_url": "https://api.openai.com/v1",
+                            "default": True,
+                        }
+                    ],
+                    "discovery": "openai_models",
+                    "recommended_models": ["model-a"],
+                }
+            ],
+        }
+
+    def list_projects(self):
+        return [{"id": "22222222-2222-4222-8222-222222222222", "status": "active"}]
+
+    def create_provider_probe(self, *, kind, candidate, idempotency_key):
+        del candidate, idempotency_key
+        return {
+            "id": "probe-1",
+            "kind": kind,
+            "status": "succeeded",
+            "candidate_hash": "a" * 64,
+            "verified_at": "2026-07-20T00:00:00Z",
+            "result": {},
+        }
+
+    def preview_provider_activation(self, *, probe_id, candidate_hash, target):
+        return {
+            "probe_id": probe_id,
+            "candidate_hash": candidate_hash,
+            "preview_hash": "b" * 64,
+            "projection": {"target": target},
+        }
+
+    def activate_provider(self, **_kwargs):
+        return {
+            "agent_id": "33333333-3333-4333-8333-333333333333",
+            "agent_version_id": "version-1",
+            "endpoint_id": "endpoint-1",
+        }
+
+
 def test_version_options_and_server_version(monkeypatch) -> None:
     monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
 
@@ -243,6 +303,41 @@ def test_json_interactive_chat_is_rejected(monkeypatch, tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert json.loads(result.stderr)["error"]["code"] == "JSON_INTERACTIVE_UNSUPPORTED"
+
+
+def test_setup_supports_safe_non_interactive_reference_flow(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeProviderClient)
+    project = "22222222-2222-4222-8222-222222222222"
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(tmp_path / "config.toml"),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "setup",
+            "--provider",
+            "openai",
+            "--credential-ref",
+            "secret:providers/openai",
+            "--model",
+            "model-a",
+            "--project",
+            project,
+            "--starter-name",
+            "setup-assistant",
+            "--starter-display-name",
+            "Setup Assistant",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ready"
+    assert payload["provider"] == "openai"
+    assert "secret:providers/openai" not in result.stdout
 
 
 def test_exec_supports_local_json_detach_and_private_output(monkeypatch, tmp_path: Path) -> None:

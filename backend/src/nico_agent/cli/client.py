@@ -104,6 +104,78 @@ class NicoApiClient:
     def list_agent_versions(self, agent_id: str) -> list[dict[str, Any]]:
         return self.request("GET", f"/api/v1/agents/{agent_id}/versions")
 
+    def provider_catalog(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/provider-catalog", require_tenant=False)
+
+    def provider_setup_readiness(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/provider-setup-readiness")
+
+    def list_provider_connections(self) -> list[dict[str, Any]]:
+        return self.request("GET", "/api/v1/provider-connections")
+
+    def create_provider_probe(
+        self,
+        *,
+        kind: str,
+        candidate: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/provider-probes",
+            json_body={
+                "kind": kind,
+                "candidate": candidate,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
+    def get_provider_probe(self, probe_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/provider-probes/{probe_id}")
+
+    def cancel_provider_probe(self, probe_id: str) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/provider-probes/{probe_id}/cancel")
+
+    def preview_provider_activation(
+        self,
+        *,
+        probe_id: str,
+        candidate_hash: str,
+        target: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/provider-activation/preview",
+            json_body={
+                "probe_id": probe_id,
+                "candidate_hash": candidate_hash,
+                "target": target,
+            },
+        )
+
+    def activate_provider(
+        self,
+        *,
+        probe_id: str,
+        candidate_hash: str,
+        target: dict[str, Any],
+        preview_hash: str,
+        maintenance_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "probe_id": probe_id,
+            "candidate_hash": candidate_hash,
+            "target": target,
+            "preview_hash": preview_hash,
+        }
+        if maintenance_attempt_id is not None:
+            body["maintenance_attempt_id"] = maintenance_attempt_id
+        return self.request(
+            "POST",
+            "/api/v1/provider-activation",
+            json_body=body,
+        )
+
     def get_task(self, task_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/tasks/{task_id}")
 

@@ -16,9 +16,11 @@ from nico_agent.provider_onboarding.contracts import (
     ProviderActivationPreview,
     ProviderActivationRead,
     ProviderCatalog,
+    ProviderConnectionRead,
     ProviderPreviewCreate,
     ProviderProbeCreate,
     ProviderProbeRead,
+    ProviderSetupReadiness,
 )
 from nico_agent.provider_onboarding.service import ProviderOnboardingService
 
@@ -107,3 +109,13 @@ async def activate_provider(
 ):
     _require_provider_writes(request)
     return await service.activate(context, command)
+
+
+@router.get("/provider-connections", response_model=list[ProviderConnectionRead])
+async def list_provider_connections(service: Service, context: Context):
+    return await service.list_connections(context)
+
+
+@router.get("/provider-setup-readiness", response_model=ProviderSetupReadiness)
+async def provider_setup_readiness(service: Service, context: Context):
+    return await service.setup_readiness(context)

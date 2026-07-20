@@ -309,6 +309,34 @@ class ProviderActivationRead(FrozenContract):
     activated_at: datetime
 
 
+class ProviderConnectionRead(FrozenContract):
+    endpoint_id: UUID
+    stable_key: str
+    provider_key: str
+    display_name: str
+    protocol: str
+    base_url: str
+    credential_ref: str
+    catalog_revision: str | None
+    provider_options: dict[str, Any]
+    revision: int
+    status: str
+    enabled: bool
+    verified: bool
+    verified_at: datetime | None
+    allowed_models: tuple[str, ...]
+    active_agents: tuple[dict[str, Any], ...]
+
+
+class ProviderSetupReadiness(FrozenContract):
+    schema_version: int = 1
+    needs_setup: bool
+    reason: str
+    project_count: int
+    agent_count: int
+    verified_native_route_count: int
+
+
 def canonical_candidate_bytes(candidate: CandidateConfiguration) -> bytes:
     payload = candidate.model_dump(mode="json", exclude_none=False)
     return json.dumps(

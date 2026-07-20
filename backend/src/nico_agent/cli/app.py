@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,8 @@ from nico_agent.cli.config import CliConfig, ConfigStore, Profile, validate_prof
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.execution import ExecRunner, RunWatcher, load_exec_input, write_result
 from nico_agent.cli.output import Output
+from nico_agent.cli.provider import ProviderInput, ProviderOnboardingCoordinator
+from nico_agent.cli.service_bridge import ServiceBridge
 
 T = TypeVar("T")
 
@@ -33,6 +36,7 @@ agent_app = typer.Typer(help="查询 Agent 与不可变版本。", no_args_is_he
 task_app = typer.Typer(help="查询 Task。", no_args_is_help=True)
 run_app = typer.Typer(help="查询 Run、Runtime 和持久化事件。", no_args_is_help=True)
 conversation_app = typer.Typer(help="查询持久化 Conversation。", no_args_is_help=True)
+provider_app = typer.Typer(help="交互式配置和验证 AI Provider。", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
 app.add_typer(project_app, name="project")
@@ -40,6 +44,7 @@ app.add_typer(agent_app, name="agent")
 app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(conversation_app, name="conversation")
+app.add_typer(provider_app, name="provider")
 
 
 @dataclass(slots=True)
@@ -130,6 +135,271 @@ def _api(state: AppState, operation: Callable[[NicoApiClient], T]) -> T:
             return operation(client)
 
     return _guard(state, invoke)
+
+
+def _provider_options(values: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        key, separator, option_value = value.partition("=")
+        if not separator or not key:
+            raise CliError(
+                "PROVIDER_OPTION_INVALID",
+                "Provider options must use KEY=VALUE",
+                exit_code=2,
+            )
+        parsed[key] = option_value
+    return parsed
+
+
+def _run_provider_onboarding(
+    state: AppState,
+    *,
+    provider_key: str | None,
+    credential_ref: str | None,
+    model: str | None,
+    project_id: UUID | None,
+    agent_id: UUID | None,
+    expected_agent_revision: int | None,
+    starter_agent_name: str | None,
+    starter_agent_display_name: str | None,
+    location: str | None,
+    option: list[str],
+    confirmed: bool,
+) -> dict[str, Any]:
+    profile = state.resolved_profile()
+    with NicoApiClient(profile) as client:
+        coordinator = ProviderOnboardingCoordinator(
+            client,
+            state.output(),
+            service_bridge=ServiceBridge(profile),
+            interactive=sys.stdin.isatty() and not state.json_mode,
+            prompt=typer.prompt,
+            confirm=typer.confirm,
+        )
+        return coordinator.onboard(
+            ProviderInput(
+                provider_key=provider_key,
+                credential_ref=credential_ref,
+                model=model,
+                project_id=str(project_id) if project_id else None,
+                agent_id=str(agent_id) if agent_id else None,
+                expected_agent_revision=expected_agent_revision,
+                starter_agent_name=starter_agent_name,
+                starter_agent_display_name=starter_agent_display_name,
+                location_key=location,
+                provider_options=_provider_options(option),
+                confirmed=confirmed,
+            )
+        )
+
+
+@app.command("setup")
+def setup_command(
+    ctx: typer.Context,
+    provider_key: str | None = typer.Option(None, "--provider"),
+    credential_ref: str | None = typer.Option(None, "--credential-ref"),
+    model: str | None = typer.Option(None, "--model"),
+    project_id: UUID | None = typer.Option(None, "--project"),
+    agent_id: UUID | None = typer.Option(None, "--agent"),
+    expected_agent_revision: int | None = typer.Option(None, "--agent-revision", min=1),
+    starter_agent_name: str | None = typer.Option(None, "--starter-name"),
+    starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
+    location: str | None = typer.Option(None, "--location"),
+    option: list[str] | None = typer.Option(None, "--option", help="Provider KEY=VALUE option."),
+    yes: bool = typer.Option(False, "--yes", help="确认发布服务端预览。"),
+) -> None:
+    """在尚无可用 Native 路由时引导配置第一个 Provider。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        readiness = _api(state, lambda client: client.provider_setup_readiness())
+        if not readiness.get("needs_setup"):
+            return {"status": "ready", "readiness": readiness}
+        return _run_provider_onboarding(
+            state,
+            provider_key=provider_key,
+            credential_ref=credential_ref,
+            model=model,
+            project_id=project_id,
+            agent_id=agent_id,
+            expected_agent_revision=expected_agent_revision,
+            starter_agent_name=starter_agent_name,
+            starter_agent_display_name=starter_agent_display_name,
+            location=location,
+            option=option or [],
+            confirmed=yes,
+        )
+
+    result = _guard(state, operation)
+    state.output().emit(result, title="Nico Setup")
+
+
+def _provider_add_command(
+    ctx: typer.Context,
+    provider_key: str | None,
+    credential_ref: str | None,
+    model: str | None,
+    project_id: UUID | None,
+    agent_id: UUID | None,
+    expected_agent_revision: int | None,
+    starter_agent_name: str | None,
+    starter_agent_display_name: str | None,
+    location: str | None,
+    option: list[str] | None,
+    yes: bool,
+) -> None:
+    state = _state(ctx)
+    result = _guard(
+        state,
+        lambda: _run_provider_onboarding(
+            state,
+            provider_key=provider_key,
+            credential_ref=credential_ref,
+            model=model,
+            project_id=project_id,
+            agent_id=agent_id,
+            expected_agent_revision=expected_agent_revision,
+            starter_agent_name=starter_agent_name,
+            starter_agent_display_name=starter_agent_display_name,
+            location=location,
+            option=option or [],
+            confirmed=yes,
+        ),
+    )
+    state.output().emit(result, title="Provider Ready")
+
+
+@provider_app.command("add")
+def provider_add(
+    ctx: typer.Context,
+    provider_key: str | None = typer.Argument(None),
+    credential_ref: str | None = typer.Option(None, "--credential-ref"),
+    model: str | None = typer.Option(None, "--model"),
+    project_id: UUID | None = typer.Option(None, "--project"),
+    agent_id: UUID | None = typer.Option(None, "--agent"),
+    expected_agent_revision: int | None = typer.Option(None, "--agent-revision", min=1),
+    starter_agent_name: str | None = typer.Option(None, "--starter-name"),
+    starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
+    location: str | None = typer.Option(None, "--location"),
+    option: list[str] | None = typer.Option(None, "--option"),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """添加并验证 Provider，然后原子发布到一个 Agent。"""
+
+    _provider_add_command(
+        ctx,
+        provider_key,
+        credential_ref,
+        model,
+        project_id,
+        agent_id,
+        expected_agent_revision,
+        starter_agent_name,
+        starter_agent_display_name,
+        location,
+        option,
+        yes,
+    )
+
+
+@provider_app.command("configure")
+def provider_configure(
+    ctx: typer.Context,
+    provider_key: str | None = typer.Argument(None),
+    credential_ref: str | None = typer.Option(None, "--credential-ref"),
+    model: str | None = typer.Option(None, "--model"),
+    project_id: UUID | None = typer.Option(None, "--project"),
+    agent_id: UUID | None = typer.Option(None, "--agent"),
+    expected_agent_revision: int | None = typer.Option(None, "--agent-revision", min=1),
+    starter_agent_name: str | None = typer.Option(None, "--starter-name"),
+    starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
+    location: str | None = typer.Option(None, "--location"),
+    option: list[str] | None = typer.Option(None, "--option"),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """重新验证 Provider 并发布新的不可变路由版本。"""
+
+    _provider_add_command(
+        ctx,
+        provider_key,
+        credential_ref,
+        model,
+        project_id,
+        agent_id,
+        expected_agent_revision,
+        starter_agent_name,
+        starter_agent_display_name,
+        location,
+        option,
+        yes,
+    )
+
+
+@provider_app.command("list")
+def provider_list(
+    ctx: typer.Context,
+    models: str | None = typer.Option(None, "--models", help="显示指定 Provider 的模型。"),
+    limit: int = typer.Option(20, "--limit", min=1, max=100),
+) -> None:
+    state = _state(ctx)
+    connections = _api(state, lambda client: client.list_provider_connections())
+    if models is not None:
+        connection = next(
+            (item for item in connections if item.get("provider_key") == models),
+            None,
+        )
+        if connection is None:
+            _guard(
+                state,
+                lambda: (_ for _ in ()).throw(
+                    CliError(
+                        "PROVIDER_CONNECTION_NOT_FOUND",
+                        f"Provider connection '{models}' was not found",
+                        exit_code=2,
+                    )
+                ),
+            )
+            return
+        rows = [
+            {"provider": models, "model": value} for value in connection["allowed_models"][:limit]
+        ]
+        state.output().table(rows, title="Provider Models", columns=["provider", "model"])
+        return
+    rows = [
+        {
+            "provider": item["provider_key"],
+            "name": item["display_name"],
+            "protocol": item["protocol"],
+            "revision": item["revision"],
+            "verified": item["verified"],
+            "enabled": item["enabled"],
+            "credential": "configured",
+            "agents": len(item.get("active_agents") or []),
+        }
+        for item in connections
+    ]
+    state.output().table(rows, title="Provider Connections")
+
+
+@provider_app.command("test")
+def provider_test(ctx: typer.Context, provider_key: str) -> None:
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            return ProviderOnboardingCoordinator(
+                client,
+                state.output(),
+                service_bridge=None,
+                interactive=False,
+                prompt=typer.prompt,
+                confirm=typer.confirm,
+            ).test_existing(provider_key)
+
+    result = _guard(state, operation)
+    state.output().emit(result, title="Provider Test")
 
 
 @app.command("chat")

@@ -213,3 +213,37 @@ def test_conversation_attachment_and_artifact_bytes_never_become_server_paths() 
     assert "path" not in dict(seen[0].url.params)
     assert content == b"artifact-bytes"
     assert content_type == "text/plain"
+
+
+def test_provider_client_binds_preview_hash_without_accepting_raw_key_fields() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path.endswith("/preview"):
+            return httpx.Response(200, json={"preview_hash": "b" * 64})
+        return httpx.Response(201, json={"status": "ready"})
+
+    target = {
+        "project_id": "project-1",
+        "starter_agent_name": "assistant-one",
+        "starter_agent_display_name": "Assistant One",
+    }
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        preview = client.preview_provider_activation(
+            probe_id="probe-1",
+            candidate_hash="a" * 64,
+            target=target,
+        )
+        client.activate_provider(
+            probe_id="probe-1",
+            candidate_hash="a" * 64,
+            target=target,
+            preview_hash=preview["preview_hash"],
+            maintenance_attempt_id="attempt-1",
+        )
+
+    assert seen[0].url.path == "/api/v1/provider-activation/preview"
+    assert seen[1].url.path == "/api/v1/provider-activation"
+    assert b'"preview_hash":"' + b"b" * 64 + b'"' in seen[1].read()
+    assert b"api_key" not in seen[0].read() + seen[1].read()

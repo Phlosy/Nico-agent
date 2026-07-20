@@ -25,6 +25,8 @@ def test_config_store_round_trip_is_private_and_deterministic(tmp_path: Path) ->
                 actor_id="operator",
                 api_token_env="NICO_REMOTE_TOKEN",
                 timeout_seconds=12,
+                service_command="/home/operator/.nico/bin/nico-service",
+                install_root="/home/operator/.nico",
             ),
         },
     )
@@ -36,6 +38,7 @@ def test_config_store_round_trip_is_private_and_deterministic(tmp_path: Path) ->
     content = path.read_text()
     assert "https://nico.example.test" in content
     assert "NICO_REMOTE_TOKEN" in content
+    assert "/home/operator/.nico/bin/nico-service" in content
     assert "secret-value" not in content
 
 
