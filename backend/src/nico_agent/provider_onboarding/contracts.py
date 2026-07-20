@@ -243,6 +243,72 @@ class ProviderProbeRead(BaseModel):
     updated_at: datetime
 
 
+class ProviderActivationTarget(FrozenContract):
+    project_id: UUID
+    agent_id: UUID | None = None
+    expected_agent_revision: int | None = Field(default=None, ge=1)
+    starter_agent_name: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_-]{1,118}[a-z0-9]$",
+        max_length=120,
+    )
+    starter_agent_display_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> ProviderActivationTarget:
+        existing = self.agent_id is not None
+        starter = self.starter_agent_name is not None
+        if existing == starter:
+            raise ValueError("select exactly one existing or Starter Agent")
+        if existing:
+            if self.expected_agent_revision is None:
+                raise ValueError("existing Agent activation requires its expected revision")
+            if self.starter_agent_display_name is not None:
+                raise ValueError("existing Agent activation cannot include a Starter display name")
+        else:
+            if self.expected_agent_revision is not None:
+                raise ValueError("Starter Agent activation cannot include an expected revision")
+            if self.starter_agent_display_name is None:
+                raise ValueError("Starter Agent activation requires a display name")
+        return self
+
+
+class ProviderPreviewCreate(FrozenContract):
+    probe_id: UUID
+    candidate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target: ProviderActivationTarget
+
+
+class ProviderActivationCreate(ProviderPreviewCreate):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    maintenance_attempt_id: UUID | None = None
+
+
+class ProviderActivationPreview(FrozenContract):
+    schema_version: int = 1
+    probe_id: UUID
+    candidate_hash: str
+    preview_hash: str
+    expires_at: datetime
+    changed_fields: tuple[str, ...]
+    projection: dict[str, Any]
+
+
+class ProviderActivationRead(FrozenContract):
+    schema_version: int = 1
+    probe_id: UUID
+    candidate_hash: str
+    endpoint_id: UUID
+    endpoint_revision: int
+    endpoint_reused: bool
+    agent_id: UUID
+    agent_revision: int
+    agent_version_id: UUID
+    agent_version: int
+    project_id: UUID
+    activated_at: datetime
+
+
 def canonical_candidate_bytes(candidate: CandidateConfiguration) -> bytes:
     payload = candidate.model_dump(mode="json", exclude_none=False)
     return json.dumps(

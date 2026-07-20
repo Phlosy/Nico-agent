@@ -8,11 +8,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 
 from nico_agent.database import Database, TenantContext
-from nico_agent.domain.errors import DomainError
+from nico_agent.domain.errors import AccessDenied, DomainError
 from nico_agent.domain_api import get_tenant_context
 from nico_agent.provider_onboarding.catalog import get_provider_catalog
 from nico_agent.provider_onboarding.contracts import (
+    ProviderActivationCreate,
+    ProviderActivationPreview,
+    ProviderActivationRead,
     ProviderCatalog,
+    ProviderPreviewCreate,
     ProviderProbeCreate,
     ProviderProbeRead,
 )
@@ -66,3 +70,40 @@ async def cancel_provider_probe(
     context: Context,
 ):
     return await service.cancel_probe(context, probe_id)
+
+
+def _require_provider_writes(request: Request) -> None:
+    if not request.app.state.settings.model_endpoint_writes_enabled:
+        raise AccessDenied(
+            "MODEL_ENDPOINT_WRITES_DISABLED",
+            "Provider activation is disabled by deployment policy",
+        )
+
+
+@router.post(
+    "/provider-activation/preview",
+    response_model=ProviderActivationPreview,
+)
+async def preview_provider_activation(
+    request: Request,
+    command: ProviderPreviewCreate,
+    service: Service,
+    context: Context,
+):
+    _require_provider_writes(request)
+    return await service.preview_activation(context, command)
+
+
+@router.post(
+    "/provider-activation",
+    response_model=ProviderActivationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def activate_provider(
+    request: Request,
+    command: ProviderActivationCreate,
+    service: Service,
+    context: Context,
+):
+    _require_provider_writes(request)
+    return await service.activate(context, command)

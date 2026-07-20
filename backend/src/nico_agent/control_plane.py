@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nico_agent.agent_versions import AgentVersionLifecycle
 from nico_agent.api_schemas import (
     AgentClone,
     AgentCreate,
@@ -46,13 +45,11 @@ from nico_agent.domain.models import (
 )
 from nico_agent.domain.states import (
     AGENT_TRANSITIONS,
-    AGENT_VERSION_TRANSITIONS,
     PROJECT_TRANSITIONS,
     RUN_STEP_TRANSITIONS,
     RUN_TRANSITIONS,
     TASK_TRANSITIONS,
     AgentStatus,
-    AgentVersionStatus,
     ProjectStatus,
     RunStatus,
     RunStepStatus,
@@ -247,7 +244,7 @@ class ControlPlaneService:
                 version = await self._agent_version(
                     session, context, source.id, source.current_version_id
                 )
-                session.add(self._copy_version(version, clone.id, version=1))
+                session.add(AgentVersionLifecycle.copy(version, clone.id, version=1))
             self._record(
                 session,
                 context,
@@ -338,53 +335,7 @@ class ControlPlaneService:
     ) -> AgentVersion:
         async with self.database.tenant_transaction(context) as session:
             agent = await self._agent(session, context, agent_id, for_update=True)
-            if AgentStatus(agent.status) is AgentStatus.ARCHIVED:
-                raise DomainConflict(
-                    "AGENT_ARCHIVED", "restore the agent before creating a new version"
-                )
-            latest = await session.scalar(
-                select(func.max(AgentVersion.version)).where(
-                    AgentVersion.tenant_id == context.tenant_id,
-                    AgentVersion.agent_id == agent.id,
-                )
-            )
-            runtime_provider = self._new_version_runtime_provider(command)
-            version = AgentVersion(
-                tenant_id=context.tenant_id,
-                agent_id=agent.id,
-                version=(latest or 0) + 1,
-                role=command.role,
-                mandate=command.mandate,
-                boundaries=command.boundaries,
-                long_term_goal=command.long_term_goal,
-                current_goal=command.current_goal,
-                runtime_provider=runtime_provider,
-                execution_mode=command.execution_mode,
-                model_endpoint_id=command.model_endpoint_id,
-                model_name=command.model_name,
-                model_config_json=command.model_config_data,
-                tool_policy=command.tool_policy,
-                memory_policy=command.memory_policy,
-                skill_policy=command.skill_policy,
-                plugin_refs=command.plugin_refs,
-                coordination_policy=command.coordination_policy,
-                budgets=command.budgets,
-                run_config=command.run_config,
-                content_hash=self._version_hash(command, runtime_provider=runtime_provider),
-            )
-            session.add(version)
-            await session.flush()
-            self._record(
-                session,
-                context,
-                event_type="AgentVersionCreated",
-                aggregate_type="agent_version",
-                aggregate_id=version.id,
-                action="agent_version.create",
-                payload={"agent_id": str(agent.id), "version": version.version},
-            )
-            await session.flush()
-            return version
+            return await AgentVersionLifecycle(session, context).create(agent, command)
 
     async def list_agent_versions(
         self, context: TenantContext, agent_id: UUID
@@ -412,49 +363,11 @@ class ControlPlaneService:
     ) -> Agent:
         async with self.database.tenant_transaction(context) as session:
             agent = await self._agent(session, context, agent_id, for_update=True)
-            require_revision("agent", expected=expected_revision, actual=agent.revision)
-            if AgentStatus(agent.status) is AgentStatus.ARCHIVED:
-                raise DomainConflict("AGENT_ARCHIVED", "restore the agent before publishing")
-            version = await self._agent_version(
-                session, context, agent.id, version_id, for_update=True
+            return await AgentVersionLifecycle(session, context).publish(
+                agent,
+                version_id,
+                expected_revision=expected_revision,
             )
-            version.status = transition_state(
-                "agent_version",
-                AgentVersionStatus(version.status),
-                AgentVersionStatus.PUBLISHED,
-                AGENT_VERSION_TRANSITIONS,
-            ).value
-            if agent.current_version_id is not None:
-                current = await self._agent_version(
-                    session,
-                    context,
-                    agent.id,
-                    agent.current_version_id,
-                    for_update=True,
-                )
-                current.status = transition_state(
-                    "agent_version",
-                    AgentVersionStatus(current.status),
-                    AgentVersionStatus.SUPERSEDED,
-                    AGENT_VERSION_TRANSITIONS,
-                ).value
-            agent.current_version_id = version.id
-            if AgentStatus(agent.status) in {AgentStatus.DRAFT, AgentStatus.ERROR}:
-                agent.status = transition_state(
-                    "agent", AgentStatus(agent.status), AgentStatus.READY, AGENT_TRANSITIONS
-                ).value
-            agent.revision += 1
-            self._record(
-                session,
-                context,
-                event_type="AgentVersionPublished",
-                aggregate_type="agent",
-                aggregate_id=agent.id,
-                action="agent_version.publish",
-                payload={"version_id": str(version.id), "version": version.version},
-            )
-            await session.flush()
-            return agent
 
     async def rollback_agent_version(
         self,
@@ -466,47 +379,11 @@ class ControlPlaneService:
     ) -> Agent:
         async with self.database.tenant_transaction(context) as session:
             agent = await self._agent(session, context, agent_id, for_update=True)
-            require_revision("agent", expected=expected_revision, actual=agent.revision)
-            if agent.current_version_id == version_id:
-                raise DomainConflict(
-                    "VERSION_ALREADY_ACTIVE", "the requested version is already active"
-                )
-            target = await self._agent_version(
-                session, context, agent.id, version_id, for_update=True
+            return await AgentVersionLifecycle(session, context).rollback(
+                agent,
+                version_id,
+                expected_revision=expected_revision,
             )
-            target.status = transition_state(
-                "agent_version",
-                AgentVersionStatus(target.status),
-                AgentVersionStatus.PUBLISHED,
-                AGENT_VERSION_TRANSITIONS,
-            ).value
-            if agent.current_version_id is not None:
-                current = await self._agent_version(
-                    session,
-                    context,
-                    agent.id,
-                    agent.current_version_id,
-                    for_update=True,
-                )
-                current.status = transition_state(
-                    "agent_version",
-                    AgentVersionStatus(current.status),
-                    AgentVersionStatus.SUPERSEDED,
-                    AGENT_VERSION_TRANSITIONS,
-                ).value
-            agent.current_version_id = target.id
-            agent.revision += 1
-            self._record(
-                session,
-                context,
-                event_type="AgentVersionRolledBack",
-                aggregate_type="agent",
-                aggregate_id=agent.id,
-                action="agent_version.rollback",
-                payload={"version_id": str(target.id), "version": target.version},
-            )
-            await session.flush()
-            return agent
 
     async def create_task(self, context: TenantContext, command: TaskCreate) -> Task:
         async with self.database.tenant_transaction(context) as session:
@@ -1163,45 +1040,3 @@ class ControlPlaneService:
         if for_update:
             statement = statement.with_for_update()
         return await self._one(session, statement, "run_step", step_id)
-
-    @staticmethod
-    def _new_version_runtime_provider(command: AgentVersionCreate) -> str:
-        if command.runtime_provider:
-            return command.runtime_provider
-        legacy_provider = command.run_config.get("runtime_provider")
-        if isinstance(legacy_provider, str) and legacy_provider.strip():
-            return legacy_provider.strip()
-        return "nico_native"
-
-    @staticmethod
-    def _version_hash(command: AgentVersionCreate, *, runtime_provider: str) -> str:
-        payload = command.model_dump(mode="json", by_alias=True)
-        payload["runtime_provider"] = runtime_provider
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        return hashlib.sha256(encoded).hexdigest()
-
-    @staticmethod
-    def _copy_version(source: AgentVersion, agent_id: UUID, *, version: int) -> AgentVersion:
-        return AgentVersion(
-            tenant_id=source.tenant_id,
-            agent_id=agent_id,
-            version=version,
-            role=source.role,
-            mandate=source.mandate,
-            boundaries=source.boundaries,
-            long_term_goal=source.long_term_goal,
-            current_goal=source.current_goal,
-            runtime_provider=source.runtime_provider,
-            execution_mode=source.execution_mode,
-            model_endpoint_id=source.model_endpoint_id,
-            model_name=source.model_name,
-            model_config_json=source.model_config_json,
-            tool_policy=source.tool_policy,
-            memory_policy=source.memory_policy,
-            skill_policy=source.skill_policy,
-            plugin_refs=source.plugin_refs,
-            coordination_policy=source.coordination_policy,
-            budgets=source.budgets,
-            run_config=source.run_config,
-            content_hash=source.content_hash,
-        )
