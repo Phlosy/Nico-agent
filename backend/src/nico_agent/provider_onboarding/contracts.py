@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -49,14 +50,26 @@ def _safe_text(value: str, *, maximum: int, field_name: str) -> str:
 
 def normalize_https_url(value: str) -> str:
     parsed = urlsplit(value.strip())
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    test_http = (
+        parsed.scheme == "http"
+        and parsed.hostname == "fake-model"
+        and os.getenv("NICO_PROVIDER_E2E_ALLOW_HTTP") == "true"
+        and os.getenv("NICO_ENVIRONMENT", "development") != "production"
+    )
+    if (
+        (parsed.scheme != "https" and not test_http)
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ValueError("service locations must be credential-free HTTPS URLs")
     if parsed.query or parsed.fragment:
         raise ValueError("service locations cannot include query or fragment data")
     hostname = parsed.hostname.lower().rstrip(".")
     port = f":{parsed.port}" if parsed.port and parsed.port != 443 else ""
     path = parsed.path.rstrip("/")
-    return urlunsplit(("https", f"{hostname}{port}", path, "", ""))
+    scheme = "http" if test_http else "https"
+    return urlunsplit((scheme, f"{hostname}{port}", path, "", ""))
 
 
 class FrozenContract(BaseModel):

@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,130 @@ class ChatRequest(BaseModel):
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _require_token(value: str | None) -> None:
+    expected = os.environ.get("NICO_FAKE_MODEL_TOKEN", "goal-g-fake-token")
+    if value != expected:
+        raise HTTPException(status_code=401, detail="invalid model credential")
+
+
+@app.get("/openai/v1/models")
+async def openai_models(authorization: str | None = Header(default=None)) -> dict:
+    expected = os.environ.get("NICO_FAKE_MODEL_TOKEN", "goal-g-fake-token")
+    if authorization != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid model credential")
+    return {"object": "list", "data": [{"id": "fake-openai", "object": "model"}]}
+
+
+@app.post("/openai/v1/chat/completions")
+async def onboarding_openai_chat(
+    command: ChatRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    return await chat_completions(command, authorization)
+
+
+@app.get("/anthropic/v1/models")
+async def anthropic_models(x_api_key: str | None = Header(default=None)) -> dict:
+    _require_token(x_api_key)
+    return {
+        "data": [{"id": "fake-anthropic", "display_name": "Fake Anthropic"}],
+        "has_more": False,
+    }
+
+
+@app.post("/anthropic/v1/messages")
+async def anthropic_messages(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+) -> StreamingResponse:
+    _require_token(x_api_key)
+    payload = await request.json()
+    if not payload.get("stream"):
+        raise HTTPException(status_code=400, detail="streaming is required")
+
+    async def chunks() -> AsyncIterator[str]:
+        events = (
+            {
+                "type": "message_start",
+                "message": {"usage": {"input_tokens": 4}},
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": "Nico Anthropic "},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "is ready."},
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 5},
+            },
+            {"type": "message_stop"},
+        )
+        for event in events:
+            yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        chunks(),
+        media_type="text/event-stream",
+        headers={"request-id": "nico-fake-anthropic-request"},
+    )
+
+
+@app.get("/gemini/v1beta/models")
+async def gemini_models(x_goog_api_key: str | None = Header(default=None)) -> dict:
+    _require_token(x_goog_api_key)
+    return {
+        "models": [
+            {
+                "name": "models/fake-gemini",
+                "displayName": "Fake Gemini",
+                "supportedGenerationMethods": ["generateContent"],
+            }
+        ]
+    }
+
+
+@app.post("/gemini/v1beta/models/{model}:streamGenerateContent")
+async def gemini_generate(
+    model: str,
+    x_goog_api_key: str | None = Header(default=None),
+) -> StreamingResponse:
+    _require_token(x_goog_api_key)
+    if model != "fake-gemini":
+        raise HTTPException(status_code=404, detail="model not found")
+
+    async def chunks() -> AsyncIterator[str]:
+        events = (
+            {"candidates": [{"content": {"parts": [{"text": "Nico Gemini "}]}}]},
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "is ready."}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 4,
+                    "candidatesTokenCount": 5,
+                    "totalTokenCount": 9,
+                },
+            },
+        )
+        for event in events:
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        chunks(),
+        media_type="text/event-stream",
+        headers={"x-request-id": "nico-fake-gemini-request"},
+    )
 
 
 @app.post("/v1/chat/completions")

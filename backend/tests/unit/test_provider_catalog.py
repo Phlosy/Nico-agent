@@ -46,6 +46,26 @@ def test_catalog_contains_the_versioned_safe_provider_baseline() -> None:
         assert "secret" not in provider.model_dump_json().lower()
 
 
+def test_catalog_can_route_supported_protocols_to_the_e2e_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NICO_PROVIDER_E2E_ALLOW_HTTP", "true")
+    monkeypatch.setenv("NICO_PROVIDER_E2E_BASE_URL", "http://fake-model:8100")
+
+    catalog = get_provider_catalog()
+    locations = {
+        provider.key: provider.locations[0].base_url
+        for provider in catalog.providers
+        if provider.key in {"openai", "anthropic", "google-gemini"}
+    }
+
+    assert locations == {
+        "openai": "http://fake-model:8100/openai/v1",
+        "anthropic": "http://fake-model:8100/anthropic",
+        "google-gemini": "http://fake-model:8100/gemini/v1beta",
+    }
+
+
 def test_catalog_rejects_duplicate_keys_and_unsafe_locations() -> None:
     provider = get_provider_catalog().providers[0]
     with pytest.raises(ValueError, match="duplicate provider key"):

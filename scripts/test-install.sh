@@ -468,6 +468,7 @@ assert re.search(r"pull_request:\s*\n\s+branches:\s*\[main\]", ci)
 assert "workflow_call:" in ci
 assert "scripts/test.sh" in ci
 assert "scripts/test-install.sh" in ci
+assert "scripts/e2e-provider-onboarding.sh" in ci
 assert "contents: write" not in ci
 assert "packages: write" not in ci
 

@@ -18,7 +18,7 @@ jobs:
   test:
     name: Backend, frontend, and installer contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -48,6 +48,9 @@ jobs:
       - name: Run installer and release contract tests
         run: scripts/test-install.sh
 
+      - name: Run deterministic Provider onboarding
+        run: scripts/e2e-provider-onboarding.sh
+
       - name: Lint GitHub Actions workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
@@ -56,7 +59,7 @@ jobs:
           npx --yes markdownlint-cli2@0.22.1
           README.md backend/README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
           docs/api.md docs/architecture.md docs/configuration.md
-          docs/domain-model.md docs/getting-started.md docs/installation.md
+          docs/cli.md docs/domain-model.md docs/getting-started.md docs/installation.md
           docs/memory-and-skill.md docs/repository-assessment.md docs/roadmap.md
           docs/runtime.md docs/security.md docs/state-machines.md docs/testing.md
           docs/tool-gateway.md docs/troubleshooting.md

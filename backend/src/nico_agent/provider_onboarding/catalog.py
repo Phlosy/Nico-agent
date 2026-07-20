@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from nico_agent.provider_onboarding.contracts import (
     ProviderCatalog,
     ProviderLocation,
@@ -152,4 +154,32 @@ CATALOG = ProviderCatalog(
 
 
 def get_provider_catalog() -> ProviderCatalog:
+    base_url = os.getenv("NICO_PROVIDER_E2E_BASE_URL")
+    if (
+        base_url
+        and os.getenv("NICO_PROVIDER_E2E_ALLOW_HTTP") == "true"
+        and os.getenv("NICO_ENVIRONMENT", "development") != "production"
+    ):
+        suffixes = {
+            "openai": "/openai/v1",
+            "anthropic": "/anthropic",
+            "google-gemini": "/gemini/v1beta",
+        }
+        providers = tuple(
+            provider.model_copy(
+                update={
+                    "locations": (
+                        _location(
+                            "e2e",
+                            "Deterministic E2E",
+                            f"{base_url.rstrip('/')}{suffixes[provider.key]}",
+                        ),
+                    )
+                }
+            )
+            if provider.key in suffixes
+            else provider
+            for provider in CATALOG.providers
+        )
+        return CATALOG.model_copy(update={"providers": providers})
     return CATALOG
