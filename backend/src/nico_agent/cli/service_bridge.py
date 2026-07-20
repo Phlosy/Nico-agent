@@ -65,15 +65,23 @@ class ServiceBridge:
         command, install_root = self._attested_command()
         environment = dict(os.environ)
         environment["NICO_HOME"] = str(install_root)
-        completed = subprocess.run(
-            [str(command), "provider-secret", action],
-            input=json.dumps(payload, separators=(",", ":")),
-            text=True,
-            capture_output=True,
-            env=environment,
-            shell=False,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [str(command), "provider-secret", action],
+                input=json.dumps(payload, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                env=environment,
+                shell=False,
+                check=False,
+                timeout=360 if action == "begin" else 45,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CliError(
+                "LOCAL_SERVICE_UNAVAILABLE",
+                "the local Nico service operation timed out",
+                exit_code=3,
+            ) from exc
         try:
             response = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -95,4 +96,18 @@ def test_bridge_reports_missing_local_profile_without_subprocess() -> None:
     )
     with pytest.raises(CliError) as captured:
         ServiceBridge(profile).recover()
+    assert captured.value.code == "LOCAL_SERVICE_UNAVAILABLE"
+
+
+def test_bridge_bounds_service_subprocess_time(tmp_path: Path, monkeypatch) -> None:
+    root = _installation(tmp_path)
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["nico-service"], 45)
+
+    monkeypatch.setattr("subprocess.run", timeout)
+
+    with pytest.raises(CliError) as captured:
+        ServiceBridge(_profile(root)).recover()
+
     assert captured.value.code == "LOCAL_SERVICE_UNAVAILABLE"

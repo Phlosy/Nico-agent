@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +14,7 @@ from nico_agent.database import Database, ProviderProbeClaim, TenantContext
 from nico_agent.domain.errors import DomainError
 from nico_agent.domain.models import AuditRecord, ProviderProbe
 from nico_agent.models import ModelDiscoveryRequest, ModelGateway, ModelMessage, ModelRequest
+from nico_agent.models.errors import ModelProviderError
 from nico_agent.models.http_safety import clean_external_text
 
 
@@ -24,15 +26,24 @@ class ProviderProbeWorker:
         *,
         worker_id: str,
         lease_seconds: int = 90,
+        execution_timeout_seconds: float | None = None,
     ) -> None:
         if not worker_id or len(worker_id) > 200:
             raise ValueError("worker_id must contain between 1 and 200 characters")
         if lease_seconds < 30 or lease_seconds > 3600:
             raise ValueError("lease_seconds must be between 30 and 3600")
+        timeout = (
+            min(60.0, lease_seconds * 2 / 3)
+            if execution_timeout_seconds is None
+            else execution_timeout_seconds
+        )
+        if timeout <= 0 or timeout >= lease_seconds:
+            raise ValueError("execution timeout must be positive and shorter than the lease")
         self.database = database
         self.model_gateway = model_gateway
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
+        self.execution_timeout_seconds = timeout
 
     async def execute_once(self) -> bool:
         claim = await self.database.claim_next_provider_probe(
@@ -51,7 +62,7 @@ class ProviderProbeWorker:
         if snapshot is None:
             return True
         try:
-            result, verified = await self._execute(snapshot)
+            result, verified = await self._execute_bounded(snapshot)
         except Exception as exc:
             await self._finish(
                 context,
@@ -74,6 +85,16 @@ class ProviderProbeWorker:
                 verified=verified,
             )
         return True
+
+    async def _execute_bounded(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        try:
+            async with asyncio.timeout(self.execution_timeout_seconds):
+                return await self._execute(snapshot)
+        except TimeoutError as exc:
+            raise ModelProviderError(
+                "MODEL_PROVIDER_TIMEOUT",
+                "Provider probe exceeded its execution deadline.",
+            ) from exc
 
     async def _load_snapshot(
         self,

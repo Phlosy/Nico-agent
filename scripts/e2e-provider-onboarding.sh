@@ -51,6 +51,16 @@ request() {
   curl "${args[@]}" "$@" --output "$output" "$API_BASE$path"
 }
 
+request_status() {
+  local method="$1" path="$2" body="$3" output="$4"
+  shift 4
+  local args=(--silent --show-error --request "$method")
+  if [[ -n "$body" ]]; then
+    args+=(--header "Content-Type: application/json" --data "$body")
+  fi
+  curl "${args[@]}" "$@" --output "$output" --write-out '%{http_code}' "$API_BASE$path"
+}
+
 log "starting deterministic Provider model, API, and Native Worker"
 "${COMPOSE[@]}" --profile goal-g up --detach --build fake-model api worker
 wait_for_service_health fake-model
@@ -94,6 +104,15 @@ for round in 1 2; do
       > "$prefix-config-output.json"
     "$CLI" --config-file "$config_file" --json config use e2e \
       > "$prefix-config-use.json"
+    if "$CLI" --config-file "$config_file" --json provider add "$provider" \
+      --credential-ref env:NICO_MODEL_SECRET_GOAL_G \
+      --project "$project_id" --starter-name "discovery-$provider-$round" \
+      --starter-display-name "Discovery $provider $round" --yes \
+      > "$prefix-discovery.stdout" 2> "$prefix-discovery.stderr"; then
+      die "non-interactive Provider discovery accepted a missing model choice"
+    fi
+    grep -q 'PROVIDER_MODEL_REQUIRED' "$prefix-discovery.stderr" || die \
+      "Provider discovery did not return the stable explicit-model requirement"
     "$CLI" --config-file "$config_file" --json provider add "$provider" \
       --credential-ref env:NICO_MODEL_SECRET_GOAL_G \
       --model "$model" --project "$project_id" \
@@ -119,6 +138,69 @@ assert probe["status"] == "succeeded" and probe["verified_at"]
 assert chat["turn"]["run_status"] == "completed"
 assert chat["turn"]["assistant_output"]["content"]
 PY
+
+    if [[ "$round" == 1 ]]; then
+      agent_revision="$(json_path "$prefix-activation.json" activation agent_revision)"
+      "$CLI" --config-file "$config_file" --json provider configure "$provider" \
+        --credential-ref env:NICO_MODEL_SECRET_GOAL_G \
+        --model "$model" --project "$project_id" --agent "$agent_id" \
+        --agent-revision "$agent_revision" --yes \
+        > "$prefix-rotation.json"
+      python3 - "$prefix-activation.json" "$prefix-rotation.json" <<'PY'
+import json
+import sys
+
+initial, rotated = (json.load(open(path)) for path in sys.argv[1:])
+assert rotated["activation"]["agent_id"] == initial["activation"]["agent_id"]
+assert rotated["activation"]["agent_version"] > initial["activation"]["agent_version"]
+assert rotated["activation"]["endpoint_reused"] is True
+PY
+    fi
+
+    if [[ "$round" == 1 && "$provider" == "openai" ]]; then
+      log "checking active Run maintenance refusal"
+      run_id="$(json_path "$prefix-chat.json" turn run_id)"
+      "${COMPOSE[@]}" stop worker >/dev/null
+      "${COMPOSE[@]}" exec -T postgres psql \
+        -U "${POSTGRES_USER:-nico}" -d "${POSTGRES_DB:-nico_agent}" \
+        -c "UPDATE runs SET status = 'pending' WHERE id = '$run_id'::uuid" >/dev/null
+      attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+      if printf '%s' "{\"attempt_id\":\"$attempt_id\",\"lease_seconds\":300}" | \
+        "${COMPOSE[@]}" exec -T api python -m nico_agent.local_control acquire \
+        > "$TMP_DIR/active-run-maintenance.json" 2>/dev/null; then
+        maintenance_token="$(json_path "$TMP_DIR/active-run-maintenance.json" token)"
+        printf '%s' "{\"attempt_id\":\"$attempt_id\",\"token\":\"$maintenance_token\"}" | \
+          "${COMPOSE[@]}" exec -T api python -m nico_agent.local_control release \
+          >/dev/null 2>&1 || true
+        die "Provider maintenance started while a Run was active"
+      fi
+      grep -q 'RUNTIME_MAINTENANCE_ACTIVE_RUNS' \
+        "$TMP_DIR/active-run-maintenance.json" || die \
+        "active Run maintenance refusal did not use the stable error code"
+      "${COMPOSE[@]}" exec -T postgres psql \
+        -U "${POSTGRES_USER:-nico}" -d "${POSTGRES_DB:-nico_agent}" \
+        -c "UPDATE runs SET status = 'completed' WHERE id = '$run_id'::uuid" >/dev/null
+      "${COMPOSE[@]}" --profile goal-g up --detach worker >/dev/null
+      wait_for_service_health worker
+
+      log "checking failed activation preserves the current route"
+      probe_id="$(json_path "$prefix-test.json" id)"
+      candidate_hash="$(json_path "$prefix-test.json" candidate_hash)"
+      current_revision="$(json_path "$prefix-rotation.json" activation agent_revision)"
+      preview_body="{\"probe_id\":\"$probe_id\",\"candidate_hash\":\"$candidate_hash\",\"target\":{\"project_id\":\"$project_id\",\"agent_id\":\"$agent_id\",\"expected_agent_revision\":$current_revision}}"
+      request POST /api/v1/provider-activation/preview "$preview_body" \
+        "$TMP_DIR/failure-preview.json" "${headers[@]}"
+      failure_body="{\"probe_id\":\"$probe_id\",\"candidate_hash\":\"$candidate_hash\",\"preview_hash\":\"$(printf '0%.0s' {1..64})\",\"target\":{\"project_id\":\"$project_id\",\"agent_id\":\"$agent_id\",\"expected_agent_revision\":$current_revision}}"
+      status="$(request_status POST /api/v1/provider-activation "$failure_body" \
+        "$TMP_DIR/failure-activation.json" "${headers[@]}")"
+      [[ "$status" == 409 ]] || die "stale Provider activation was not rejected"
+      "$CLI" --config-file "$config_file" --json chat \
+        "Confirm the previous route survived failed activation." \
+        --project "$project_id" --agent "$agent_id" \
+        > "$TMP_DIR/post-failure-chat.json"
+      [[ "$(json_path "$TMP_DIR/post-failure-chat.json" turn run_status)" == "completed" ]] || \
+        die "failed Provider activation damaged the previous route"
+    fi
   done
 done
 

@@ -16,6 +16,11 @@ from typing import Any
 from uuid import UUID
 
 _ENV_NAME = re.compile(r"^NICO_MODEL_SECRET_[A-Z0-9_]{1,100}$")
+_MAINTENANCE_LEASE_SECONDS = 300
+_MAINTENANCE_RENEW_INTERVAL_SECONDS = 30
+_WORKER_RESTART_TIMEOUT_SECONDS = 120
+_CONTROL_TIMEOUT_SECONDS = 30
+_INSPECT_TIMEOUT_SECONDS = 10
 
 
 class LocalSecretError(Exception):
@@ -81,7 +86,10 @@ class LocalSecretTransaction:
             )
         acquired = self._local_control(
             "acquire",
-            {"attempt_id": str(attempt_id), "lease_seconds": 120},
+            {
+                "attempt_id": str(attempt_id),
+                "lease_seconds": _MAINTENANCE_LEASE_SECONDS,
+            },
             allow_failure=True,
         )
         if not acquired.get("ok"):
@@ -106,7 +114,7 @@ class LocalSecretTransaction:
             self._write_env(self.secret_file, values)
             journal["phase"] = "staged"
             self._write_json(self.journal_file, journal)
-            self._restart_native_worker()
+            self._restart_native_worker(journal)
         except Exception:
             self._rollback_journal(journal, strict=False)
             raise
@@ -121,12 +129,16 @@ class LocalSecretTransaction:
 
     def _renew(self, request: dict[str, Any]) -> dict[str, Any]:
         journal = self._required_journal(request)
+        self._renew_journal(journal)
+        return {"ok": True, "attempt_id": journal["attempt_id"]}
+
+    def _renew_journal(self, journal: dict[str, Any]) -> None:
         response = self._local_control(
             "renew",
             {
                 "attempt_id": journal["attempt_id"],
                 "token": journal["token"],
-                "lease_seconds": 120,
+                "lease_seconds": _MAINTENANCE_LEASE_SECONDS,
             },
             allow_failure=True,
         )
@@ -135,7 +147,6 @@ class LocalSecretTransaction:
                 "RUNTIME_MAINTENANCE_LEASE_LOST",
                 "Provider maintenance lease could not be renewed",
             )
-        return {"ok": True, "attempt_id": journal["attempt_id"]}
 
     def _commit(self, request: dict[str, Any]) -> dict[str, Any]:
         if not self.journal_file.exists():
@@ -185,7 +196,7 @@ class LocalSecretTransaction:
         restart_error: Exception | None = None
         if removed:
             try:
-                self._restart_native_worker()
+                self._restart_native_worker(journal)
             except Exception as exc:
                 restart_error = exc
         released = self._local_control(
@@ -196,6 +207,11 @@ class LocalSecretTransaction:
         if restart_error is None and (released.get("ok") or not strict):
             self.journal_file.unlink(missing_ok=True)
         if restart_error is not None:
+            if (
+                isinstance(restart_error, LocalSecretError)
+                and restart_error.code == "RUNTIME_MAINTENANCE_LEASE_LOST"
+            ):
+                raise restart_error
             raise LocalSecretError(
                 "LOCAL_SECRET_WORKER_UNHEALTHY",
                 "Native Worker did not recover after Provider secret rollback",
@@ -245,22 +261,29 @@ class LocalSecretTransaction:
         *,
         allow_failure: bool,
     ) -> dict[str, Any]:
-        completed = subprocess.run(
-            [
-                *self._compose_command(),
-                "exec",
-                "-T",
-                "api",
-                "python",
-                "-m",
-                "nico_agent.local_control",
-                action,
-            ],
-            input=json.dumps(payload, separators=(",", ":")),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    *self._compose_command(),
+                    "exec",
+                    "-T",
+                    "api",
+                    "python",
+                    "-m",
+                    "nico_agent.local_control",
+                    action,
+                ],
+                input=json.dumps(payload, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=_CONTROL_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LocalSecretError(
+                "LOCAL_CONTROL_UNAVAILABLE",
+                "local maintenance control timed out",
+            ) from exc
         try:
             response = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
@@ -280,34 +303,47 @@ class LocalSecretTransaction:
             )
         return response
 
-    def _restart_native_worker(self) -> None:
-        completed = subprocess.run(
-            [
-                *self._compose_command(),
-                "--profile",
-                "native",
-                "up",
-                "--detach",
-                "--no-deps",
-                "--force-recreate",
-                "worker",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    def _restart_native_worker(self, journal: dict[str, Any]) -> None:
+        self._renew_journal(journal)
+        try:
+            completed = subprocess.run(
+                [
+                    *self._compose_command(),
+                    "--profile",
+                    "native",
+                    "up",
+                    "--detach",
+                    "--no-deps",
+                    "--force-recreate",
+                    "worker",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_WORKER_RESTART_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LocalSecretError(
+                "LOCAL_SECRET_WORKER_UNHEALTHY",
+                "Native Worker recreation timed out",
+            ) from exc
         if completed.returncode:
             raise LocalSecretError(
                 "LOCAL_SECRET_WORKER_UNHEALTHY",
                 "Native Worker recreation failed",
             )
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + _WORKER_RESTART_TIMEOUT_SECONDS
+        renew_at = time.monotonic() + _MAINTENANCE_RENEW_INTERVAL_SECONDS
         while time.monotonic() < deadline:
+            if time.monotonic() >= renew_at:
+                self._renew_journal(journal)
+                renew_at = time.monotonic() + _MAINTENANCE_RENEW_INTERVAL_SECONDS
             container = subprocess.run(
                 [*self._compose_command(), "ps", "--quiet", "worker"],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=_INSPECT_TIMEOUT_SECONDS,
             ).stdout.strip()
             if container:
                 status_result = subprocess.run(
@@ -315,6 +351,7 @@ class LocalSecretTransaction:
                     capture_output=True,
                     text=True,
                     check=False,
+                    timeout=_INSPECT_TIMEOUT_SECONDS,
                 )
                 status = status_result.stdout.strip()
                 if status_result.returncode == 0 and status == "healthy":

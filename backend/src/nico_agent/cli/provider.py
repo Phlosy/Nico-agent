@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from nico_agent.cli.service_bridge import SecretAttempt, ServiceBridge
 _REFERENCE = re.compile(
     r"^(?:env:NICO_MODEL_SECRET_[A-Z0-9_]{1,100}|secret:[A-Za-z0-9._:/-]{1,240})$"
 )
+_LEASE_KEEPER_STOP_TIMEOUT_SECONDS = 46
 
 
 @dataclass(slots=True)
@@ -34,6 +36,45 @@ class ProviderInput:
     confirmed: bool = False
 
 
+class _MaintenanceLeaseKeeper:
+    def __init__(
+        self,
+        bridge: ServiceBridge,
+        attempt: SecretAttempt,
+        *,
+        interval_seconds: float,
+    ) -> None:
+        self.bridge = bridge
+        self.attempt = attempt
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._failure: CliError | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="nico-provider-maintenance",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def check(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=_LEASE_KEEPER_STOP_TIMEOUT_SECONDS)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                self.bridge.renew(self.attempt)
+            except CliError as exc:
+                self._failure = exc
+                self._stop.set()
+
+
 class ProviderOnboardingCoordinator:
     def __init__(
         self,
@@ -46,7 +87,10 @@ class ProviderOnboardingCoordinator:
         confirm: Callable[..., bool],
         poll_interval: float = 1.0,
         timeout_seconds: float = 90.0,
+        renew_interval_seconds: float = 30.0,
     ) -> None:
+        if renew_interval_seconds <= 0:
+            raise ValueError("renew interval must be positive")
         self.client = client
         self.output = output
         self.service_bridge = service_bridge
@@ -55,12 +99,15 @@ class ProviderOnboardingCoordinator:
         self.confirm = confirm
         self.poll_interval = poll_interval
         self.timeout_seconds = timeout_seconds
+        self.renew_interval_seconds = renew_interval_seconds
 
     def onboard(self, values: ProviderInput) -> dict[str, Any]:
         catalog = self._catalog()
         provider = self._provider(catalog, values.provider_key)
         base_url = self._location(provider, values.location_key)
         attempt: SecretAttempt | None = None
+        keeper: _MaintenanceLeaseKeeper | None = None
+        published = False
         committed = False
         try:
             credential_ref = values.credential_ref
@@ -87,11 +134,19 @@ class ProviderOnboardingCoordinator:
                         )
                     env_name = self._new_env_name(provider["key"])
                     attempt = self.service_bridge.begin(env_name, secret)
+                    keeper = _MaintenanceLeaseKeeper(
+                        self.service_bridge,
+                        attempt,
+                        interval_seconds=self.renew_interval_seconds,
+                    )
+                    keeper.start()
                     secret = ""
                     credential_ref = attempt.credential_ref
                 else:
                     credential_ref = selection
             self._validate_reference(credential_ref)
+            if keeper is not None:
+                keeper.check()
 
             model = values.model or self._discover_or_recommend(
                 provider,
@@ -99,7 +154,6 @@ class ProviderOnboardingCoordinator:
                 base_url=base_url,
                 credential_ref=credential_ref,
                 provider_options=values.provider_options,
-                attempt=attempt,
             )
             candidate = self._candidate(
                 provider,
@@ -109,7 +163,9 @@ class ProviderOnboardingCoordinator:
                 model=model,
                 provider_options=values.provider_options,
             )
-            verified = self._probe("verify_completion", candidate, attempt=attempt)
+            verified = self._probe("verify_completion", candidate)
+            if keeper is not None:
+                keeper.check()
             if verified.get("status") != "succeeded" or not verified.get("verified_at"):
                 raise CliError(
                     str(verified.get("error_code") or "PROVIDER_VERIFICATION_FAILED"),
@@ -134,8 +190,8 @@ class ProviderOnboardingCoordinator:
                     "Provider activation was not confirmed",
                     exit_code=2,
                 )
-            if attempt is not None:
-                self.service_bridge.renew(attempt)
+            if keeper is not None:
+                keeper.check()
             activated = self.client.activate_provider(
                 probe_id=str(verified["id"]),
                 candidate_hash=str(verified["candidate_hash"]),
@@ -143,7 +199,10 @@ class ProviderOnboardingCoordinator:
                 preview_hash=str(preview["preview_hash"]),
                 maintenance_attempt_id=attempt.attempt_id if attempt else None,
             )
+            published = True
             if attempt is not None:
+                if keeper is not None:
+                    keeper.stop()
                 self.service_bridge.commit(attempt)
                 committed = True
             return {
@@ -156,7 +215,9 @@ class ProviderOnboardingCoordinator:
                 ),
             }
         finally:
-            if attempt is not None and not committed:
+            if keeper is not None:
+                keeper.stop()
+            if attempt is not None and not committed and not published:
                 try:
                     self.service_bridge.rollback(attempt)
                 except CliError:
@@ -195,7 +256,7 @@ class ProviderOnboardingCoordinator:
             "provider_options": connection.get("provider_options") or {},
             "catalog_revision": connection["catalog_revision"],
         }
-        return self._probe("verify_completion", candidate, attempt=None)
+        return self._probe("verify_completion", candidate)
 
     def _catalog(self) -> dict[str, Any]:
         catalog = self.client.provider_catalog()
@@ -263,7 +324,6 @@ class ProviderOnboardingCoordinator:
         base_url: str,
         credential_ref: str,
         provider_options: dict[str, Any],
-        attempt: SecretAttempt | None,
     ) -> str:
         models: list[str] = []
         if provider.get("discovery") != "curated":
@@ -275,7 +335,7 @@ class ProviderOnboardingCoordinator:
                 model=None,
                 provider_options=provider_options,
             )
-            discovered = self._probe("discover_models", candidate, attempt=attempt)
+            discovered = self._probe("discover_models", candidate)
             if discovered.get("status") == "succeeded":
                 models = [
                     str(item["id"])
@@ -382,8 +442,6 @@ class ProviderOnboardingCoordinator:
         self,
         kind: str,
         candidate: dict[str, Any],
-        *,
-        attempt: SecretAttempt | None,
     ) -> dict[str, Any]:
         created = self.client.create_provider_probe(
             kind=kind,
@@ -391,7 +449,6 @@ class ProviderOnboardingCoordinator:
             idempotency_key=f"cli-{kind}-{uuid4().hex}",
         )
         deadline = time.monotonic() + self.timeout_seconds
-        last_renewal = time.monotonic()
         current = created
         while current.get("status") in {"pending", "running"}:
             if time.monotonic() >= deadline:
@@ -404,9 +461,6 @@ class ProviderOnboardingCoordinator:
                     "Provider verification timed out",
                     exit_code=4,
                 )
-            if attempt is not None and time.monotonic() - last_renewal >= 30:
-                self.service_bridge.renew(attempt)
-                last_renewal = time.monotonic()
             time.sleep(self.poll_interval)
             current = self.client.get_provider_probe(str(current["id"]))
         return current

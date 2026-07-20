@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -86,12 +87,15 @@ class FakeClient:
 
 
 class FakeBridge:
-    def __init__(self) -> None:
+    def __init__(self, *, renew_error: bool = False, commit_error: bool = False) -> None:
+        self.renew_error = renew_error
+        self.commit_error = commit_error
         self.recovered = 0
         self.begun: list[tuple[str, str]] = []
         self.renewed = 0
         self.committed = 0
         self.rolled_back = 0
+        self.renew_event = threading.Event()
 
     def recover(self):
         self.recovered += 1
@@ -102,15 +106,28 @@ class FakeBridge:
 
     def renew(self, _attempt):
         self.renewed += 1
+        self.renew_event.set()
+        if self.renew_error:
+            raise CliError("RUNTIME_MAINTENANCE_LEASE_LOST", "lease lost", exit_code=4)
 
     def commit(self, _attempt):
         self.committed += 1
+        if self.commit_error:
+            raise CliError("RUNTIME_MAINTENANCE_LEASE_LOST", "release failed", exit_code=4)
 
     def rollback(self, _attempt):
         self.rolled_back += 1
 
 
-def _coordinator(client, bridge, *, interactive=False, answers=()):
+def _coordinator(
+    client,
+    bridge,
+    *,
+    interactive=False,
+    answers=(),
+    confirm=None,
+    renew_interval_seconds=30.0,
+):
     iterator = iter(answers)
     return ProviderOnboardingCoordinator(
         client,
@@ -118,8 +135,9 @@ def _coordinator(client, bridge, *, interactive=False, answers=()):
         service_bridge=bridge,
         interactive=interactive,
         prompt=lambda *_args, **_kwargs: next(iterator),
-        confirm=lambda *_args, **_kwargs: True,
+        confirm=confirm or (lambda *_args, **_kwargs: True),
         poll_interval=0,
+        renew_interval_seconds=renew_interval_seconds,
     )
 
 
@@ -178,3 +196,86 @@ def test_non_interactive_flow_requires_reference_model_target_and_confirmation()
     with pytest.raises(CliError) as captured:
         _coordinator(FakeClient(), FakeBridge()).onboard(ProviderInput(provider_key="openai"))
     assert captured.value.code == "PROVIDER_INPUT_REQUIRED"
+
+
+def test_local_key_renews_maintenance_while_confirmation_is_open() -> None:
+    client = FakeClient()
+    bridge = FakeBridge()
+    coordinator = _coordinator(
+        client,
+        bridge,
+        interactive=True,
+        answers=("key", "sk-unit-canary"),
+        confirm=lambda *_args, **_kwargs: bridge.renew_event.wait(1),
+        renew_interval_seconds=0.01,
+    )
+
+    result = coordinator.onboard(
+        ProviderInput(
+            provider_key="openai",
+            model="model-a",
+            project_id="project-1",
+            starter_agent_name="assistant-three",
+            starter_agent_display_name="Assistant Three",
+        )
+    )
+
+    assert result["status"] == "ready"
+    assert bridge.renewed >= 1
+    assert bridge.committed == 1
+    assert bridge.rolled_back == 0
+
+
+def test_lease_renewal_loss_before_activation_rolls_back() -> None:
+    client = FakeClient()
+    bridge = FakeBridge(renew_error=True)
+    coordinator = _coordinator(
+        client,
+        bridge,
+        interactive=True,
+        answers=("key", "sk-unit-canary"),
+        confirm=lambda *_args, **_kwargs: bridge.renew_event.wait(1),
+        renew_interval_seconds=0.01,
+    )
+
+    with pytest.raises(CliError) as captured:
+        coordinator.onboard(
+            ProviderInput(
+                provider_key="openai",
+                model="model-a",
+                project_id="project-1",
+                starter_agent_name="assistant-four",
+                starter_agent_display_name="Assistant Four",
+            )
+        )
+
+    assert captured.value.code == "RUNTIME_MAINTENANCE_LEASE_LOST"
+    assert bridge.committed == 0
+    assert bridge.rolled_back == 1
+
+
+def test_commit_release_failure_after_activation_preserves_published_secret() -> None:
+    client = FakeClient()
+    bridge = FakeBridge(commit_error=True)
+    coordinator = _coordinator(
+        client,
+        bridge,
+        interactive=True,
+        answers=("key", "sk-unit-canary"),
+    )
+
+    with pytest.raises(CliError) as captured:
+        coordinator.onboard(
+            ProviderInput(
+                provider_key="openai",
+                model="model-a",
+                project_id="project-1",
+                starter_agent_name="assistant-five",
+                starter_agent_display_name="Assistant Five",
+                confirmed=True,
+            )
+        )
+
+    assert captured.value.code == "RUNTIME_MAINTENANCE_LEASE_LOST"
+    assert bridge.committed == 1
+    assert bridge.rolled_back == 0

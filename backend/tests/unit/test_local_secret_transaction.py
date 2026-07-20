@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,7 +27,8 @@ class FakeTransaction(LocalSecretTransaction):
             }
         return {"ok": True}
 
-    def _restart_native_worker(self) -> None:
+    def _restart_native_worker(self, journal) -> None:
+        self._renew_journal(journal)
         self.restarts += 1
 
 
@@ -66,7 +68,7 @@ def test_secret_transaction_commits_without_copying_secret_to_journal(
 
     assert not transaction.journal_file.exists()
     assert "sk-canary-value" in transaction.secret_file.read_text()
-    assert transaction.control_actions == ["acquire", "release"]
+    assert transaction.control_actions == ["acquire", "renew", "release"]
 
 
 def test_rollback_removes_only_attempt_owned_secret(transaction: FakeTransaction) -> None:
@@ -149,3 +151,52 @@ def test_secret_transaction_rejects_writable_configuration_directory(
 
     with pytest.raises(LocalSecretError, match="owner-only"):
         transaction.execute("recover", {})
+
+
+def test_worker_restart_renews_maintenance_during_health_wait(
+    transaction: FakeTransaction,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statuses = iter(["starting", "healthy"])
+
+    def fake_run(command, **_kwargs):
+        if "--force-recreate" in command:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "inspect" in command:
+            return subprocess.CompletedProcess(command, 0, next(statuses), "")
+        return subprocess.CompletedProcess(command, 0, "worker-container", "")
+
+    monkeypatch.setattr(
+        "nico_agent.local_secret_transaction._MAINTENANCE_RENEW_INTERVAL_SECONDS",
+        0,
+    )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    LocalSecretTransaction._restart_native_worker(
+        transaction,
+        {
+            "attempt_id": str(uuid4()),
+            "token": "maintenance-token-" + "x" * 32,
+        },
+    )
+
+    assert transaction.control_actions.count("renew") >= 3
+
+
+def test_local_control_timeout_returns_stable_error(
+    transaction: FakeTransaction,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["docker", "compose"], 30)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+
+    with pytest.raises(LocalSecretError) as captured:
+        LocalSecretTransaction._local_control(
+            transaction,
+            "renew",
+            {"attempt_id": str(uuid4()), "token": "x" * 40},
+            allow_failure=True,
+        )
+
+    assert captured.value.code == "LOCAL_CONTROL_UNAVAILABLE"
