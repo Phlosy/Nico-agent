@@ -42,6 +42,8 @@ from nico_agent.domain.states import (
     PlanStatus,
     PlanStepStatus,
     ProjectStatus,
+    ProviderProbeKind,
+    ProviderProbeStatus,
     RunStatus,
     RunStepStatus,
     RuntimeEvaluationStatus,
@@ -1089,10 +1091,20 @@ class ModelEndpoint(Base, TimestampMixin):
     __tablename__ = "model_endpoints"
     __table_args__ = (
         CheckConstraint("status IN ('active', 'disabled')", name="ck_model_endpoints_status"),
-        CheckConstraint("protocol IN ('openai_compatible')", name="ck_model_endpoints_protocol"),
+        CheckConstraint(
+            "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini')",
+            name="ck_model_endpoints_protocol",
+        ),
         CheckConstraint("revision > 0", name="ck_model_endpoints_revision"),
         ForeignKeyConstraint(
             ["tenant_id"], ["tenants.id"], ondelete="RESTRICT", name="fk_model_endpoints_tenant"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "verified_probe_id"],
+            ["provider_probes.tenant_id", "provider_probes.id"],
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_model_endpoints_verified_probe",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_model_endpoints_tenant_id_id"),
         UniqueConstraint(
@@ -1113,6 +1125,13 @@ class ModelEndpoint(Base, TimestampMixin):
     )
     base_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     credential_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    provider_key: Mapped[str] = mapped_column(String(120), nullable=False, server_default="custom")
+    catalog_revision: Mapped[str | None] = mapped_column(String(64))
+    provider_options: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    verified_probe_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=ModelEndpointStatus.ACTIVE.value
     )
@@ -1121,6 +1140,81 @@ class ModelEndpoint(Base, TimestampMixin):
     rate_limit: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     tls_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+
+
+class ProviderProbe(Base, TimestampMixin):
+    __tablename__ = "provider_probes"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('discover_models', 'verify_completion')",
+            name="ck_provider_probes_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled', 'activated')",
+            name="ck_provider_probes_status",
+        ),
+        CheckConstraint(
+            "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini')",
+            name="ck_provider_probes_protocol",
+        ),
+        CheckConstraint("length(candidate_hash) = 64", name="ck_provider_probes_hash"),
+        CheckConstraint("attempt >= 0", name="ck_provider_probes_attempt"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            ondelete="RESTRICT",
+            name="fk_provider_probes_tenant",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_provider_probes_tenant_id_id"),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_provider_probes_idempotency"),
+        Index(
+            "ix_provider_probes_claimable",
+            "status",
+            "lease_expires_at",
+            "created_at",
+        ),
+        Index(
+            "ix_provider_probes_tenant_provider",
+            "tenant_id",
+            "provider_key",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ProviderProbeKind.VERIFY_COMPLETION.value
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ProviderProbeStatus.PENDING.value
+    )
+    provider_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    protocol: Mapped[str] = mapped_column(String(50), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    credential_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    provider_options: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    model_name: Mapped[str | None] = mapped_column(String(200))
+    catalog_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(String(500))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    worker_id: Mapped[str | None] = mapped_column(String(200))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activation_correlation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
 class ContextSnapshot(Base):

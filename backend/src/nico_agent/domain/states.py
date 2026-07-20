@@ -102,6 +102,20 @@ class ModelEndpointStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class ProviderProbeKind(StrEnum):
+    DISCOVER_MODELS = "discover_models"
+    VERIFY_COMPLETION = "verify_completion"
+
+
+class ProviderProbeStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    ACTIVATED = "activated"
+
+
 class ModelCallStatus(StrEnum):
     PENDING = "pending"
     STREAMING = "streaming"

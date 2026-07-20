@@ -43,6 +43,11 @@ class ModelEndpointRead(FromAttributesModel):
     protocol: str
     base_url: str
     credential_ref: str
+    provider_key: str
+    catalog_revision: str | None
+    provider_options: dict[str, Any]
+    verified_probe_id: UUID | None
+    verified_at: datetime | None
     status: str
     allowed_models: list[str]
     capabilities: dict[str, Any]
