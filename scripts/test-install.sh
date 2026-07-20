@@ -116,6 +116,11 @@ DRY_RUN="$({
 assert_contains "$DRY_RUN" "version=v0.2.0" "dry-run version"
 assert_contains "$DRY_RUN" "runtime=hermes" "dry-run runtime"
 assert_contains "$DRY_RUN" "start=false" "dry-run no-start"
+assert_contains "$DRY_RUN" "demo=false" "dry-run does not claim a ready Demo route"
+assert_contains "$(bash "$ROOT_DIR/scripts/install.sh" --help)" "--demo" \
+  "installer explicit Demo option"
+grep -q "nico setup" "$ROOT_DIR/scripts/install.sh" || fail \
+  "installer does not print the guided Provider next step"
 if ! LOCAL_DRY_RUN="$({
   NICO_HOME="$TMP_DIR/local-nico-home" bash "$ROOT_DIR/scripts/install.sh" \
     --dry-run --local-images --version v0.2.0 --bundle "$TMP_DIR/unused-bundle.tar.gz" \

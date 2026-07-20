@@ -55,6 +55,13 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | `OPENAI_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
 | `ANTHROPIC_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
 | `NICO_MODEL_ENDPOINT_WRITES_ENABLED` | `false` | Enable trusted-control-plane model endpoint writes; Compose development defaults to `true` |
+| `NICO_MODEL_SECRETS_FILE` | `./config/model-secrets.env` | Owner-only env file mounted only into the Native Worker for guided Provider setup |
+
+交互式 Provider 向导不要求手工编辑这些变量。Release 安装会把
+`NICO_MODEL_SECRETS_FILE` 写成安装目录中的绝对路径，并建立 `0600` 空文件；
+`nico setup` 只在确认本地新 Key 时通过 `nico-service` 原子增加唯一的
+`NICO_MODEL_SECRET_*` 名称。已有部署可以直接传入 `env:NICO_MODEL_SECRET_*`
+或 `secret:*` 逻辑引用，此时 CLI 不读取值，也不会重建 Worker。
 | `NICO_SANDBOX_RUNNER_TOKEN` | local placeholder | Private Worker-to-Runner bearer token |
 
 The lease validator requires the heartbeat interval to be shorter than the lease duration.

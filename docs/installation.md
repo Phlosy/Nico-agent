@@ -105,10 +105,18 @@ bash install.sh
 4. 在 `~/.nico/config/deployment.env` 生成权限为 `0600` 的共享配置；
 5. 把 Python 包安装到 `~/.nico/releases/<tag>/venv`；
 6. 将 `nico` 和 `nico-service` 链接到 `~/.local/bin`；
-7. 启动服务、等待 API/Console 就绪、创建 Demo 资源并配置 `local` Profile。
+7. 启动服务、等待 API/Console 就绪，创建本地 Tenant/Project 并配置 `local` Profile；
+8. 输出 `nico setup`，由操作者在安装完成后单独配置 Native Provider。
 
 如果 `~/.local/bin` 不在 `PATH` 中，请按安装器提示加入 shell 配置。安装完成
-后可以直接运行它输出的 `nico chat` 命令。
+后运行安装器输出的下一步：
+
+```bash
+nico setup
+```
+
+安装阶段不会读取 Native Provider Key，也不会在真实 completion 验证完成前宣称
+可以聊天。需要保留原来的无凭据 Mock 演示时，显式传入 `--demo`。
 
 ## 固定版本与自动化参数
 
@@ -176,9 +184,16 @@ CLI 是远程 HTTP 客户端，服务端和 CLI 虽由同一脚本安装，但�
 
 ```bash
 nico doctor
+nico setup
+nico provider list
 nico agent list
 nico chat --project <project-id> --agent <agent-id>
 ```
+
+`nico setup`/`nico provider add` 的本地 Key 路径只适用于 Native Runtime。安装器
+创建 `~/.nico/config/model-secrets.env`（`0600`），CLI 通过经过路径与权限校验的
+`nico-service` stdin 通道暂存 Key，只重建 Native Worker；API、Web 和 Hermes
+Worker 不接收该文件。验证或激活失败会回滚本次变量并恢复 Worker。
 
 完整命令说明见 [Nico CLI](cli.md)。
 

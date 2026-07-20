@@ -58,6 +58,8 @@ export NICO_PRODUCTION_TOKEN='由安全存储提供的令牌'
 nico version [--server]
 nico health [--live]
 nico doctor
+nico setup
+nico provider add|configure|test|list
 nico config path|list|show|set|use|delete
 nico project list|get
 nico agent list|get|versions
@@ -78,6 +80,44 @@ nico run get <run-id>
 nico run runtime <run-id>
 nico run events <run-id>
 ```
+
+## Provider 引导
+
+Release 安装后直接运行：
+
+```bash
+nico setup
+```
+
+如果当前 Profile 已有一个发布中的 `nico_native` AgentVersion，并且它引用启用、
+经过真实 completion 验证的 endpoint，命令会直接报告 ready；旧式未验证 endpoint、
+Hermes 路由、draft/superseded 版本或 disabled endpoint 不会跳过向导。管理命令为：
+
+```bash
+nico provider add openai
+nico provider configure anthropic
+nico provider test openai
+nico provider list
+nico provider list --models openai --limit 20
+```
+
+向导内置十个常用 Provider 预设与官方地址，优先展示推荐模型，并在协议支持时
+执行有界模型发现。可以选择精确模型 ID。新 Key 仅在本机 TTY 隐藏输入，不存在
+`--api-key` 参数；已有环境变量或 Secret Store 使用逻辑引用。非交互示例：
+
+```bash
+nico --json provider add openai \
+  --credential-ref secret:providers/openai \
+  --model gpt-5.6-terra \
+  --project <project-id> \
+  --starter-name nico-assistant \
+  --starter-display-name "Nico Assistant" \
+  --yes
+```
+
+CLI 先轮询 Worker 探测，再显示服务端生成的完整预览；activation 必须携带该
+preview hash。取消、超时、`Ctrl+C`、预览过期或激活失败都会走同一个本地回滚
+路径。成功结果会打印可复制的 `nico chat --project ... --agent ...` 命令。
 
 ## 持续对话
 

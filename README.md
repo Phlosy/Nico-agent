@@ -114,7 +114,8 @@ curl -fsSL https://github.com/Phlosy/Nico-agent/releases/download/v0.2.0/install
 
 安装器会校验 Release bundle、生成私有部署配置、安装 `nico` 与
 `nico-service`、启动默认的 Nico Native 栈，并创建可复用的本地 CLI
-Profile。首次版本 Tag 成功发布后，上述稳定地址才会存在。
+Profile、Tenant 和 Project。它不会在安装过程中索取模型密钥；首次版本 Tag
+成功发布后，上述稳定地址才会存在。
 
 检查服务和查看日志：
 
@@ -130,8 +131,15 @@ nico-service logs
 - Swagger UI：<http://localhost:18000/docs>
 - OpenAPI：<http://localhost:18000/openapi.json>
 
-安装器会输出 Demo Project、Agent 和 AgentVersion ID，以及可直接执行的
-`nico chat` 命令。完整安装、固定版本、Hermes、升级和移除说明见
+安装器最后只输出一个后续命令：
+
+```bash
+nico setup
+```
+
+该向导会在本机隐藏读取 API Key、真实执行一次 Provider completion 验证、显示
+即将创建的 endpoint/AgentVersion 预览，并在确认后原子发布可聊天路由。完整
+安装、固定版本、Hermes、升级和移除说明见
 [安装与部署](docs/installation.md)。
 
 ### 发布前在本地运行同一安装链路
@@ -222,6 +230,23 @@ nico conversation history <conversation-id>
 nico chat --resume <conversation-id> --read-only
 ```
 
+首次 Native 配置和后续 Provider 管理使用同一套流程：
+
+```bash
+nico setup
+nico provider add openai
+nico provider configure openai
+nico provider test openai
+nico provider list
+nico provider list --models openai --limit 20
+```
+
+当前内置 OpenAI、Anthropic、Google Gemini、OpenRouter、xAI、DeepSeek、阿里云
+百炼/Qwen、Moonshot/Kimi、智谱 GLM 和 MiniMax 预设。交互模式允许隐藏输入仅存
+于本机 Native Worker 的新 Key，也可输入 `env:NICO_MODEL_SECRET_*` 或
+`secret:*` 引用。自动化模式必须显式提供引用、模型、Project、Agent/Starter
+以及 `--yes`，不存在接受明文 Key 的命令行选项。
+
 交互模式还可以把本地文件按字节暂存到下一轮、压缩较早历史并下载该会话引用的产物：
 
 ```text
@@ -245,7 +270,7 @@ flowchart LR
     API --> PG[("PostgreSQL + pgvector<br/>权威状态")]
     Worker["持久化 Worker"] -->|租约 / 检查点 / 结果| PG
     Worker --> Runtime["Agent Runtime"]
-    Runtime --> Model["Model Gateway<br/>OpenAI-compatible"]
+    Runtime --> Model["Model Gateway<br/>OpenAI / Anthropic / Gemini protocols"]
     Runtime -. "仅规范化工具意图" .-> Gateway["Tool Gateway"]
     Runtime -. "受限委托 / 产物意图" .-> Coordination["Coordination / Artifact Handler"]
     Coordination --> PG
@@ -278,7 +303,7 @@ Runtime 负责执行 Agent 并返回规范化事件和结果。它不能导入�
 | Nico Native ReAct | Beta | 多轮 Tool Gateway、checkpoint、Worker SIGKILL 恢复和副作用重放保护已通过 hermetic E2E；真实运营模型工具调用仍待凭据验收 |
 | Nico Native Plan/Reflection | Beta | Plan revision、步骤验证、Reflection/Replan、确定性 Completion 和独立计费 judge 已通过 hermetic E2E |
 | 动态多 Agent 协作 | Beta | 两个并行 Child、预算/权限收缩、Parent 挂起唤醒、Worker SIGKILL 恢复、消息和聚合已通过 Compose E2E |
-| Model Gateway | Beta | 已覆盖 IP 固定、HTTPS/allowlist、Secret 引用、流式解析、重试、分布式限流和脱敏 |
+| Model Gateway | Beta | OpenAI-compatible、Anthropic Messages 与 Google Gemini 适配器已覆盖 IP 固定、HTTPS/allowlist、Secret 引用、流式解析、发现、重试、分布式限流和脱敏 |
 | Mock Runtime | Stable | 已覆盖无需凭据的成功、失败、取消、恢复合同与 Compose Run E2E |
 | Hermes Runtime | Experimental | 协议 v2 Adapter、禁用时失败关闭、0.18.2 版本检查、恢复/取消/MCP/脱敏及可选 Compose profile 已验证；未执行带凭据推理 |
 | PostgreSQL RLS | Beta | 已实现 `FORCE RLS`、复合约束、运行角色和跨租户测试 |

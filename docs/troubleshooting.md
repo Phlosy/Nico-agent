@@ -60,6 +60,30 @@ The Worker must be connected to PostgreSQL and able to claim a Run. If the stack
 docker compose up --detach --build worker
 ```
 
+## Provider setup was interrupted
+
+The CLI normally rolls back the temporary Key and releases maintenance in a
+`finally` path. If the process or host stopped mid-attempt, recover before retrying:
+
+```bash
+nico-service provider-secret recover
+nico provider add <provider>
+```
+
+`RUNTIME_MAINTENANCE_ACTIVE_RUNS` means at least one Run is not terminal; wait for
+or cancel it before changing a local Key. `RUNTIME_MAINTENANCE_LEASE_LOST` means
+the bounded lease expired, so the attempt is rolled back. If Worker replacement is
+unhealthy, inspect `nico-service logs worker`; unrelated API/Web services are not
+restarted. Existing `env:`/`secret:` references do not use the local secret bridge.
+
+## Provider verification fails
+
+Use `nico provider test <provider>` to repeat the bounded completion probe. Stable
+errors distinguish authentication, unavailable model, rate limit, timeout, network,
+endpoint policy and protocol failures without persisting the upstream response body.
+Model discovery failure is non-fatal in the interactive flow: choose a recommended
+or exact manual model ID.
+
 ## Hermes Run fails with `HERMES_NOT_INSTALLED`
 
 The default Worker intentionally does not install Hermes. For an AgentVersion explicitly pinned to Hermes, switch to the optional profile:

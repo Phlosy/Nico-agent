@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | Standard local gate | `scripts/test.sh` | Ruff check/format, backend unit tests, frontend tests, TypeScript, and production build |
 | Installer/Release contracts | `scripts/test-install.sh` | 参数、Secret 保留、校验和、bundle allowlist、安全卸载、Compose Runtime 互斥及 CI trigger/权限 |
+| Provider onboarding E2E | `scripts/e2e-provider-onboarding.sh` | 十个预设、三种协议、setup/chat、激活、回滚、维护门与 canary 泄漏扫描 |
 | Local Release rehearsal | `make release && make install` | 构建本地版本化镜像和真实 Release 资产，再通过正式安装器启动完整服务栈 |
 | Backend unit tests | `.venv/bin/pytest backend/tests/unit` | Domain state, Runtime, tools, tenant isolation contracts, Memory, and Skill lifecycle |
 | Frontend tests | `npm --prefix frontend test` | Health states plus Run Inspector deep link, ordering, loading/empty/error/partial/cancelled/redacted and hostile-text behavior |
@@ -37,7 +38,8 @@ or checks the required services and sets `RUN_INTEGRATION=1`; a skipped integrat
 test is not evidence of a passing integration suite.
 
 GitHub 的 `Test` workflow 在面向 `main` 的 Pull Request 和进入 `main` 的
-push 上执行 `scripts/test.sh` 与 `scripts/test-install.sh`，并以
+push 上执行 `scripts/test.sh`、`scripts/test-install.sh` 与确定性的 Provider
+onboarding E2E，并以
 `workflow_call` 暴露同一测试门。`Release` workflow 只监听 `v*` Tag；它先
 复用测试门并校验 Tag 与 Python 包版本一致，随后才获得 GHCR/GitHub Release
 所需的写权限。普通 merge 不发布镜像或 Release。

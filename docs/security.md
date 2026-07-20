@@ -68,6 +68,12 @@ The `sandbox-runner` service mounts `/var/run/docker.sock`. Access to that socke
 - sensitive keys and known values are recursively redacted from errors and persisted tool output;
 - Hermes receives a per-Run `0600` configuration and a short-lived MCP broker credential;
 - application logs and API responses must not contain raw Secret values.
+- guided Provider setup sends a newly entered Key only over stdin to the attested
+  installed `nico-service`; it never places the Key in CLI arguments, profile TOML,
+  HTTP requests to Nico, probe rows, or the recovery journal;
+- the installed `model-secrets.env` is owner-readable and mounted only into the
+  Native Worker. A short maintenance lease blocks new Runs while that Worker is
+  replaced; API, Web, Hermes, and Hermes contract workers do not inherit the file;
 - Runtime providers receive only narrow Artifact/Coordination handlers and never
   receive database sessions, MinIO credentials, object keys, or lease tokens.
 
@@ -86,6 +92,11 @@ single-file, cumulative-size, TTL and text-excerpt limits prevent attachment
 staging from bypassing context and storage budgets.
 
 The Compose `.env` file still contains infrastructure credentials. Protect it with filesystem permissions, rotate all local defaults on shared hosts, and use a real secret manager in any future production deployment.
+
+Docker-privileged local users remain trusted: anyone who controls the daemon or
+the installed Nico directory can inspect containers or replace binaries. The
+stdin/permission design prevents accidental exposure and untrusted path substitution;
+it is not a security boundary against the host administrator.
 
 ## Memory and Skill publication
 

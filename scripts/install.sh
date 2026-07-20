@@ -10,7 +10,7 @@ RUNTIME="native"
 RUNTIME_EXPLICIT=false
 PROVIDER=""
 START_SERVICES=true
-RUN_DEMO=true
+RUN_DEMO=false
 NON_INTERACTIVE=false
 DRY_RUN=false
 LOCAL_BUNDLE=""
@@ -55,7 +55,8 @@ Options:
   --bundle PATH           Install a local release bundle instead of downloading
   --local-images          Use locally built versioned images and never pull GHCR
   --no-start              Install files and CLI without starting services
-  --skip-demo             Start services without bootstrapping Demo resources
+  --demo                  Run the optional credential-free Demo after installation
+  --skip-demo             Deprecated alias for the default (do not run Demo)
   --non-interactive       Never prompt; fail when requested input is unavailable
   --dry-run               Validate options and print the resolved configuration
   -h, --help              Show this help
@@ -120,6 +121,10 @@ parse_args() {
         ;;
       --skip-demo)
         RUN_DEMO=false
+        shift
+        ;;
+      --demo)
+        RUN_DEMO=true
         shift
         ;;
       --non-interactive)
@@ -533,7 +538,73 @@ switch_current_release() {
   ln -sfn "$NICO_HOME/bin/nico-service" "$BIN_DIR/nico-service"
 }
 
-bootstrap_cli_profile() {
+bootstrap_setup_profile() {
+  local api_base="http://localhost:$(env_value "$NICO_HOME/config/deployment.env" API_PORT 18000)"
+  local state_dir="$NICO_HOME/state"
+  local state_file="$state_dir/setup-state.json"
+  local tenant="" project=""
+  if [[ -f "$state_file" ]]; then
+    read -r tenant project < <(
+      python3 - "$state_file" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.load(open(sys.argv[1]))
+    print(payload["tenant_id"], payload["project_id"])
+except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+    ) || true
+    if [[ -n "$tenant" && -n "$project" ]] && ! curl --fail --silent --show-error \
+      --header "X-Tenant-ID: $tenant" --header "X-Actor-ID: local-operator" \
+      "$api_base/api/v1/projects/$project" >/dev/null 2>&1; then
+      tenant=""
+      project=""
+    fi
+  fi
+  if [[ -z "$tenant" || -z "$project" ]]; then
+    local suffix tenant_json project_json
+    suffix="$(date -u +%Y%m%d%H%M%S)-$$"
+    tenant_json="$(curl --fail-with-body --silent --show-error \
+      --request POST --header 'Content-Type: application/json' \
+      --header 'X-Actor-ID: local-operator' \
+      --data "{\"name\":\"Nico Local\",\"slug\":\"nico-local-$suffix\"}" \
+      "$api_base/api/v1/tenants/bootstrap")"
+    tenant="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' \
+      <<< "$tenant_json")"
+    project_json="$(curl --fail-with-body --silent --show-error \
+      --request POST --header 'Content-Type: application/json' \
+      --header "X-Tenant-ID: $tenant" --header 'X-Actor-ID: local-operator' \
+      --data '{"name":"Nico Local","description":"Local project created by the Nico installer","metadata":{"source":"installer"}}' \
+      "$api_base/api/v1/projects")"
+    project="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' \
+      <<< "$project_json")"
+    install -d -m 700 "$state_dir"
+    python3 - "$state_file.tmp" "$tenant" "$project" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({"tenant_id": sys.argv[2], "project_id": sys.argv[3]}, indent=2) + "\n")
+PY
+    chmod 600 "$state_file.tmp"
+    mv "$state_file.tmp" "$state_file"
+  fi
+  "$RELEASE_DIR/venv/bin/nico" config set local \
+    --api-url "$api_base" --tenant-id "$tenant" --actor-id local-operator
+  "$RELEASE_DIR/venv/bin/nico" config use local
+  printf '\n[nico-install] Next step:\n'
+  if [[ "$RUNTIME" == "native" ]]; then
+    printf '  nico setup\n'
+  else
+    printf '  nico doctor\n'
+  fi
+  printf '[nico-install] Project: %s\n' "$project"
+}
+
+run_demo_profile() {
   local state_file="$NICO_HOME/state/demo-state.json"
   NICO_HOME="$NICO_HOME" NICO_DEMO_STATE_DIR="$NICO_HOME/state" \
     "$RELEASE_DIR/scripts/demo.sh"
@@ -598,8 +669,9 @@ main() {
   if [[ "$START_SERVICES" == true ]]; then
     log "starting the $RUNTIME runtime profile"
     NICO_HOME="$NICO_HOME" "$NICO_HOME/bin/nico-service" up
+    bootstrap_setup_profile
     if [[ "$RUN_DEMO" == true ]]; then
-      bootstrap_cli_profile
+      run_demo_profile
     fi
   fi
 
