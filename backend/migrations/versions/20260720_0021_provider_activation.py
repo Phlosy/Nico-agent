@@ -30,9 +30,7 @@ def upgrade() -> None:
         $function$
         """
     )
-    op.execute(
-        "REVOKE ALL ON FUNCTION provider_maintenance_attempt_active(uuid) FROM PUBLIC"
-    )
+    op.execute("REVOKE ALL ON FUNCTION provider_maintenance_attempt_active(uuid) FROM PUBLIC")
     op.execute(
         "GRANT EXECUTE ON FUNCTION provider_maintenance_attempt_active(uuid) TO nico_runtime"
     )

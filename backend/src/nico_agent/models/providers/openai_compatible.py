@@ -25,6 +25,7 @@ from nico_agent.models.http_safety import (
     SafeModelHttpTransport,
     clean_external_text,
     normalize_discovered_model_id,
+    normalize_token_count,
     raise_transport_error,
 )
 
@@ -245,9 +246,9 @@ class OpenAICompatibleProvider:
     def _usage(value: Any) -> ModelUsage | None:
         if not isinstance(value, dict):
             return None
-        prompt = _token_count(value.get("prompt_tokens"))
-        completion = _token_count(value.get("completion_tokens"))
-        total = _token_count(value.get("total_tokens"))
+        prompt = normalize_token_count(value.get("prompt_tokens"))
+        completion = normalize_token_count(value.get("completion_tokens"))
+        total = normalize_token_count(value.get("total_tokens"))
         exact = all(item is not None for item in (prompt, completion, total))
         partial = any(item is not None for item in (prompt, completion, total))
         return ModelUsage(
@@ -281,11 +282,3 @@ def _message_body(message: Any) -> dict[str, Any]:
     if not message.tool_calls:
         body.pop("tool_calls", None)
     return body
-
-
-def _token_count(value: Any) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int or value < 0:
-        raise ModelProtocolError("model usage token counts must be non-negative integers")
-    return value

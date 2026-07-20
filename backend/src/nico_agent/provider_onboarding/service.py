@@ -336,16 +336,27 @@ class ProviderOnboardingService:
         context: TenantContext,
     ) -> list[ProviderConnectionRead]:
         async with self.database.tenant_transaction(context) as session:
+            latest_revisions = (
+                select(
+                    ModelEndpoint.stable_key,
+                    func.max(ModelEndpoint.revision).label("revision"),
+                )
+                .where(ModelEndpoint.tenant_id == context.tenant_id)
+                .group_by(ModelEndpoint.stable_key)
+                .subquery()
+            )
             endpoints = list(
                 await session.scalars(
                     select(ModelEndpoint)
+                    .join(
+                        latest_revisions,
+                        (latest_revisions.c.stable_key == ModelEndpoint.stable_key)
+                        & (latest_revisions.c.revision == ModelEndpoint.revision),
+                    )
                     .where(ModelEndpoint.tenant_id == context.tenant_id)
-                    .order_by(ModelEndpoint.stable_key, ModelEndpoint.revision.desc())
+                    .order_by(ModelEndpoint.stable_key)
                 )
             )
-            latest: dict[str, ModelEndpoint] = {}
-            for endpoint in endpoints:
-                latest.setdefault(endpoint.stable_key, endpoint)
             active_rows = list(
                 (
                     await session.execute(
@@ -391,7 +402,7 @@ class ProviderOnboardingService:
                     allowed_models=tuple(endpoint.allowed_models),
                     active_agents=tuple(agents_by_endpoint.get(endpoint.id, [])),
                 )
-                for endpoint in latest.values()
+                for endpoint in endpoints
             ]
 
     async def setup_readiness(self, context: TenantContext) -> ProviderSetupReadiness:

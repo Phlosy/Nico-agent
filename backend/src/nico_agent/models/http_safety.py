@@ -258,6 +258,24 @@ def normalize_discovered_model_id(value: Any) -> str | None:
     return cleaned or None
 
 
+def parse_json_object(value: str, label: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ModelProtocolError(f"{label} contained invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ModelProtocolError(f"{label} must be an object")
+    return payload
+
+
+def normalize_token_count(value: Any) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 0:
+        raise ModelProtocolError("model usage token counts must be non-negative integers")
+    return value
+
+
 def resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(

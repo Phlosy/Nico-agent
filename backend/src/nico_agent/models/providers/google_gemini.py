@@ -26,6 +26,8 @@ from nico_agent.models.http_safety import (
     SafeModelHttpTransport,
     clean_external_text,
     normalize_discovered_model_id,
+    normalize_token_count,
+    parse_json_object,
     raise_transport_error,
 )
 
@@ -97,7 +99,7 @@ class GoogleGeminiProvider:
                         continue
                     if not line.startswith("data:"):
                         raise ModelProtocolError("Gemini stream contained an invalid SSE field")
-                    chunk = _json_object(line[5:].strip(), "Gemini stream chunk")
+                    chunk = parse_json_object(line[5:].strip(), "Gemini stream chunk")
                     parsed_usage = _usage(chunk.get("usageMetadata"))
                     if parsed_usage is not None:
                         usage = parsed_usage
@@ -297,30 +299,12 @@ def _message_body(message: Any) -> dict[str, Any]:
     return {"role": role, "parts": parts}
 
 
-def _json_object(value: str, label: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ModelProtocolError(f"{label} contained invalid JSON") from exc
-    if not isinstance(payload, dict):
-        raise ModelProtocolError(f"{label} must be an object")
-    return payload
-
-
-def _token_count(value: Any) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int or value < 0:
-        raise ModelProtocolError("model usage token counts must be non-negative integers")
-    return value
-
-
 def _usage(value: Any) -> ModelUsage | None:
     if not isinstance(value, dict):
         return None
-    prompt = _token_count(value.get("promptTokenCount"))
-    output = _token_count(value.get("candidatesTokenCount"))
-    total = _token_count(value.get("totalTokenCount"))
+    prompt = normalize_token_count(value.get("promptTokenCount"))
+    output = normalize_token_count(value.get("candidatesTokenCount"))
+    total = normalize_token_count(value.get("totalTokenCount"))
     exact = all(item is not None for item in (prompt, output, total))
     partial = any(item is not None for item in (prompt, output, total))
     return ModelUsage(

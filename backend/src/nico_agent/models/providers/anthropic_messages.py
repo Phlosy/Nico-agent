@@ -25,6 +25,8 @@ from nico_agent.models.http_safety import (
     SafeModelHttpTransport,
     clean_external_text,
     normalize_discovered_model_id,
+    normalize_token_count,
+    parse_json_object,
     raise_transport_error,
 )
 
@@ -95,7 +97,7 @@ class AnthropicMessagesProvider:
                         continue
                     if not line.startswith("data:"):
                         raise ModelProtocolError("Anthropic stream contained an invalid SSE field")
-                    event = _json_object(line[5:].strip(), "Anthropic stream event")
+                    event = parse_json_object(line[5:].strip(), "Anthropic stream event")
                     event_type = event.get("type")
                     if event_type == "message_start":
                         message = event.get("message")
@@ -103,7 +105,7 @@ class AnthropicMessagesProvider:
                             raise ModelProtocolError("Anthropic message_start is invalid")
                         usage = message.get("usage")
                         if isinstance(usage, dict):
-                            input_tokens = _token_count(usage.get("input_tokens"))
+                            input_tokens = normalize_token_count(usage.get("input_tokens"))
                     elif event_type == "content_block_start":
                         block = event.get("content_block")
                         index = event.get("index")
@@ -153,7 +155,7 @@ class AnthropicMessagesProvider:
                         if isinstance(delta, dict) and delta.get("stop_reason") is not None:
                             finish_reason = str(delta["stop_reason"])
                         if isinstance(usage, dict):
-                            output_tokens = _token_count(usage.get("output_tokens"))
+                            output_tokens = normalize_token_count(usage.get("output_tokens"))
                     elif event_type == "error":
                         raise ModelProtocolError("Anthropic stream reported an error event")
                     elif event_type == "message_stop":
@@ -302,24 +304,6 @@ def _message_body(message: Any) -> dict[str, Any]:
             )
         content = blocks
     return {"role": "assistant" if message.role == "assistant" else "user", "content": content}
-
-
-def _json_object(value: str, label: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ModelProtocolError(f"{label} contained invalid JSON") from exc
-    if not isinstance(payload, dict):
-        raise ModelProtocolError(f"{label} must be an object")
-    return payload
-
-
-def _token_count(value: Any) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int or value < 0:
-        raise ModelProtocolError("model usage token counts must be non-negative integers")
-    return value
 
 
 def _usage(input_tokens: int | None, output_tokens: int | None) -> ModelUsage:
