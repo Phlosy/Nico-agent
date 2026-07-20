@@ -34,6 +34,14 @@ class RunClaim:
     previous_status: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderProbeClaim:
+    probe_id: UUID
+    tenant_id: UUID
+    lease_token: str
+    previous_status: str
+
+
 class Database:
     def __init__(self, engine: AsyncEngine, *, runtime_role: str = "nico_runtime") -> None:
         if not _ROLE_NAME.fullmatch(runtime_role):
@@ -103,3 +111,36 @@ class Database:
             await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
             value = await session.scalar(text("SELECT reconcile_expired_tool_approvals()"))
             return int(value or 0)
+
+    async def claim_next_provider_probe(
+        self, worker_id: str, lease_seconds: int
+    ) -> ProviderProbeClaim | None:
+        """Claim one pending or expired Provider probe across tenants."""
+
+        if not worker_id or len(worker_id) > 200:
+            raise ValueError("worker_id must contain between 1 and 200 characters")
+        if lease_seconds < 30 or lease_seconds > 3600:
+            raise ValueError("probe lease_seconds must be between 30 and 3600")
+        async with self.sessions() as session, session.begin():
+            await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT probe_id, tenant_id, lease_token, previous_status "
+                            "FROM claim_next_provider_probe(:worker_id, :lease_seconds)"
+                        ),
+                        {"worker_id": worker_id, "lease_seconds": lease_seconds},
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            return ProviderProbeClaim(
+                probe_id=row["probe_id"],
+                tenant_id=row["tenant_id"],
+                lease_token=row["lease_token"],
+                previous_status=row["previous_status"],
+            )

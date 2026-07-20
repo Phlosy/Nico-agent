@@ -26,6 +26,7 @@ from nico_agent.models.providers import (
     GoogleGeminiProvider,
     OpenAICompatibleProvider,
 )
+from nico_agent.provider_onboarding.worker import ProviderProbeWorker
 from nico_agent.runtime import (
     HermesRuntimeProvider,
     MockRuntimeProvider,
@@ -124,6 +125,12 @@ async def worker_main(settings: Settings | None = None) -> None:
         max_attempts=runtime_settings.model_max_attempts,
         retry_base_seconds=runtime_settings.model_retry_base_seconds,
     )
+    provider_probe_gateway = ModelGateway(
+        ModelProviderRegistry(model_providers),
+        rate_limiter=RedisModelRateLimiter(resources.redis),
+        max_attempts=1,
+        retry_base_seconds=0,
+    )
     registry = build_runtime_registry(runtime_settings, model_gateway)
     workspace = WorkspaceManager(
         runtime_settings.workspace_root,
@@ -189,6 +196,7 @@ async def worker_main(settings: Settings | None = None) -> None:
             "health_interval_seconds": runtime_settings.worker_health_interval_seconds,
             "poll_interval_seconds": runtime_settings.worker_poll_interval_seconds,
             "concurrency": runtime_settings.worker_concurrency,
+            "provider_probe_concurrency": runtime_settings.provider_probe_concurrency,
             "providers": registry.names,
         },
     )
@@ -210,6 +218,21 @@ async def worker_main(settings: Settings | None = None) -> None:
         )
         for index in range(runtime_settings.worker_concurrency)
     ]
+    probe_tasks = [
+        asyncio.create_task(
+            execute_loop(
+                ProviderProbeWorker(
+                    database,
+                    provider_probe_gateway,
+                    worker_id=(f"{runtime_settings.worker_id}-provider-probe-{index + 1}"),
+                    lease_seconds=runtime_settings.provider_probe_lease_seconds,
+                ),
+                stopping,
+                poll_interval_seconds=(runtime_settings.provider_probe_poll_interval_seconds),
+            )
+        )
+        for index in range(runtime_settings.provider_probe_concurrency)
+    ]
     try:
         while not stopping.is_set():
             await supervise_once(service)
@@ -221,7 +244,7 @@ async def worker_main(settings: Settings | None = None) -> None:
                 pass
     finally:
         stopping.set()
-        await asyncio.gather(*execution_tasks, return_exceptions=True)
+        await asyncio.gather(*execution_tasks, *probe_tasks, return_exceptions=True)
         await model_http.aclose()
         await resources.close()
         logger.info("runtime worker stopped")

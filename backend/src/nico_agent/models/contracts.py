@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ModelCapability(StrEnum):
@@ -102,6 +103,18 @@ class DiscoveredModel(BaseModel):
     id: str = Field(min_length=1, max_length=200)
     display_name: str | None = Field(default=None, max_length=200)
     capabilities: tuple[ModelCapability, ...] = ()
+
+    @field_validator("id", "display_name")
+    @classmethod
+    def sanitize_provider_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = unicodedata.normalize("NFC", value.strip())
+        if not normalized:
+            raise ValueError("discovered model metadata cannot be empty")
+        if any(unicodedata.category(character).startswith("C") for character in normalized):
+            raise ValueError("discovered model metadata contains control characters")
+        return normalized
 
 
 class ModelDiscoveryRequest(BaseModel):

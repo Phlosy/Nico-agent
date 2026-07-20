@@ -144,10 +144,7 @@ class ModelGateway:
         provider = self.registry.get(protocol)
         if not isinstance(provider, ModelDiscoveryProvider):
             raise ModelDiscoveryUnavailable()
-        try:
-            result = await provider.discover(request)
-        except ModelProviderError as exc:
-            raise ModelDiscoveryUnavailable(exc.message) from exc
+        result = await provider.discover(request)
         if not isinstance(result, ModelDiscoveryResult):
             raise ModelProtocolError("model discovery returned an invalid result")
         return result

@@ -160,9 +160,15 @@ def upgrade() -> None:
     op.execute("ALTER TABLE provider_probes ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE provider_probes FORCE ROW LEVEL SECURITY")
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON provider_probes TO nico_runtime")
+    op.execute(_claim_next_provider_probe())
+    op.execute("REVOKE ALL ON FUNCTION claim_next_provider_probe(text, integer) FROM PUBLIC")
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION claim_next_provider_probe(text, integer) TO nico_worker_claimer"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION IF EXISTS claim_next_provider_probe(text, integer)")
     op.execute(
         """
         DO $block$
@@ -213,6 +219,54 @@ def downgrade() -> None:
     op.execute("DROP TRIGGER guard_provider_probe_write ON provider_probes")
     op.execute("DROP FUNCTION guard_provider_probe_write()")
     op.drop_table("provider_probes")
+
+
+def _claim_next_provider_probe() -> str:
+    return r"""
+    CREATE FUNCTION claim_next_provider_probe(p_worker_id text, p_lease_seconds integer)
+    RETURNS TABLE(probe_id uuid, tenant_id uuid, lease_token text, previous_status text)
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+        claimed_at timestamptz := clock_timestamp();
+    BEGIN
+        IF p_worker_id IS NULL OR length(p_worker_id) < 1 OR length(p_worker_id) > 200 THEN
+            RAISE EXCEPTION 'worker_id must contain between 1 and 200 characters';
+        END IF;
+        IF p_lease_seconds < 30 OR p_lease_seconds > 3600 THEN
+            RAISE EXCEPTION 'lease_seconds must be between 30 and 3600';
+        END IF;
+
+        RETURN QUERY
+        WITH candidate AS (
+            SELECT p.id, p.status::text AS previous_status
+            FROM public.provider_probes AS p
+            WHERE p.status = 'pending'
+               OR (p.status = 'running' AND p.lease_expires_at <= claimed_at)
+            ORDER BY p.created_at, p.id
+            FOR UPDATE OF p SKIP LOCKED
+            LIMIT 1
+        ), claimed AS (
+            UPDATE public.provider_probes AS p
+            SET status = 'running',
+                worker_id = p_worker_id,
+                lease_token = gen_random_uuid()::text,
+                lease_expires_at = claimed_at + make_interval(secs => p_lease_seconds),
+                started_at = COALESCE(p.started_at, claimed_at),
+                attempt = p.attempt + 1,
+                revision = p.revision + 1,
+                updated_at = claimed_at
+            FROM candidate AS c
+            WHERE p.id = c.id
+            RETURNING p.id, p.tenant_id, p.lease_token, c.previous_status
+        )
+        SELECT c.id, c.tenant_id, c.lease_token::text, c.previous_status
+        FROM claimed AS c;
+    END;
+    $function$;
+    """
 
 
 def _provider_probe_guard() -> str:

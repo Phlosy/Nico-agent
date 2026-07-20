@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 import unicodedata
+from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -192,6 +194,53 @@ class CandidateConfiguration(FrozenContract):
         if value is None:
             return None
         return _safe_text(value, maximum=200, field_name="model ID")
+
+
+class ProviderProbeCreate(FrozenContract):
+    kind: Literal["discover_models", "verify_completion"]
+    candidate: CandidateConfiguration
+    idempotency_key: str = Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_kind_shape(self) -> ProviderProbeCreate:
+        if self.kind == "verify_completion" and self.candidate.model is None:
+            raise ValueError("verification requires a model ID")
+        if self.kind == "discover_models" and self.candidate.model is not None:
+            raise ValueError("discovery candidate must not select a model")
+        return self
+
+
+class ProviderProbeRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    id: UUID
+    kind: str
+    status: str
+    provider_key: str
+    protocol: str
+    base_url: str
+    credential_ref: str
+    provider_options: dict[str, Any]
+    model_name: str | None
+    catalog_revision: str
+    candidate_hash: str
+    result: dict[str, Any]
+    error_code: str | None
+    error_detail: str | None
+    attempt: int
+    worker_id: str | None
+    lease_expires_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    verified_at: datetime | None
+    activated_at: datetime | None
+    revision: int
+    created_at: datetime
+    updated_at: datetime
 
 
 def canonical_candidate_bytes(candidate: CandidateConfiguration) -> bytes:
