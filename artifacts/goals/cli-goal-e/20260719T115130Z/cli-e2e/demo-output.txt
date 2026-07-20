@@ -1,0 +1,25 @@
+[nico] waiting for Nico API at http://localhost:18000
+[nico] Nico API is ready
+[nico] reusing Demo Tenant, Project and published AgentVersion from /home/node7/xpk/Nico-agent/.nico/demo-state.json
+[nico] creating a Task and Run
+[nico] waiting for Worker to complete Run b9c9b062-57ff-4a3d-9830-984522e54154
+
+Nico Demo completed
+-------------------
+Run ID:    b9c9b062-57ff-4a3d-9830-984522e54154
+Status:    completed
+Runtime:   mock 1.0
+Events:    17
+Result:
+{
+  "message": "Nico completed a recoverable, auditable demo Run.",
+  "runtime": "mock",
+  "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+}
+Artifact:  not produced by this Mock Runtime demo
+
+Console:    http://localhost:18080
+Run API:    http://localhost:18000/api/v1/runs/b9c9b062-57ff-4a3d-9830-984522e54154
+Events API: http://localhost:18000/api/v1/runs/b9c9b062-57ff-4a3d-9830-984522e54154/events
+Swagger:    http://localhost:18000/docs
+Tenant ID:  6ffe533b-9674-4692-99ba-266ebc90398e

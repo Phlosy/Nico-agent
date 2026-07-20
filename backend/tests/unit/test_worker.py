@@ -2,8 +2,11 @@ import logging
 
 import pytest
 
+from nico_agent.config import Settings
 from nico_agent.health import ComponentHealth, ReadinessReport
-from nico_agent.worker import supervise_once
+from nico_agent.models import ModelGateway, ModelProviderRegistry
+from nico_agent.runtime.errors import RuntimeProviderNotFound
+from nico_agent.worker import build_runtime_registry, supervise_once
 
 
 class StubHealthService:
@@ -38,3 +41,23 @@ async def test_supervisor_once_reports_degraded_infrastructure(caplog) -> None:
 
     assert ready is False
     assert "infrastructure readiness degraded" in caplog.text
+
+
+def test_native_is_default_and_hermes_is_opt_in() -> None:
+    gateway = ModelGateway(ModelProviderRegistry())
+
+    default_registry = build_runtime_registry(Settings(environment="test", _env_file=None), gateway)
+    hermes_registry = build_runtime_registry(
+        Settings(environment="test", hermes_enabled=True, _env_file=None), gateway
+    )
+
+    assert default_registry.names == ("mock", "nico_native")
+    assert hermes_registry.names == ("hermes", "mock", "nico_native")
+    with pytest.raises(RuntimeProviderNotFound):
+        default_registry.get("hermes")
+
+    matrix = {item["name"]: item for item in hermes_registry.capability_matrix()}
+    assert matrix["nico_native"]["capabilities"]["planning"] is True
+    assert matrix["hermes"]["capabilities"]["planning"] is False
+    assert matrix["hermes"]["capabilities"]["coordination"] is False
+    assert matrix["mock"]["implementation"] == "test"

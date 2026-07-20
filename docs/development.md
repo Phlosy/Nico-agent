@@ -63,10 +63,10 @@ Vite 的 `/api` 与 `/openapi.json` 开发代理默认指向 `localhost:8000`。
 - `api` 执行迁移后启动 FastAPI。
 - `worker` 同时监督依赖并运行有界领取循环；通过最小 claimer 角色领取后，以租户事务执行 Provider、Tool Gateway、心跳和持久化轨迹；不挂载 Docker socket。
 - `sandbox-runner` 只接受 bearer token 认证的固定 Python 执行合同；它是唯一挂载 Docker socket 的服务，不接收数据库/模型 Secret、镜像名、命令、挂载或网络参数。
-- `web` 只从 readiness API 读取状态，不存储权威数据。
+- `web` 从只读 API 展示 readiness 和脱敏 Run Inspector，不存储权威数据也不提供写操作。
 - PostgreSQL 是 Run 队列、租约、状态与轨迹的权威来源；Redis 和 MinIO 的职责保持 ADR-0002 的边界。
 
-Worker 可通过 `NICO_WORKER_POLL_INTERVAL_SECONDS`、`NICO_WORKER_LEASE_SECONDS`、`NICO_WORKER_HEARTBEAT_SECONDS`、`NICO_WORKER_CONCURRENCY` 和 `NICO_WORKER_ID` 调整。Hermes 命令、工作目录与隔离状态根分别由 `NICO_HERMES_COMMAND`、`NICO_HERMES_CWD`、`NICO_HERMES_STATE_ROOT` 指定；Hermes 必须以 `hermes-agent[mcp]==0.18.2` 或等价固定安装提供 MCP client。平台只为 Hermes 生成 `nico` MCP 配置，短期 token 不进入命令行。
+Worker 可通过 `NICO_WORKER_POLL_INTERVAL_SECONDS`、`NICO_WORKER_LEASE_SECONDS`、`NICO_WORKER_HEARTBEAT_SECONDS`、`NICO_WORKER_CONCURRENCY` 和 `NICO_WORKER_ID` 调整。默认 Worker 不安装、注册或挂载 Hermes。显式 Hermes AgentVersion 需先停止默认 Worker，再使用 `docker compose --profile hermes up --detach --build worker-hermes`。该可选镜像固定 `hermes-agent[mcp]==0.18.2`；命令、工作目录与隔离状态根分别由 `NICO_HERMES_COMMAND`、`NICO_HERMES_CWD`、`NICO_HERMES_STATE_ROOT` 指定。平台只生成 `nico` MCP 配置，短期 token 不进入命令行。不要让默认 Worker 与 Hermes Worker 共用未分区队列同时运行。
 
 工作区、HTTP、数据库和 Sandbox 限制均可通过 `NICO_WORKSPACE_*`、`NICO_HTTP_*`、`NICO_DATABASE_TOOL_*`、`NICO_SANDBOX_*` 收紧。生产必须更换 `NICO_SANDBOX_RUNNER_TOKEN`；sandbox 镜像必须保留 `@sha256:` 固定摘要。只读数据库 DSN 通过环境 Secret 引用提供，例如租户策略引用 `env:NICO_TOOL_SECRET_RESEARCH_DATABASE_DSN`，AgentVersion 只声明需要的 Secret 名，不能保存 DSN。
 

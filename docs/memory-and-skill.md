@@ -1,6 +1,6 @@
 # Memory 与 Skill 边界
 
-Goal F 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。本文是运行时、API 和后续 Plugin/Team 接入必须遵守的稳定边界；F8 已将领域记录、pgvector 检索、候选生成、验证/审批、Memory 生命周期及 Skill 发布/灰度/回滚通过受控 REST API、真实依赖测试与 Compose E2E 完整验证，代码状态见 Feature Matrix。
+Nico 采用“轨迹事实 → Candidate → 验证 → 审批 → 不可变发布 → 受限使用”的成长路径。Memory 与 Skill 生命周期已经通过受控 REST API、真实 PostgreSQL/pgvector 测试和 Compose 端到端流程验证。
 
 ## 能力流
 
@@ -12,7 +12,8 @@ terminal Run + terminal Steps + terminal ToolCalls + normalized trajectory
   -> deterministic validation + immutable Evaluation
   -> immutable Approval decision
   -> Active Memory / Published SkillVersion
-  -> scope-filtered retrieval / deterministic canary resolution
+  -> per-Run policy intersection and frozen ContextSeed
+  -> ContextSnapshot / ModelCall consumption and effect facts
   -> invalidate, disable, or rollback pointer
 ```
 
@@ -27,12 +28,12 @@ terminal Run + terminal Steps + terminal ToolCalls + normalized trajectory
 | `semantic` | 经验证的稳定事实和概念 | 可长期保留 |
 | `procedural` | 可复用操作知识；复杂可执行过程应升级为 Skill | 按租户策略 |
 
-| Scope | 所有者 | Goal F 行为 |
+| Scope | 所有者 | 当前行为 |
 | --- | --- | --- |
 | `tenant` | 当前 Tenant | 当前租户内显式授权调用方可用 |
 | `project` | 已存在且同租户的 Project | 仅该 Project 上下文可用 |
 | `agent` | 已存在且同租户的 Agent | 仅该 Agent 上下文可用 |
-| `team` | Goal G 的 Team | 合同保留，当前创建和检索均失败关闭 |
+| `team` | 未实现 | 合同保留，当前创建和检索均失败关闭；团队结构属于领域系统 |
 
 调用者提交的是业务上下文，不提交任意 scope allowlist。服务从 TenantContext、Project、Agent 及未来 Team 关系计算可用 scopes。
 
@@ -50,7 +51,7 @@ Candidate、Evaluation、Approval 和发布对象都保存 content hash。发布
 
 当前实现使用 `nico-paragraph-window@1.0.0` 对 NFKC 规范化内容进行段落优先、固定窗口和重叠切片；`nico-feature-hashing@1.0.0` 将词元及 3–5 字符 n-gram 映射为 L2 归一化的 384 维向量。MemoryChunk 同时冻结 Memory/Chunk Hash、offset、chunker 和 embedding profile，使用 pgvector HNSW `vector_cosine_ops`。同一 profile 重复索引返回既有结果，任何 Hash/切片漂移都失败关闭。
 
-`MemoryRetriever` 不接受 scope allowlist，只接受 TenantContext 与可选 Project/Agent 上下文；服务先在 RLS 事务中确认上下文存在，再以 SQL 过滤 Active、未过期和授权 scope，按每条 Memory 的最佳 chunk cosine distance、Memory ID 稳定排序，并附带 GrowthSource 摘要。Team、跨租户 context、Candidate、Invalidated、Expired 和 Deleted 均不能进入结果。
+公开检索接口只接受 TenantContext 与可选 Project/Agent 上下文；运行时内部还会应用已经冻结的 scope/type allowlist。服务先在 RLS 事务中确认上下文存在，再以 SQL 过滤 Active、未过期和授权 scope，按每条 Memory 的最佳 chunk cosine distance、Memory ID 稳定排序，并附带 GrowthSource 摘要。Team、跨租户 context、Candidate、Invalidated、Expired 和 Deleted 均不能进入结果。
 
 ## Skill 发布与解析
 
@@ -58,14 +59,26 @@ SkillVersion 不是一段自由文本，而是带 JSON Schema、结构化步骤�
 
 稳定版本由 Skill `current_version_id` 指向。1–99% 灰度通过独立 deployment 覆盖特定 project/agent scope，以 Run ID 的稳定 Hash 选择版本。同一优先级的重叠 deployment 被拒绝。推广到 100% 时切换稳定指针；回滚切回历史 Published 版本或退役灰度，不更改任何 SkillVersion。
 
-## 当前阶段边界
+## 运行时召回、冻结与效果记录
 
-- F1：本文、ADR-0010 与实施计划已冻结。
-- F2：Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval、SkillDeployment 已落库；运行角色对全部新表启用 `FORCE RLS`。复合外键闭合同租户来源，触发器拒绝非终态来源、直接发布、Hash 错配、非法状态转换、正式内容改写和物理删除。
-- F3：确定性 chunk/embed、版本化 MemoryChunk、`vector(384)`、HNSW cosine 索引、幂等索引服务和 scope-first 检索已完成；本地 embedding 是可复现基线，不声称外部语义模型质量。
-- F4：只读构造有界、递归脱敏、Hash 稳定的终态 TrajectorySnapshot；`ReflectionProvider` 只接收冻结 DTO。确定性基线反思器按成功/失败结果生成四类 MemoryCandidate 与结构化 SkillVersion draft，策略服务控制 scope/TTL，并在 Run 行锁下幂等写入 GrowthSource、Event 和 Audit。反思器没有 ORM、Session、Secret、工具或发布能力，重复/并发生成不会复制候选。
-- F5：`GrowthValidator` 只接收冻结的来源/subject DTO；确定性基线验证内容 Hash、Schema、步骤、精确工具状态/来源、scope 与终态轨迹。Evaluation 按 evaluator/version/content 幂等且终态不可变；Approval 要求最新终态 Evaluation 为 pass，禁止请求者自审，并支持批准、拒绝、取消、过期和重新申请。Memory 发布在一个事务内重新校验 Hash/来源/评价/批准、失效旧 Active 版本、激活新版本并写入确定性向量；修订创建同 key 的新 Candidate，失败不影响旧 Active。显式失效、到期与 tombstone 均保留来源、chunk、Event 和 Audit，但 SQL 召回立即排除。
-- F6：结构化修订创建递增 Draft 并复制不可变来源，比较按八个内容区及精确工具版本输出稳定 Hash 差异。发布只允许最新 Draft/Testing 版本，重新计算 content hash、要求最新终态 Evaluation 为 pass、非自审且未过期 Approval，并重建验证快照以拒绝审批后工具状态漂移。首版发布建立稳定指针；后续 Published 版本可按 project/agent 建立 1–99% canary，解析从数据库 Run/Task 推导 scope，以 `sha256(run_id:deployment_id) % 100` 稳定分桶，agent 优先于 project。推广/弃用/禁用/回滚先退役 active deployment；历史 SkillVersion 不改写，Disabled 为终态。
-- F7：开放终态 Run 候选生成、Memory 查询/来源/检索/修订/发布/失效/删除，以及 Skill 版本查询/比较/验证/审批/发布/灰度/推广/回滚/停用 API。没有任意创建正式 Memory/Skill 的入口；来源响应不公开轨迹 snapshot、向量、原始工具参数或内部凭据。OpenAPI 契约测试和真实 PostgreSQL HTTP 集成覆盖 403/404/409/422、双租户隔离及完整 release 链路。
-- F8：`e2e-goal-f.sh` 通过真实 Compose API/Worker 验证终态 Run→幂等 Candidate→未审批不可用→独立审批→Memory 向量召回→Skill v1/v2 发布→canary→推广→历史回滚，并证明第二租户不可观察。`verify-goal-f.sh` 重跑 172 单测、7 前端测试/构建、58 真实依赖集成和 Goal C/D/E/F E2E；证据归档于 `artifacts/goals/goal-f/20260717T084217Z/`。
-- Goal G 才能启用 Team scope；Goal H 才能由 Plugin 注册反思器/evaluator；Goal K 才提供正式身份和细粒度审批授权。
+Worker 第一次领取 Run 时计算 `Tenant policy ∩ AgentVersion policy`。Memory 和 Skill 分别具有显式 `enabled`、scope、top-k、`max_tokens` 与 `max_chars` 双重上限；Memory 还限制类型和最低相似度，Skill 必须列入 `allowed_skill_ids`。token 上限使用与 ContextSnapshot 一致的确定性保守估算，最终取 token/字符两者中更严格的预算。任一侧未启用、配置非法或交集为空时都失败关闭。Child Run 再与 Parent 已冻结策略及 delegation restrictions 求交，只能缩小权限。
+
+召回与 Skill stable/canary 解析和 RuntimeSession 建立在同一个租户事务中完成。`knowledge_selection_snapshot` 冻结精确 Memory/Skill ID、版本、content hash、scope、来源 Hash、解析分支和受上限约束的内容。恢复只重建该快照，不重新查询实时知识；发布、失效、灰度切换或回滚只影响之后首次领取的 Run。该含内容快照不通过普通 Runtime API 返回。
+
+进入模型上下文时，已发布知识位于 `untrusted_context`，明确标记为 `published_memory` 或 `published_skill`，不能授予工具、Secret、网络或委托权限。`ContextSnapshot` 公开可审计的 `memory_refs`、`skill_refs` 和策略/查询 Hash，不把知识当作系统指令。
+
+每个选择写入一条 `RuntimeKnowledgeUsage`。Context 创建和 ModelCall 开始分别绑定首次引用并递增计数；Run 终结后记录 outcome、result hash、usage 和是否真正被模型调用消费。成长快照只携带这些脱敏事实，因此后续 Candidate 可以追溯“哪个版本在什么 Run 中被使用并得到什么结果”，但仍必须重新经过 Evaluation 和独立 Approval，不能自行强化或发布。
+
+## 当前实现
+
+- Memory、Skill、SkillVersion、GrowthSource、Evaluation、Approval 和 SkillDeployment 已持久化，并受 `FORCE RLS`、复合约束和数据库触发器保护。
+- Memory 使用确定性切片、本地 384 维 feature-hashing embedding、pgvector HNSW cosine 索引和 scope-first 检索。本地 embedding 是可复现基线，不代表外部语义模型质量。
+- `ReflectionProvider` 只接收冻结、脱敏的终态轨迹 DTO，只能生成 Candidate/Draft，没有工具、数据库 Session 或发布权限。
+- `GrowthValidator` 检查内容 Hash、Schema、步骤、精确工具状态、来源、scope 与终态轨迹。Evaluation 和 Approval 均不可变，且请求者不能自审。
+- Memory 发布在一个事务中重新校验来源、Evaluation、Approval 和 Hash；失效、到期与 tombstone 会立即从 SQL 召回中排除。
+- Skill 修订保持不可变来源，支持结构化比较、验证、审批、稳定版本、project/agent canary、推广、弃用、禁用和历史回滚。
+- Runtime 首次领取时冻结 Tenant ∩ AgentVersion 的 Memory/Skill 选择；恢复复用相同版本与 Hash，Child 只能进一步收缩。
+- `RuntimeKnowledgeUsage` 把选择、ContextSnapshot、ModelCall、终态结果与后续成长轨迹关联起来，不公开所选内容正文。
+- API 不提供任意创建正式 Memory 或 Skill 的入口。来源响应不公开内部轨迹快照、向量、原始工具参数或凭据。
+
+当前没有正式身份认证，因此 Approval 的操作者身份只适用于本地/受信环境。Plugin evaluator 注册和 Team scope 不受支持。

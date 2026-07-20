@@ -52,6 +52,17 @@ class FakeRunner:
         return None
 
 
+def test_python_tool_definition_hash_is_process_stable() -> None:
+    executor = PythonSandboxExecutor(
+        FakeSandboxClient(SandboxExecutionResponse(status="succeeded", duration_ms=0))
+    )
+
+    assert (
+        executor.spec.content_hash
+        == "749ff98d115e11be6d65b3a9c48f86682383cd12418d4908d84762d04c7e6f4a"
+    )
+
+
 def _context(config=None) -> ToolExecutionContext:
     return ToolExecutionContext(
         tenant_id=uuid4(),

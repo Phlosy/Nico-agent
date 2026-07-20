@@ -23,8 +23,10 @@ from nico_agent.runtime.contracts import (
     RuntimeCapability,
     RuntimeEvent,
     RuntimeEventType,
+    RuntimeOutcome,
     RuntimeProviderDescriptor,
     RuntimeResult,
+    RuntimeServices,
     RuntimeSessionHandle,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
@@ -51,7 +53,12 @@ class _HermesSession:
     status: RuntimeSessionStatus = RuntimeSessionStatus.CREATED
     events: list[RuntimeEvent] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
-    usage: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] = field(
+        default_factory=lambda: {
+            "status": "unavailable",
+            "source": "hermes_cli_0.18.2",
+        }
+    )
     process: asyncio.subprocess.Process | None = None
     cancelled: bool = False
     stderr_lines: list[str] = field(default_factory=list)
@@ -65,6 +72,8 @@ class HermesRuntimeProvider:
     descriptor = RuntimeProviderDescriptor(
         name="hermes",
         version="0.18.2",
+        protocol_version="2.0",
+        implementation="adapter",
         capabilities=frozenset(
             {
                 RuntimeCapability.STREAM_EVENTS,
@@ -76,6 +85,15 @@ class HermesRuntimeProvider:
                 RuntimeCapability.PLATFORM_TOOLS,
             }
         ),
+        compatibility={
+            "adapter_boundary": "subprocess_cli",
+            "cli_version": "0.18.2",
+            "execution_modes": ["direct"],
+            "native_planning": False,
+            "native_coordination": False,
+            "resume_provider_versions": ["0.18.2"],
+            "resume_protocol_versions": ["1.0", "2.0"],
+        },
     )
 
     def __init__(
@@ -143,17 +161,17 @@ class HermesRuntimeProvider:
             )
         return self._handle(session)
 
-    async def run(
+    async def execute(
         self,
         external_session_id: str,
         request: RuntimeSessionRequest,
-        tool_handler=None,
-    ) -> RuntimeResult:
+        services: RuntimeServices,
+    ) -> RuntimeOutcome:
         session = self._session(external_session_id)
         if session.request.run_id != request.run_id:
             raise ValueError("runtime request does not match the created Hermes session")
         if session.status in TERMINAL_RUNTIME_STATUSES:
-            return self._terminal_result(session)
+            return self._terminal_outcome(session)
 
         session.status = RuntimeSessionStatus.RUNNING
         session.messages.append({"role": "user", "content": request.task_input})
@@ -191,7 +209,7 @@ class HermesRuntimeProvider:
         if session.cancelled:
             session.status = RuntimeSessionStatus.CANCELLED
             await self._emit_once(session, RuntimeEventType.RUN_CANCELLED)
-            return self._terminal_result(session)
+            return self._terminal_outcome(session)
         if return_code != 0:
             error = {
                 "code": "HERMES_CLI_FAILED",
@@ -204,7 +222,7 @@ class HermesRuntimeProvider:
                 RuntimeEventType.RUN_FAILED,
                 payload={"error": error, "external_session_id": session.external_id},
             )
-            return RuntimeResult(
+            return RuntimeOutcome.terminal(
                 status=session.status,
                 error=error,
                 checkpoint={"hermes_session_id": session.external_id},
@@ -223,13 +241,28 @@ class HermesRuntimeProvider:
             RuntimeEventType.RUN_COMPLETED,
             payload={"output": output, "external_session_id": session.external_id},
         )
-        return RuntimeResult(
+        return RuntimeOutcome.terminal(
             status=session.status,
             output=output,
             usage=session.usage,
             checkpoint={"hermes_session_id": session.external_id},
             external_session_id=session.external_id,
         )
+
+    async def run(
+        self,
+        external_session_id: str,
+        request: RuntimeSessionRequest,
+        tool_handler=None,
+    ) -> RuntimeResult:
+        """Deprecated v1 shim retained for callers pinned before protocol v2."""
+
+        outcome = await self.execute(
+            external_session_id,
+            request,
+            RuntimeServices(tool_handler=tool_handler),
+        )
+        return outcome.to_result()
 
     async def pause(self, external_session_id: str) -> RuntimeSessionHandle:
         self._session(external_session_id)
@@ -528,15 +561,15 @@ class HermesRuntimeProvider:
             metadata={"adapter": "subprocess", "checkpoint": session.external_id},
         )
 
-    def _terminal_result(self, session: _HermesSession) -> RuntimeResult:
+    def _terminal_outcome(self, session: _HermesSession) -> RuntimeOutcome:
         if session.status is RuntimeSessionStatus.CANCELLED:
-            return RuntimeResult(
+            return RuntimeOutcome.terminal(
                 status=session.status,
                 error={"code": "CANCELLED", "message": "Hermes execution was cancelled"},
                 checkpoint={"hermes_session_id": session.external_id},
                 external_session_id=session.external_id,
             )
-        return RuntimeResult(
+        return RuntimeOutcome.terminal(
             status=session.status,
             checkpoint={"hermes_session_id": session.external_id},
             external_session_id=session.external_id,

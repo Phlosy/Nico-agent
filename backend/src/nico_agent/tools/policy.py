@@ -42,7 +42,7 @@ def build_tool_policy_snapshot(
     if plugin_refs:
         allow = set()
         permissions = set()
-        errors.append("plugin permission layer is unavailable before Goal H")
+        errors.append("plugin permission layer is not implemented")
 
     tenant_secret_refs = {
         str(name): ref

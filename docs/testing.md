@@ -1,41 +1,174 @@
-# 测试与验收
+# Testing and acceptance
 
-## 测试层级
+## Recommended commands
 
-| 层级 | 命令 | 覆盖 |
+| Scope | Command | Coverage |
 | --- | --- | --- |
-| 后端单元 | `.venv/bin/pytest backend/tests/unit` | Goal A–E 回归，以及 Memory/Skill 状态机、切片/嵌入、轨迹快照、反思 DTO 与策略合同 |
-| 前端组件 | `npm --prefix frontend test` | API 运行时契约、加载、健康、503 降级、网络失败与手动重试 |
-| 静态/构建 | `scripts/test.sh` | Ruff、后端单测、前端测试、TypeScript 与 Vite 生产构建 |
-| 真实依赖 | `scripts/test-integration.sh` | 迁移升级—回滚—重放、RLS、最小 claimer、Runtime/Tool，以及 Goal F 来源闭合、发布闸门、Hash 绑定、灰度唯一和终态不可变 |
-| 整栈 E2E | `scripts/e2e.sh` | 镜像、Compose 依赖、容器健康、API/OpenAPI、Web、Worker、Bucket 初始化 |
-| Goal B 总验收 | `scripts/verify-goal-b.sh` | 构建镜像，执行以上自动化出口，并证明迁移可回滚重放 |
-| Goal C 核心 E2E | `scripts/e2e-goal-c.sh` | 真实 HTTP Tenant→Project→AgentVersion→Task→Run→Step→Event/Audit 生命周期与第二租户隔离 |
-| Goal C 总验收 | `scripts/verify-goal-c.sh` | 构建、全量回归、真实依赖集成和核心控制面 E2E |
-| Goal D Runtime E2E | `scripts/e2e-goal-d.sh` | HTTP 创建 Run，由独立 Compose Worker 经 PostgreSQL 租约和 Mock Provider 自动完成，再查询 Runtime/轨迹/Event/Audit |
-| Goal D 总验收 | `scripts/verify-goal-d.sh` | Goal C 全量回归、47 后端单测、7 前端测试、18 真实集成、两个 Compose E2E 与 Hermes 边界检查 |
-| Goal E Tool/Sandbox E2E | `scripts/e2e-goal-e.sh` | HTTP→Worker→Mock intent→Gateway→文件/报告/独立 Python 容器→ToolCall/Event/Audit/Trajectory/API；无残留 sandbox 容器 |
-| Goal E 总验收 | `scripts/verify-goal-e.sh` | Goal D 完整回归、138 后端单测、7 前端测试、31 真实集成、三个 Compose E2E、固定镜像和真实 Hermes MCP 发现 |
-| Goal F 成长闭环 E2E | `scripts/e2e-goal-f.sh` | 终态 Run→幂等候选→未审批隔离→独立审批→Memory 召回→Skill v1/v2 灰度/推广/回滚→第二租户不可观察 |
-| Goal F 总验收 | `scripts/verify-goal-f.sh` | Goal E 完整回归、172 后端单测、7 前端测试/构建、58 真实集成、Goal C/D/E/F Compose E2E 与证据归档 |
+| Standard local gate | `scripts/test.sh` | Ruff check/format, backend unit tests, frontend tests, TypeScript, and production build |
+| Backend unit tests | `.venv/bin/pytest backend/tests/unit` | Domain state, Runtime, tools, tenant isolation contracts, Memory, and Skill lifecycle |
+| Frontend tests | `npm --prefix frontend test` | Health states plus Run Inspector deep link, ordering, loading/empty/error/partial/cancelled/redacted and hostile-text behavior |
+| Real dependencies | `scripts/test-integration.sh` | Alembic replay, PostgreSQL RLS, Worker claims, Runtime/Tool persistence, and growth invariants |
+| Compose stack | `scripts/e2e.sh` | Images, dependency health, API/OpenAPI, Console, Worker, and bucket initialization |
+| Goal G native runtime | `scripts/e2e-goal-g.sh` | OpenAI-compatible fake model, default `nico_native`, streaming, ModelCall/ContextSnapshot/Event persistence, and zero-secret scan |
+| Goal G full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-g/<UTC> scripts/verify-goal-g.sh` | Source, migrations, all prior E2E, native E2E, and evidence manifest |
+| Goal H ReAct recovery | `scripts/e2e-goal-h.sh` | Multi-round Tool Gateway loop, real Worker SIGKILL, lease takeover, idempotent side-effect reuse, Python sandbox, and contiguous events |
+| Goal H full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-h/<UTC> scripts/verify-goal-h.sh` | Full source/migration regression, Goal G Direct regression, Goal H fault injection, credential scan, and evidence manifest |
+| Goal I planning E2E | `scripts/e2e-goal-i.sh` | Two Plan revisions, failed validation, constrained Reflection/Replan, deterministic Completion, separately billed judge, and read API |
+| Goal I full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-i/<UTC> scripts/verify-goal-i.sh` | Full source/migration regression, base Compose E2E, Goal I planning E2E, credential scan, and evidence manifest |
+| Goal J multi-Agent recovery | `scripts/e2e-goal-j.sh` | Two parallel Child Runs, Parent suspension/wakeup, private shared Artifacts, Worker SIGKILL and replacement recovery |
+| Goal J full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-j/<UTC> scripts/verify-goal-j.sh` | Full source/migration regression, base Compose E2E, dynamic coordination fault injection, credential scan and evidence manifest |
+| Goal K runtime knowledge | `scripts/e2e-goal-k.sh` | Governed publication, Tenant ∩ AgentVersion recall, exact Context refs, ModelCall consumption/effect facts and downstream GrowthSource |
+| Goal K full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-k/<UTC> scripts/verify-goal-k.sh` | Full source/migration regression, base Compose E2E, published Memory/Skill runtime acceptance, credential scan and evidence manifest |
+| Goal L Hermes contract | `scripts/e2e-goal-l.sh` | Default-disabled failure without fallback, then explicit fake/local Hermes protocol-v2 success and compatibility facts |
+| Goal L full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-l/<UTC> scripts/verify-goal-l.sh` | Docs/Markdown/Compose checks, full suites, Goal G-L behavior regression, optional Adapter contract and evidence manifest |
+| CLI Goal C chat E2E | `scripts/e2e-cli-goal-c.sh` | Two durable turns, continue/resume/history, SSE, JSON/no-ANSI and real SIGINT server cancellation |
+| CLI Goal C full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-c/<UTC> scripts/verify-cli-goal-c.sh` | Source/docs/migration checks, all suites, CLI-B regression and CLI-C Compose E2E |
+| CLI Goal D full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-d/<UTC> scripts/verify-cli-goal-d.sh` | All suites, migration roundtrip, CLI-B/C regression, exec/detach/watch, PTY slash and coin-cat E2E |
+| CLI Goal E context E2E | `scripts/e2e-cli-goal-e.sh` | Real staged bytes, Turn-owned Artifact, download, compact Run, summary and ContextSnapshot facts |
+| CLI Goal E full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-e/<UTC> scripts/verify-cli-goal-e.sh` | All suites, migration roundtrip, CLI-B/C/D regression and Goal E security/E2E evidence |
+| CLI Goal F approval E2E | `scripts/e2e-cli-goal-f.sh` | Non-interactive disconnect at ApprovalRequested, PTY resume, once/run decisions, two sensitive tools, audit and exactly-once execution |
+| CLI Goal F full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-f/<UTC> scripts/verify-cli-goal-f.sh` | All suites, migration roundtrip, CLI-B–E regression, approval recovery/expiry and Goal F PTY evidence |
+| User Demo | `scripts/demo.sh` | Published AgentVersion through Task/Run, Worker, Mock Runtime, result, Events, and query URLs |
 
-集成测试默认跳过，只有 `RUN_INTEGRATION=1` 才运行；`test-integration.sh` 会准备真实依赖并设置该变量，因此不能把普通 pytest 的 skip 当成集成测试通过。
+Integration tests are skipped by ordinary `pytest`. The integration script starts
+or checks the required services and sets `RUN_INTEGRATION=1`; a skipped integration
+test is not evidence of a passing integration suite.
 
-Goal E 当前基线是后端 138 项单元测试、真实依赖 31 项集成测试、Goal C/D/E 三条 Compose E2E。安全覆盖包括默认拒绝/权限交集、跨租户、Schema/Secret 脱敏、并发幂等、重试/超时/取消/租约丢失、路径遍历/符号与硬链接/竞态、SSRF/混合 DNS/重定向/rebinding、只读数据库角色，以及 Python 非 root/无网络/只读根/资源限制/清理。真实 Hermes 只验证无模型凭据的 MCP 工具发现，不冒充真实推理。
+## Security-sensitive coverage
 
-Goal F 已在 `artifacts/goals/goal-f/20260717T084217Z/` 完整验证：后端 172 项单元、前端 7 项测试及 production build、58 项真实依赖集成，以及 Goal C/D/E/F 四条 Compose E2E 全部通过。F5 覆盖冻结验证 DTO、异常脱敏、最新评价、并发幂等、非自审审批和原子 Memory 生命周期；F6 覆盖 Skill 八区差异、稳定分桶、不可变修订来源、发布、真实 Run scope、canary、推广、弃用、历史回滚、禁用、跨租户、工具漂移及数据库防线；F7 覆盖 OpenAPI、完整成长 HTTP、403/404/409/422 和第二租户隔离；F8 证明候选在审批前不可召回/解析，审批后 Memory 可检索、Skill 可灰度/推广/回滚，且来源响应不泄露 snapshot、向量、原始工具参数或内部 token。
+The automated suite includes checks for:
 
-## 人工与故障验收
+- default-deny tool policy and Tenant/AgentVersion policy intersection;
+- cross-tenant access and PostgreSQL RLS enforcement;
+- Schema validation, Secret redaction, and terminal-record immutability;
+- idempotency, retry, timeout, cancellation, heartbeat, and lease loss;
+- path traversal, links, file races, and workspace quotas;
+- SSRF, redirect, DNS, and database-read restrictions;
+- one-shot Python containers with no network, a read-only root filesystem,
+  non-root execution, resource limits, and cleanup;
+- Memory/Skill provenance, independent approval, publication, canary selection,
+  promotion, rollback, invalidation, and tenant isolation.
+- model endpoint SSRF/DNS rebinding defenses, HTTPS policy, bounded streaming,
+  Secret redaction, capability gates, retry boundaries, and hard/soft rate limits;
+- ModelCall/ContextSnapshot same-tenant and same-Run integrity, terminal
+  immutability, RuntimeSession loop state, and resumable SSE event sequence.
+- ReAct budgets, exact tool versions, malformed Tool Call failure, pre-action and
+  post-observation checkpoints, model replay relation, lease fencing, and
+  idempotent ToolCall reuse after Worker failure.
+- Plan DAG/cycle/budget validation, immutable revisions, failed step projection,
+  constrained Reflection/Replan, deterministic Task acceptance, separately billed
+  completion judge, schema-v3 recovery, real Tool Gateway execution with a
+  pre-action checkpoint and parent trace, and Plan/Step/Evaluation tenant isolation.
+- Coordination depth/count/parallelism/cycle/duplicate guards, concurrent budget
+  reservation, permission/Secret-reference narrowing, Parent lease release,
+  terminal Child wakeup, missed-notification reconciliation and tree cancellation.
+- Private content-addressed Artifact upload/read, Child→Parent sharing, sibling
+  denial, hash/size tamper detection, terminal immutability, upload bounds,
+  anonymous-access rejection and temporary-object cleanup.
+- Runtime Memory/Skill policy intersection, candidate/draft exclusion, exact
+  version/hash freezing, untrusted context rendering, Child policy narrowing,
+  Context/ModelCall consumption counts, terminal effects and Growth propagation.
+- Provider implementation/capability/compatibility parity, explicit Hermes enable,
+  pinned version, fail-closed resolution, historical session resume and legacy
+  resolver deprecation telemetry.
+- Run Inspector fixed information order, deep links, keyboard submission,
+  accessible labels, partial/cancelled states, recursive redaction and hostile
+  HTML rendered as text.
 
-历史 Goal B 的最终证据还包含：
+Goal G hermetic acceptance proves real HTTP/SSE inference against the included
+OpenAI-compatible fake model without a Hermes binary. It does not prove an
+external provider, model quality, profitability, or production readiness. A
+credentialed operator endpoint is still required before Goal G can be marked
+`Verified`; credentials must be supplied through an `env:NICO_MODEL_SECRET_*`
+reference and must not appear in commands or evidence.
 
-- 1440px 与 390px 页面截图；
-- 浏览器控制台错误和横向溢出检查；
-- 停止 Redis 后 API 返回 503、Web 标记 Redis、Worker 输出 degraded warning；
-- Redis 恢复后 API 自动回到 200；
-- Alembic 从 head 降到 base 后再升级，扩展恢复；
-- `cleanup.sh` 与 `cleanup.sh --volumes` 的清理验证。
+Goal H hermetic acceptance additionally kills a real Compose Worker after a
+successful `file.write`, waits for lease expiry, starts a distinct replacement,
+and proves that the cached write is not executed again before the Run continues
+through the Python sandbox and final model response. A credentialed real-model
+tool loop is still required before Goal H can be marked `Verified`.
 
-## 证据规则
+Goal I hermetic acceptance deliberately makes revision 1 fail deterministic step
+validation, persists Reflection and revision 2, then runs deterministic Completion
+before a separate model judge. It proves orchestration and accounting semantics,
+not external model quality; a credentialed real-model planning Run is still
+required before Goal I can be marked `Verified`.
 
-每个 Goal 在 `artifacts/goals/goal-<x>/<UTC timestamp>/` 保存命令、日志、响应、截图、版本、错误与验收摘要。证据必须对应实际执行，不能以固定文本代替测试输出。
+Goal J hermetic acceptance creates two Child Runs in one delegation round, kills
+the real Compose Worker while both Child model calls are in flight, and proves
+lease-expiry takeover, Child checkpoint recovery, Artifact exchange, Parent
+wakeup and final aggregation. It proves orchestration and isolation semantics,
+not the quality of an external model; credentialed acceptance remains separate.
+
+Goal K hermetic acceptance uses the public governance APIs to generate, evaluate,
+independently approve and publish one Memory and one Skill, then proves a later
+Run consumes exactly those published versions and exposes only redacted usage/effect
+facts. It proves runtime integration and provenance, not knowledge quality or
+profitability; credentialed external-model acceptance remains separate.
+
+Goal L hermetic acceptance first proves that an explicit Hermes AgentVersion fails
+with `RUNTIME_PROVIDER_NOT_FOUND` on the default stack and never falls back to
+Native. It then starts only the optional contract Worker and completes the same
+Run contract through the fake/local Hermes `0.18.2` CLI. This proves adapter and
+deployment behavior, not credentialed Hermes inference or model quality.
+
+## Manual acceptance
+
+For a release candidate, also verify:
+
+1. `scripts/dev.sh --detach` reaches healthy API and Console states.
+2. `/api/v1/health/ready` reports PostgreSQL, Redis, and MinIO ready.
+3. `scripts/demo.sh` completes twice and reuses its stable Demo resources.
+4. Redis failure produces a degraded readiness response and recovers after Redis
+   returns.
+5. `scripts/cleanup.sh` preserves data volumes, while
+   `scripts/cleanup.sh --volumes` removes them only when explicitly requested.
+6. The Console has no browser-console errors or horizontal overflow at desktop
+   and mobile widths.
+
+Historical acceptance logs are stored under `artifacts/goals/`. Treat them as
+point-in-time evidence: current changes still require the relevant tests above.
+
+## Nico CLI
+
+CLI 的配置、HTTP client、SSE 分片、chat、输出和 Typer 命令测试：
+
+```bash
+.venv/bin/pytest backend/tests/unit/test_cli_*.py
+```
+
+CLI Goal B 真实路径会运行一个新的确定性 Mock Run，并使用安装后的 `nico` 子进程验证 profile 权限、health、doctor、Project、AgentVersion、Task、Run、Runtime、Event、JSON、`NO_COLOR` 和缺租户错误：
+
+```bash
+scripts/e2e-cli-goal-b.sh
+```
+
+CLI Goal C 的真实路径会重建实际 API/Worker 镜像，以安装后的 `nico` 子进程创建两个 Turn，检查 `--continue`、`--resume --read-only`、history、SSE、JSON 无 ANSI，并以真实 SIGINT 验证服务端 Run/Turn 取消：
+
+```bash
+scripts/e2e-cli-goal-c.sh
+```
+
+CLI Goal D 的真实路径覆盖 attached exec、严格 JSON input、私有原子 output、detach/watch、Event cursor 续读、彩色 TTY 像素猫、无色非 TTY，以及交互式 `/help`、`/inspect` 的 Plan/Step/Tool/Artifact/usage 视图：
+
+```bash
+scripts/e2e-cli-goal-d.sh
+```
+
+CLI Goal E 使用真实 MinIO、PostgreSQL、API、Worker 和安装后的 CLI，验证暂存附件、Turn 物化、受控下载、summary Run/ModelCall、冻结上下文选择和 ContextSnapshot：
+
+```bash
+scripts/e2e-cli-goal-e.sh
+```
+
+CLI Goal F 使用真实 PostgreSQL、API、Worker、Sandbox Runner、fake model 和安装后的 CLI。它先以 JSON 非交互模式在第一条 `ApprovalRequested` 处安全断开，再用 `--resume` 进入 PTY，分别选择 once 和 run，验证 Run 挂起/唤醒、双工具零重复、Event/Audit、脱敏参数和无 Secret 泄漏：
+
+```bash
+scripts/e2e-cli-goal-f.sh
+```
+
+阶段总验收同时运行全部单元、前端构建、真实基础设施集成和 CLI-B/C/D/E/F E2E：
+
+```bash
+NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-f/<UTC> scripts/verify-cli-goal-f.sh
+```

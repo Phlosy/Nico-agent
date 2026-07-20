@@ -158,10 +158,30 @@ async def test_mock_worker_persists_complete_runtime_trajectory() -> None:
         assert run["lease_token"] is None
         assert runtime_session["status"] == "completed"
         assert runtime_session["provider_name"] == "mock"
+        assert runtime_session["provider_resolution_source"] == "legacy_run_config"
+        assert runtime_session["legacy_resolver_used"] is True
+        assert runtime_session["provider_compatibility"]["implementation"] == "test"
         assert runtime_session["trajectory"]["events"][-1]["type"] == "run.completed"
         assert step_count == 2
         assert event_count >= 10
         assert audit_count >= 1
+        async with database.admin_transaction() as session:
+            telemetry = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT event_type, payload FROM events "
+                            "WHERE run_id = :run_id AND event_type = "
+                            "'LegacyRuntimeProviderResolved'"
+                        ),
+                        {"run_id": seeded["id"]},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        assert telemetry["payload"]["source"] == "legacy_run_config"
+        assert telemetry["payload"]["removal_version"] == "0.4.0"
     finally:
         await engine.dispose()
 
@@ -207,7 +227,7 @@ async def test_mock_runtime_executes_real_tools_only_through_gateway(tmp_path) -
             worker_id="mock-tools",
             lease_seconds=5,
             heartbeat_seconds=0.05,
-            tool_gateway=ToolGateway(database, tool_registry),
+            tool_gateway=ToolGateway(database, tool_registry, approval_required_risks=frozenset()),
         )
 
         assert await worker.execute_once() is True

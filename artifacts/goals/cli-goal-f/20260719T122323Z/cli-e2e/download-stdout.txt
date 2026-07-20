@@ -1,0 +1,19 @@
+/download aa30a359-618b-4cd7-a99e-28dab36bcbfb /tmp/tmp.fZxkXgZd8v/downloaded.txt
+/exit
+╭───────────────────────────────── Nico Agent ─────────────────────────────────╮
+│     .-====-.    Agent   Nico Demo Agent                                      │
+│    / /\_/\ \    Version 1                                                    │
+│   | ( o.o ) |   Runtime mock                                                 │
+│   |  > ^ <  |   Project Nico Demo                                            │
+│    '-====-'     Tools   policy default                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[?12l[?25hyou › /download aa30a359-618b-4cd7-a99e-28dab36bcbfb /tmp/tmp.fZxkXgZd8v/downloaded.txt
+╭──────────────────────────── Artifact downloaded ─────────────────────────────╮
+│ {                                                                            │
+│   "artifact_id": "aa30a359-618b-4cd7-a99e-28dab36bcbfb",                     │
+│   "path": "/tmp/tmp.fZxkXgZd8v/downloaded.txt",                              │
+│   "content_type": "text/plain; charset=utf-8",                               │
+│   "size_bytes": 33                                                           │
+│ }                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+you › /exit

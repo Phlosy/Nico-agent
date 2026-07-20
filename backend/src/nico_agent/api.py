@@ -18,7 +18,10 @@ from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from nico_agent.artifact_api import router as artifact_router
 from nico_agent.config import Settings, get_settings
+from nico_agent.conversations.api import router as conversation_router
+from nico_agent.coordination.api import router as coordination_router
 from nico_agent.database import Database
 from nico_agent.domain.errors import AccessDenied, DomainError
 from nico_agent.domain_api import router as domain_router
@@ -30,6 +33,9 @@ from nico_agent.health import (
     build_health_service,
 )
 from nico_agent.logging import configure_logging, request_id_context
+from nico_agent.model_api import router as model_router
+from nico_agent.plan_api import router as plan_router
+from nico_agent.tool_approvals.api import router as tool_approval_router
 
 logger = logging.getLogger(__name__)
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -115,7 +121,7 @@ def create_app(
     app = FastAPI(
         title=runtime_settings.app_name,
         version=runtime_settings.app_version,
-        summary="General-purpose growing multi-agent service platform",
+        summary="Self-hosted Agent Runtime for reliable execution and controlled growth",
         lifespan=lifespan,
     )
     app.state.settings = runtime_settings
@@ -127,7 +133,15 @@ def create_app(
         allow_origins=runtime_settings.cors_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type", "X-Request-ID", "X-Tenant-ID", "X-Actor-ID"],
+        allow_headers=[
+            "Content-Type",
+            "X-Request-ID",
+            "X-Tenant-ID",
+            "X-Actor-ID",
+            "Last-Event-ID",
+            "Idempotency-Key",
+            "Authorization",
+        ],
         expose_headers=["X-Request-ID"],
     )
 
@@ -160,7 +174,13 @@ def create_app(
         status_code = 400
         if exc.code == "RESOURCE_NOT_FOUND":
             status_code = 404
-        elif exc.code in {"REVISION_CONFLICT", "INVALID_STATE_TRANSITION"}:
+        elif exc.code == "ARTIFACT_TOO_LARGE":
+            status_code = 413
+        elif exc.code in {
+            "REVISION_CONFLICT",
+            "INVALID_STATE_TRANSITION",
+            "TOOL_APPROVAL_ALREADY_DECIDED",
+        }:
             status_code = 409
         elif isinstance(exc, AccessDenied):
             status_code = 403
@@ -183,6 +203,12 @@ def create_app(
         )
 
     app.include_router(domain_router)
+    app.include_router(conversation_router)
+    app.include_router(artifact_router)
+    app.include_router(coordination_router)
     app.include_router(growth_router)
+    app.include_router(model_router)
+    app.include_router(plan_router)
+    app.include_router(tool_approval_router)
 
     return app

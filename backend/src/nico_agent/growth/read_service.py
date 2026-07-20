@@ -1,4 +1,4 @@
-"""Tenant-scoped read models for the Goal F HTTP surface."""
+"""Tenant-scoped read models for the growth HTTP surface."""
 
 from __future__ import annotations
 

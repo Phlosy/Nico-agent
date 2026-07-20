@@ -1,0 +1,64 @@
+id: 959
+event: TaskStatusChanged
+data: {"id": "a7402343-526b-43bc-9cb1-05203fd4eb12", "sequence": 959, "type": "TaskStatusChanged", "payload": {"status": "running", "revision": 2}, "created_at": "2026-07-18T20:17:24.434586+00:00"}
+
+id: 960
+event: RunCreated
+data: {"id": "fd81d47b-42e5-4561-864e-c672a50a68a4", "sequence": 960, "type": "RunCreated", "payload": {"attempt": 1, "task_id": "e030fc88-7f27-4ba6-a1a9-8ba1594ebba9"}, "created_at": "2026-07-18T20:17:24.434586+00:00"}
+
+id: 961
+event: RuntimeProviderResolved
+data: {"id": "5b612dc3-22f7-4e11-90a7-7dbdf5bfc787", "sequence": 961, "type": "RuntimeProviderResolved", "payload": {"legacy": false, "source": "agent_version", "provider": "nico_native", "removal_version": null}, "created_at": "2026-07-18T20:17:24.539893+00:00"}
+
+id: 962
+event: RunPlanningStarted
+data: {"id": "a0beec29-b121-4289-98cf-3d97436e55da", "sequence": 962, "type": "RunPlanningStarted", "payload": {"revision": 2, "worker_id": "nico-worker-1"}, "created_at": "2026-07-18T20:17:24.539893+00:00"}
+
+id: 963
+event: RuntimeSessionBound
+data: {"id": "17fa5735-c969-478d-a2ab-300d681aefe6", "sequence": 963, "type": "RuntimeSessionBound", "payload": {"provider": "nico_native", "external_session_id": "nico:6eefe8d7-3c7b-462e-9891-803febff0579:674d98086ef644d2aa35c7c999c093d0"}, "created_at": "2026-07-18T20:17:24.692179+00:00"}
+
+id: 964
+event: RuntimeSessionCreated
+data: {"id": "1340918d-06b2-45b1-b985-ad30c198f150", "sequence": 964, "type": "RuntimeSessionCreated", "payload": {"type": "session.created", "message": null, "payload": {"run_id": "6eefe8d7-3c7b-462e-9891-803febff0579", "protocol_version": "2.0"}, "occurred_at": "2026-07-18T20:17:24.690666+00:00", "provider_sequence": 1}, "created_at": "2026-07-18T20:17:24.710127+00:00"}
+
+id: 965
+event: RuntimeRunStarted
+data: {"id": "ec862ea9-1970-45b1-bd51-4113f55335bc", "sequence": 965, "type": "RuntimeRunStarted", "payload": {"type": "run.started", "message": null, "payload": {}, "occurred_at": "2026-07-18T20:17:24.707605+00:00", "provider_sequence": 2}, "created_at": "2026-07-18T20:17:24.724328+00:00"}
+
+id: 966
+event: RuntimeStepStarted
+data: {"id": "0944bcb7-f995-4af0-bd75-7bac76e96429", "sequence": 966, "type": "RuntimeStepStarted", "payload": {"type": "step.started", "message": null, "payload": {"name": "direct.reasoning", "step_key": "reasoning:1", "iteration": 1, "step_type": "reasoning"}, "occurred_at": "2026-07-18T20:17:24.708237+00:00", "provider_sequence": 3}, "created_at": "2026-07-18T20:17:24.735491+00:00"}
+
+id: 967
+event: RuntimeContextSnapshotCreated
+data: {"id": "e56c525a-9ebf-4676-8999-ab0655195f95", "sequence": 967, "type": "RuntimeContextSnapshotCreated", "payload": {"type": "context.snapshot.created", "message": null, "payload": {"reason": "initial", "version": 1, "content_hash": "296536d56ad72278365ae7054fba6ed2ccbac6f1040f5008f33fe8d13bb26259", "token_estimate": 303, "context_snapshot_id": "205bea5d-dd9f-4924-8360-6b44e7c3f187"}, "occurred_at": "2026-07-18T20:17:24.708297+00:00", "provider_sequence": 4}, "created_at": "2026-07-18T20:17:24.759550+00:00"}
+
+id: 968
+event: RuntimeModelCallStarted
+data: {"id": "9dbbc849-d8e6-45e4-a31c-2d08acfca7e8", "sequence": 968, "type": "RuntimeModelCallStarted", "payload": {"type": "model.call.started", "message": null, "payload": {"model": "goal-g-fake", "status": "streaming", "call_key": "model:1", "provider": "openai_compatible", "request_hash": "e171ac597680f9f009d3468f3db80d557b288f9f9ecc14db8d0982ab5907cff4", "model_call_id": "638be12d-201d-4577-8c21-401a5c148220", "context_snapshot_id": "205bea5d-dd9f-4924-8360-6b44e7c3f187"}, "occurred_at": "2026-07-18T20:17:24.708469+00:00", "provider_sequence": 5}, "created_at": "2026-07-18T20:17:24.779310+00:00"}
+
+id: 969
+event: RuntimeModelOutputDelta
+data: {"id": "8197dfc2-f7d5-4f15-a71f-f294d7728fcc", "sequence": 969, "type": "RuntimeModelOutputDelta", "payload": {"type": "model.output.delta", "message": "Nico native runtime is ready.", "payload": {"delta": "Nico native runtime is ready.", "call_key": "model:1"}, "occurred_at": "2026-07-18T20:17:24.735884+00:00", "provider_sequence": 6}, "created_at": "2026-07-18T20:17:24.798352+00:00"}
+
+id: 970
+event: RuntimeModelCallCompleted
+data: {"id": "f9956f24-bd92-4dd5-bda2-23d7cee65cbb", "sequence": 970, "type": "RuntimeModelCallCompleted", "payload": {"type": "model.call.completed", "message": null, "payload": {"cost": {}, "error": null, "usage": {"input_tokens": 48, "total_tokens": 58, "output_tokens": 10}, "status": "completed", "call_key": "model:1", "cost_status": "unknown", "usage_status": "exact", "model_call_id": "638be12d-201d-4577-8c21-401a5c148220", "response_hash": "02e190d405fd954454a9f2ec9e164a9cf1357d3aeae84c72f880bfac6b683ba5", "provider_request_id": "nico-goal-g-fake-request"}, "occurred_at": "2026-07-18T20:17:24.735982+00:00", "provider_sequence": 7}, "created_at": "2026-07-18T20:17:24.805026+00:00"}
+
+id: 971
+event: RuntimeStepCompleted
+data: {"id": "5b86fefc-1684-4f43-807b-dff90cf559c0", "sequence": 971, "type": "RuntimeStepCompleted", "payload": {"type": "step.completed", "message": null, "payload": {"name": "direct.reasoning", "decision": "final", "step_key": "reasoning:1", "iteration": 1, "step_type": "reasoning", "model_call_key": "model:1", "context_version": 1}, "occurred_at": "2026-07-18T20:17:24.736018+00:00", "provider_sequence": 8}, "created_at": "2026-07-18T20:17:24.816289+00:00"}
+
+id: 972
+event: RuntimeCheckpointSaved
+data: {"id": "148c1fd6-3d0c-4948-9287-0d2299dae92e", "sequence": 972, "type": "RuntimeCheckpointSaved", "payload": {"type": "checkpoint.saved", "message": null, "payload": {"usage": {"cost": {}, "cost_status": "unknown", "input_tokens": 48, "total_tokens": 58, "output_tokens": 10}, "iteration": 1, "loop_state": "completed", "context_hash": "296536d56ad72278365ae7054fba6ed2ccbac6f1040f5008f33fe8d13bb26259", "execution_mode": "direct", "schema_version": 1, "last_model_call_key": "model:1"}, "occurred_at": "2026-07-18T20:17:24.736050+00:00", "provider_sequence": 9}, "created_at": "2026-07-18T20:17:24.828249+00:00"}
+
+id: 973
+event: RuntimeRunCompleted
+data: {"id": "b4420290-a9b3-4b91-8196-c3205b86f63e", "sequence": 973, "type": "RuntimeRunCompleted", "payload": {"type": "run.completed", "message": null, "payload": {"output": {"content": "Nico native runtime is ready."}}, "occurred_at": "2026-07-18T20:17:24.736060+00:00", "provider_sequence": 10}, "created_at": "2026-07-18T20:17:24.835595+00:00"}
+
+id: 974
+event: RunCompleted
+data: {"id": "5c7bc55a-c374-42fe-80ae-bb9e18e35d8d", "sequence": 974, "type": "RunCompleted", "payload": {"status": "completed", "revision": 5}, "created_at": "2026-07-18T20:17:24.842948+00:00"}
+

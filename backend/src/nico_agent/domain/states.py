@@ -28,6 +28,21 @@ class ProjectStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class ConversationStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class ConversationTurnStatus(StrEnum):
+    ACCEPTED = "accepted"
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class TaskStatus(StrEnum):
     CREATED = "created"
     ASSIGNED = "assigned"
@@ -45,6 +60,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     WAITING_FOR_TOOL = "waiting_for_tool"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_SUBAGENT = "waiting_for_subagent"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -61,6 +77,40 @@ class RunStepStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class PlanStatus(StrEnum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class PlanStepStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class RuntimeEvaluationStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ModelEndpointStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class ModelCallStatus(StrEnum):
+    PENDING = "pending"
+    STREAMING = "streaming"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
+
+
 class ToolDefinitionStatus(StrEnum):
     DRAFT = "draft"
     ENABLED = "enabled"
@@ -74,6 +124,20 @@ class ToolCallStatus(StrEnum):
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
+
+
+class ToolApprovalStatus(StrEnum):
+    REQUESTED = "requested"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+class ToolApprovalScope(StrEnum):
+    NONE = "none"
+    ONCE = "once"
+    RUN = "run"
 
 
 class MemoryType(StrEnum):
@@ -167,7 +231,7 @@ TASK_TRANSITIONS = {
     },
     TaskStatus.REVISION_REQUIRED: {TaskStatus.RUNNING, TaskStatus.FAILED},
     TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: set(),
+    TaskStatus.FAILED: {TaskStatus.RUNNING},
     TaskStatus.CANCELLED: set(),
 }
 
@@ -188,6 +252,7 @@ RUN_TRANSITIONS = {
     RunStatus.RUNNING: {
         RunStatus.WAITING_FOR_TOOL,
         RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.WAITING_FOR_SUBAGENT,
         RunStatus.PAUSED,
         RunStatus.COMPLETED,
         RunStatus.FAILED,
@@ -196,6 +261,11 @@ RUN_TRANSITIONS = {
     },
     RunStatus.WAITING_FOR_TOOL: {RunStatus.RUNNING, RunStatus.CANCELLED},
     RunStatus.WAITING_FOR_APPROVAL: {
+        RunStatus.RUNNING,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    },
+    RunStatus.WAITING_FOR_SUBAGENT: {
         RunStatus.RUNNING,
         RunStatus.FAILED,
         RunStatus.CANCELLED,
@@ -235,7 +305,11 @@ TOOL_DEFINITION_TRANSITIONS = {
 }
 
 TOOL_CALL_TRANSITIONS = {
-    ToolCallStatus.PENDING: {ToolCallStatus.RUNNING, ToolCallStatus.CANCELLED},
+    ToolCallStatus.PENDING: {
+        ToolCallStatus.RUNNING,
+        ToolCallStatus.FAILED,
+        ToolCallStatus.CANCELLED,
+    },
     ToolCallStatus.RUNNING: {
         ToolCallStatus.SUCCEEDED,
         ToolCallStatus.FAILED,
@@ -246,6 +320,19 @@ TOOL_CALL_TRANSITIONS = {
     ToolCallStatus.FAILED: set(),
     ToolCallStatus.TIMED_OUT: set(),
     ToolCallStatus.CANCELLED: set(),
+}
+
+TOOL_APPROVAL_TRANSITIONS = {
+    ToolApprovalStatus.REQUESTED: {
+        ToolApprovalStatus.APPROVED,
+        ToolApprovalStatus.REJECTED,
+        ToolApprovalStatus.EXPIRED,
+        ToolApprovalStatus.CANCELLED,
+    },
+    ToolApprovalStatus.APPROVED: set(),
+    ToolApprovalStatus.REJECTED: set(),
+    ToolApprovalStatus.EXPIRED: set(),
+    ToolApprovalStatus.CANCELLED: set(),
 }
 
 MEMORY_TRANSITIONS = {

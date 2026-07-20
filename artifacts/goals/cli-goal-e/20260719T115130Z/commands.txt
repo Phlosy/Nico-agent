@@ -1,0 +1,7 @@
+scripts/test.sh
+scripts/test-integration.sh
+scripts/e2e-cli-goal-b.sh
+scripts/e2e-cli-goal-c.sh
+scripts/e2e-cli-goal-d.sh
+scripts/e2e-cli-goal-e.sh
+NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-e/20260719T115130Z scripts/verify-cli-goal-e.sh

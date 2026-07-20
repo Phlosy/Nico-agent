@@ -16,11 +16,13 @@ from nico_agent.domain.models import (
     AgentVersion,
     Run,
     RunStep,
+    RuntimeKnowledgeUsage,
     RuntimeSession,
     Task,
     ToolCall,
 )
 from nico_agent.growth.contracts import (
+    SnapshotKnowledgeUsage,
     SnapshotRuntime,
     SnapshotStep,
     SnapshotToolCall,
@@ -137,6 +139,40 @@ class TrajectorySnapshotBuilder:
                 trajectory=_bounded_redact(runtime_session.trajectory),
             )
 
+        knowledge_rows = list(
+            await session.scalars(
+                select(RuntimeKnowledgeUsage)
+                .where(RuntimeKnowledgeUsage.run_id == run.id)
+                .order_by(
+                    RuntimeKnowledgeUsage.source_type,
+                    RuntimeKnowledgeUsage.created_at,
+                    RuntimeKnowledgeUsage.id,
+                )
+            )
+        )
+        knowledge_usages = tuple(
+            SnapshotKnowledgeUsage(
+                id=item.id,
+                source_type=item.source_type,
+                memory_id=item.memory_id,
+                skill_id=item.skill_id,
+                skill_version_id=item.skill_version_id,
+                source_version=item.source_version,
+                content_hash=item.content_hash,
+                scope_type=item.scope_type,
+                status=item.status,
+                first_context_snapshot_id=item.first_context_snapshot_id,
+                first_model_call_id=item.first_model_call_id,
+                context_count=item.context_count,
+                model_call_count=item.model_call_count,
+                outcome_status=item.outcome_status,
+                result_hash=item.result_hash,
+                selection=_bounded_redact(item.selection),
+                effect_metadata=_bounded_redact(item.effect_metadata),
+            )
+            for item in knowledge_rows
+        )
+
         snapshot_steps = tuple(
             SnapshotStep(
                 id=step.id,
@@ -187,6 +223,8 @@ class TrajectorySnapshotBuilder:
             "steps": snapshot_steps,
             "runtime": runtime,
         }
+        if knowledge_usages:
+            payload["knowledge_usages"] = knowledge_usages
         snapshot = TrajectorySnapshot(**payload, snapshot_hash=canonical_hash(payload))
         if len(canonical_json(snapshot).encode("utf-8")) > _MAX_SNAPSHOT_BYTES:
             raise DomainConflict(

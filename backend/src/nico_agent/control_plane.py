@@ -1,4 +1,4 @@
-"""Transactional application service for Goal C control-plane primitives."""
+"""Transactional application service for control-plane primitives."""
 
 from __future__ import annotations
 
@@ -24,13 +24,16 @@ from nico_agent.api_schemas import (
     TaskCreate,
     TaskTransition,
     TenantCreate,
+    TenantSettingsPatch,
 )
+from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import DomainConflict, ResourceNotFound
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
     AuditRecord,
+    ConversationTurn,
     Event,
     Project,
     Run,
@@ -86,6 +89,30 @@ class ControlPlaneService:
                 aggregate_id=tenant.id,
                 action="tenant.create",
                 payload={"slug": tenant.slug},
+            )
+            await session.flush()
+            return tenant
+
+    async def update_tenant_settings(
+        self, context: TenantContext, command: TenantSettingsPatch
+    ) -> Tenant:
+        async with self.database.tenant_transaction(context) as session:
+            tenant = await session.scalar(
+                select(Tenant).where(Tenant.id == context.tenant_id).with_for_update()
+            )
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            require_revision("tenant", expected=command.expected_revision, actual=tenant.revision)
+            tenant.settings = command.settings
+            tenant.revision += 1
+            self._record(
+                session,
+                context,
+                event_type="TenantSettingsUpdated",
+                aggregate_type="tenant",
+                aggregate_id=tenant.id,
+                action="tenant.settings.update",
+                payload={"setting_keys": sorted(command.settings)},
             )
             await session.flush()
             return tenant
@@ -321,6 +348,7 @@ class ControlPlaneService:
                     AgentVersion.agent_id == agent.id,
                 )
             )
+            runtime_provider = self._new_version_runtime_provider(command)
             version = AgentVersion(
                 tenant_id=context.tenant_id,
                 agent_id=agent.id,
@@ -330,14 +358,19 @@ class ControlPlaneService:
                 boundaries=command.boundaries,
                 long_term_goal=command.long_term_goal,
                 current_goal=command.current_goal,
+                runtime_provider=runtime_provider,
+                execution_mode=command.execution_mode,
+                model_endpoint_id=command.model_endpoint_id,
+                model_name=command.model_name,
                 model_config_json=command.model_config_data,
                 tool_policy=command.tool_policy,
                 memory_policy=command.memory_policy,
                 skill_policy=command.skill_policy,
                 plugin_refs=command.plugin_refs,
+                coordination_policy=command.coordination_policy,
                 budgets=command.budgets,
                 run_config=command.run_config,
-                content_hash=self._version_hash(command),
+                content_hash=self._version_hash(command, runtime_provider=runtime_provider),
             )
             session.add(version)
             await session.flush()
@@ -721,24 +754,42 @@ class ControlPlaneService:
     async def cancel_run(
         self, context: TenantContext, run_id: UUID, *, expected_revision: int
     ) -> Run:
-        command = RunTransition(target=RunStatus.CANCELLED, expected_revision=expected_revision)
-        return await self.transition_run(context, run_id, command)
+        return await CoordinationService(self.database).cancel_tree(
+            context,
+            run_id,
+            expected_revision=expected_revision,
+        )
 
     async def retry_run(self, context: TenantContext, run_id: UUID, command: RunCreate) -> Run:
         async with self.database.tenant_transaction(context) as session:
             previous = await self._run(session, context, run_id, for_update=True)
+            conversation_turn = await session.scalar(
+                select(ConversationTurn).where(
+                    ConversationTurn.tenant_id == context.tenant_id,
+                    ConversationTurn.task_id == previous.task_id,
+                )
+            )
+            if conversation_turn is not None:
+                raise DomainConflict(
+                    "CONVERSATION_RETRY_REQUIRED",
+                    "retry conversation Runs through the ConversationTurn API",
+                )
             if RunStatus(previous.status) not in {
                 RunStatus.FAILED,
                 RunStatus.TIMED_OUT,
             }:
                 raise DomainConflict("RUN_NOT_RETRYABLE", "only failed or timed-out runs can retry")
             task = await self._task(session, context, previous.task_id, for_update=True)
-            if TaskStatus(task.status) not in {TaskStatus.RUNNING, TaskStatus.REVISION_REQUIRED}:
+            if TaskStatus(task.status) not in {
+                TaskStatus.RUNNING,
+                TaskStatus.REVISION_REQUIRED,
+                TaskStatus.FAILED,
+            }:
                 raise DomainConflict("TASK_NOT_RUNNABLE", "task state does not allow another run")
             new_run = await self._new_run(
                 session, context, task, command, retry_of_run_id=previous.id
             )
-            if TaskStatus(task.status) is TaskStatus.REVISION_REQUIRED:
+            if TaskStatus(task.status) in {TaskStatus.REVISION_REQUIRED, TaskStatus.FAILED}:
                 task.status = transition_state(
                     "task", TaskStatus(task.status), TaskStatus.RUNNING, TASK_TRANSITIONS
                 ).value
@@ -845,6 +896,17 @@ class ControlPlaneService:
                     select(Event)
                     .where(Event.tenant_id == context.tenant_id, Event.run_id == run_id)
                     .order_by(Event.sequence)
+                )
+            )
+
+    async def list_run_steps(self, context: TenantContext, run_id: UUID) -> list[RunStep]:
+        async with self.database.tenant_transaction(context) as session:
+            await self._run(session, context, run_id)
+            return list(
+                await session.scalars(
+                    select(RunStep)
+                    .where(RunStep.tenant_id == context.tenant_id, RunStep.run_id == run_id)
+                    .order_by(RunStep.sequence, RunStep.id)
                 )
             )
 
@@ -1103,8 +1165,18 @@ class ControlPlaneService:
         return await self._one(session, statement, "run_step", step_id)
 
     @staticmethod
-    def _version_hash(command: AgentVersionCreate) -> str:
+    def _new_version_runtime_provider(command: AgentVersionCreate) -> str:
+        if command.runtime_provider:
+            return command.runtime_provider
+        legacy_provider = command.run_config.get("runtime_provider")
+        if isinstance(legacy_provider, str) and legacy_provider.strip():
+            return legacy_provider.strip()
+        return "nico_native"
+
+    @staticmethod
+    def _version_hash(command: AgentVersionCreate, *, runtime_provider: str) -> str:
         payload = command.model_dump(mode="json", by_alias=True)
+        payload["runtime_provider"] = runtime_provider
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
@@ -1119,11 +1191,16 @@ class ControlPlaneService:
             boundaries=source.boundaries,
             long_term_goal=source.long_term_goal,
             current_goal=source.current_goal,
+            runtime_provider=source.runtime_provider,
+            execution_mode=source.execution_mode,
+            model_endpoint_id=source.model_endpoint_id,
+            model_name=source.model_name,
             model_config_json=source.model_config_json,
             tool_policy=source.tool_policy,
             memory_policy=source.memory_policy,
             skill_policy=source.skill_policy,
             plugin_refs=source.plugin_refs,
+            coordination_policy=source.coordination_policy,
             budgets=source.budgets,
             run_config=source.run_config,
             content_hash=source.content_hash,

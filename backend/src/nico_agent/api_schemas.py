@@ -1,9 +1,9 @@
-"""Versioned HTTP schemas for the Goal C core control plane."""
+"""Versioned HTTP schemas for the core control plane."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +38,11 @@ class TenantRead(FromAttributesModel):
     limits: dict[str, Any]
     revision: int
     created_at: datetime
+
+
+class TenantSettingsPatch(BaseModel):
+    expected_revision: int = Field(ge=1)
+    settings: dict[str, Any]
 
 
 class ProjectCreate(BaseModel):
@@ -107,6 +112,13 @@ class AgentVersionCreate(BaseModel):
     boundaries: list[str] = Field(default_factory=list)
     long_term_goal: str | None = None
     current_goal: str | None = None
+    # ``None`` distinguishes an omitted field from an explicit provider.  The
+    # control plane resolves omitted values to either the legacy run_config
+    # selection or the native default before persisting the immutable version.
+    runtime_provider: str | None = Field(default=None, min_length=1, max_length=100)
+    execution_mode: Literal["direct", "react", "plan_and_execute"] = "direct"
+    model_endpoint_id: UUID | None = None
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
     model_config_data: dict[str, Any] = Field(
         default_factory=dict,
         validation_alias="model_config",
@@ -116,6 +128,7 @@ class AgentVersionCreate(BaseModel):
     memory_policy: dict[str, Any] = Field(default_factory=dict)
     skill_policy: dict[str, Any] = Field(default_factory=dict)
     plugin_refs: list[dict[str, Any]] = Field(default_factory=list)
+    coordination_policy: dict[str, Any] = Field(default_factory=dict)
     budgets: dict[str, Any] = Field(default_factory=dict)
     run_config: dict[str, Any] = Field(default_factory=dict)
 
@@ -130,6 +143,10 @@ class AgentVersionRead(FromAttributesModel):
     boundaries: list[str]
     long_term_goal: str | None
     current_goal: str | None
+    runtime_provider: str | None
+    execution_mode: str | None
+    model_endpoint_id: UUID | None
+    model_name: str | None
     model_config_data: dict[str, Any] = Field(
         validation_alias="model_config_json", serialization_alias="model_config"
     )
@@ -137,6 +154,7 @@ class AgentVersionRead(FromAttributesModel):
     memory_policy: dict[str, Any]
     skill_policy: dict[str, Any]
     plugin_refs: list[dict[str, Any]]
+    coordination_policy: dict[str, Any]
     budgets: dict[str, Any]
     run_config: dict[str, Any]
     content_hash: str
@@ -201,6 +219,9 @@ class RunRead(FromAttributesModel):
     timeout_seconds: int | None
     budgets: dict[str, Any]
     checkpoint: dict[str, Any] | None
+    checkpoint_schema_version: int
+    checkpoint_revision: int
+    checkpoint_hash: str | None
     cost: dict[str, Any]
     result: dict[str, Any] | None
     error: dict[str, Any] | None
@@ -217,11 +238,25 @@ class RuntimeSessionRead(FromAttributesModel):
     provider_name: str
     provider_version: str
     protocol_version: str
+    provider_resolution_source: str | None
+    legacy_resolver_used: bool | None
+    provider_compatibility: dict[str, Any]
     external_session_id: str | None
     status: str
     capabilities: list[str]
     provider_state: dict[str, Any]
+    execution_mode: str
+    loop_state: str
+    execution_manifest: dict[str, Any]
+    model_endpoint_snapshot: dict[str, Any] | None
+    coordination_policy_snapshot: dict[str, Any]
+    knowledge_policy_snapshot: dict[str, Any]
+    current_context_snapshot_id: UUID | None
+    last_model_call_id: UUID | None
     checkpoint: dict[str, Any] | None
+    checkpoint_schema_version: int
+    checkpoint_revision: int
+    checkpoint_hash: str | None
     usage: dict[str, Any]
     last_event_sequence: int
     started_at: datetime | None
@@ -248,6 +283,12 @@ class RunStepRead(FromAttributesModel):
     id: UUID
     run_id: UUID
     sequence: int
+    step_key: str | None
+    step_type: str | None
+    iteration: int | None
+    parent_step_id: UUID | None
+    context_snapshot_id: UUID | None
+    model_call_id: UUID | None
     kind: str
     status: RunStepStatus
     input: dict[str, Any]
@@ -323,6 +364,63 @@ class ToolCallRead(FromAttributesModel):
     started_at: datetime | None
     ended_at: datetime | None
     revision: int
+    created_at: datetime
+
+
+class PlanRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    runtime_session_id: UUID
+    revision: int
+    status: str
+    reason: str
+    objective: str
+    supersedes_plan_id: UUID | None
+    created_by_model_call_id: UUID
+    content_hash: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlanStepRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    plan_id: UUID
+    step_key: str
+    position: int
+    title: str
+    instruction: str
+    acceptance: dict[str, Any]
+    dependencies: list[str]
+    status: str
+    attempt: int
+    run_step_id: UUID | None
+    output: dict[str, Any] | None
+    output_hash: str | None
+    evidence_refs: list[str]
+    error: dict[str, Any] | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RuntimeEvaluationRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    plan_id: UUID | None
+    plan_step_id: UUID | None
+    model_call_id: UUID | None
+    sequence: int
+    evaluation_type: str
+    method: str
+    status: str
+    verdict: str
+    input_hash: str
+    output_hash: str | None
+    evidence_refs: list[str]
+    result: dict[str, Any]
+    error: dict[str, Any] | None
     created_at: datetime
 
 

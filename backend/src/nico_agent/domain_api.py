@@ -1,4 +1,4 @@
-"""FastAPI routes for the Goal C core control plane."""
+"""FastAPI routes for the core control plane."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from nico_agent.api_schemas import (
     TaskTransition,
     TenantCreate,
     TenantRead,
+    TenantSettingsPatch,
     ToolCallRead,
     ToolDefinitionRead,
 )
@@ -107,6 +108,15 @@ async def bootstrap_tenant(
         actor_id=actor_id,
         correlation_id=_correlation_id(request),
     )
+
+
+@router.patch("/tenant/settings", response_model=TenantRead)
+async def update_tenant_settings(
+    command: TenantSettingsPatch,
+    service: Service,
+    context: Context,
+):
+    return await service.update_tenant_settings(context, command)
 
 
 @router.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
@@ -309,6 +319,11 @@ async def transition_run_step(
 @router.get("/runs/{run_id}/events", response_model=list[EventRead])
 async def list_run_events(run_id: UUID, service: Service, context: Context):
     return await service.list_run_events(context, run_id)
+
+
+@router.get("/runs/{run_id}/steps", response_model=list[RunStepRead])
+async def list_run_steps(run_id: UUID, service: Service, context: Context):
+    return await service.list_run_steps(context, run_id)
 
 
 @router.get("/tool-definitions", response_model=list[ToolDefinitionRead])

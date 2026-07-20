@@ -1,3 +1,4 @@
+import asyncio
 import os
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from nico_agent.api import create_app
 from nico_agent.config import Settings
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.models import Project, Task, Tenant
+from nico_agent.models.gateway import RedisModelRateLimiter
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -23,6 +25,22 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def settings() -> Settings:
     return Settings(environment="test", _env_file=None)
+
+
+@pytest.mark.asyncio
+async def test_model_rate_limit_is_atomic_across_worker_instances(settings: Settings) -> None:
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    key = f"integration-{uuid4()}"
+    try:
+        first = RedisModelRateLimiter(redis, prefix="nico:test-model-limit")
+        second = RedisModelRateLimiter(redis, prefix="nico:test-model-limit")
+        results = await asyncio.gather(
+            *(limiter.acquire(key, 3, 60) for limiter in (first, second) for _ in range(5))
+        )
+    finally:
+        await redis.aclose()
+
+    assert sum(results) == 3
 
 
 @pytest.mark.asyncio
@@ -57,7 +75,7 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         await engine.dispose()
 
     assert extensions == {"pgcrypto", "vector"}
-    assert revision == "20260717_0009"
+    assert revision == "20260719_0019"
     assert domain_tables == {
         "tenants",
         "projects",
@@ -79,6 +97,23 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         "approvals",
         "skill_deployments",
         "memory_chunks",
+        "model_endpoints",
+        "context_snapshots",
+        "model_calls",
+        "conversations",
+        "conversation_turns",
+        "conversation_attachments",
+        "plans",
+        "plan_steps",
+        "runtime_evaluations",
+        "delegations",
+        "agent_run_relations",
+        "agent_messages",
+        "run_budget_ledgers",
+        "artifacts",
+        "shared_artifact_links",
+        "runtime_knowledge_usages",
+        "tool_approval_requests",
     }
 
 
@@ -106,6 +141,23 @@ async def test_runtime_role_and_force_rls_cover_every_core_table(settings: Setti
         "approvals",
         "skill_deployments",
         "memory_chunks",
+        "model_endpoints",
+        "context_snapshots",
+        "model_calls",
+        "conversations",
+        "conversation_turns",
+        "conversation_attachments",
+        "plans",
+        "plan_steps",
+        "runtime_evaluations",
+        "delegations",
+        "agent_run_relations",
+        "agent_messages",
+        "run_budget_ledgers",
+        "artifacts",
+        "shared_artifact_links",
+        "runtime_knowledge_usages",
+        "tool_approval_requests",
     }
     try:
         async with engine.connect() as connection:
@@ -133,6 +185,55 @@ async def test_runtime_role_and_force_rls_cover_every_core_table(settings: Setti
 
     assert role == (False, False)
     assert protected == expected_tables
+
+
+@pytest.mark.asyncio
+async def test_native_runtime_foreign_keys_bind_facts_to_the_same_run(settings: Settings) -> None:
+    engine = create_async_engine(settings.resolved_database_url)
+    try:
+        async with engine.connect() as connection:
+            definitions = dict(
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+                            "WHERE conname IN ('fk_model_calls_context_snapshot', "
+                            "'fk_runtime_sessions_last_model_call', "
+                            "'fk_model_calls_replay_of', 'fk_run_steps_parent', "
+                            "'fk_run_steps_context_snapshot', 'fk_run_steps_model_call', "
+                            "'fk_plan_steps_plan', 'fk_runtime_evaluations_plan_step')"
+                        )
+                    )
+                ).all()
+            )
+    finally:
+        await engine.dispose()
+
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, context_snapshot_id)"
+        in definitions["fk_model_calls_context_snapshot"]
+    )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, last_model_call_id)"
+        in definitions["fk_runtime_sessions_last_model_call"]
+    )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, replay_of_model_call_id)"
+        in definitions["fk_model_calls_replay_of"]
+    )
+    assert "FOREIGN KEY (tenant_id, run_id, parent_step_id)" in definitions["fk_run_steps_parent"]
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, context_snapshot_id)"
+        in definitions["fk_run_steps_context_snapshot"]
+    )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, model_call_id)" in definitions["fk_run_steps_model_call"]
+    )
+    assert "FOREIGN KEY (tenant_id, run_id, plan_id)" in definitions["fk_plan_steps_plan"]
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, plan_step_id)"
+        in definitions["fk_runtime_evaluations_plan_step"]
+    )
 
 
 @pytest.mark.asyncio

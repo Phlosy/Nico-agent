@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from nico_agent.artifacts.contracts import RuntimeArtifactIntent, RuntimeArtifactOutcome
+from nico_agent.coordination.contracts import (
+    RuntimeCoordinationIntent,
+    RuntimeCoordinationOutcome,
+)
 
 
 class RuntimeCapability(StrEnum):
@@ -20,12 +27,17 @@ class RuntimeCapability(StrEnum):
     TRAJECTORY = "trajectory"
     CHECKPOINT = "checkpoint"
     PLATFORM_TOOLS = "platform_tools"
+    PLANNING = "planning"
+    REFLECTION = "reflection"
+    COORDINATION = "coordination"
+    ARTIFACTS = "artifacts"
 
 
 class RuntimeSessionStatus(StrEnum):
     CREATED = "created"
     RUNNING = "running"
     PAUSED = "paused"
+    SUSPENDED = "suspended"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -49,9 +61,67 @@ class RuntimeEventType(StrEnum):
     TOOL_CALL_STARTED = "tool.call.started"
     TOOL_CALL_COMPLETED = "tool.call.completed"
     CHECKPOINT_SAVED = "checkpoint.saved"
+    CONTEXT_SNAPSHOT_CREATED = "context.snapshot.created"
+    MODEL_CALL_STARTED = "model.call.started"
+    MODEL_OUTPUT_DELTA = "model.output.delta"
+    MODEL_CALL_COMPLETED = "model.call.completed"
+    MODEL_CALL_FAILED = "model.call.failed"
+    PLAN_CREATED = "plan.created"
+    PLAN_STATUS_CHANGED = "plan.status.changed"
+    PLAN_STEP_STARTED = "plan.step.started"
+    PLAN_STEP_COMPLETED = "plan.step.completed"
+    PLAN_STEP_FAILED = "plan.step.failed"
+    REFLECTION_COMPLETED = "reflection.completed"
+    EVALUATION_COMPLETED = "evaluation.completed"
+    DELEGATION_STARTED = "delegation.started"
+    DELEGATION_ACCEPTED = "delegation.accepted"
+    DELEGATION_RESULT_RECEIVED = "delegation.result_received"
+    ARTIFACT_STORED = "artifact.stored"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_CANCELLED = "run.cancelled"
+
+
+class RuntimeExecutionMode(StrEnum):
+    DIRECT = "direct"
+    REACT = "react"
+    PLAN_AND_EXECUTE = "plan_and_execute"
+
+
+class RuntimeDisposition(StrEnum):
+    TERMINAL = "terminal"
+    SUSPENDED = "suspended"
+
+
+class RuntimeLoopState(StrEnum):
+    INITIALIZING = "initializing"
+    PLANNING = "planning"
+    REASONING = "reasoning"
+    WAITING_FOR_TOOL = "waiting_for_tool"
+    OBSERVING = "observing"
+    DELEGATING = "delegating"
+    WAITING_FOR_SUBAGENT = "waiting_for_subagent"
+    REFLECTING = "reflecting"
+    FINALIZING = "finalizing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+
+
+class ContextSeed(BaseModel):
+    """Immutable, already-authorized inputs used to rebuild model context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: int = Field(default=1, ge=1)
+    platform_instructions: tuple[str, ...] = ()
+    source_refs: tuple[str, ...] = ()
+    trusted_context: tuple[dict[str, Any], ...] = ()
+    untrusted_context: tuple[dict[str, Any], ...] = ()
+    memory_refs: tuple[dict[str, Any], ...] = ()
+    skill_refs: tuple[dict[str, Any], ...] = ()
+    effect_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeProviderDescriptor(BaseModel):
@@ -60,7 +130,9 @@ class RuntimeProviderDescriptor(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     version: str = Field(min_length=1, max_length=100)
     protocol_version: str = "1.0"
+    implementation: Literal["native", "adapter", "test"] = "adapter"
     capabilities: frozenset[RuntimeCapability]
+    compatibility: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeSessionRequest(BaseModel):
@@ -84,6 +156,12 @@ class RuntimeSessionRequest(BaseModel):
     model_config_data: dict[str, Any] = Field(default_factory=dict)
     run_config: dict[str, Any] = Field(default_factory=dict)
     budgets: dict[str, Any] = Field(default_factory=dict)
+    execution_mode: RuntimeExecutionMode = RuntimeExecutionMode.DIRECT
+    execution_manifest: dict[str, Any] = Field(default_factory=dict)
+    context_seed: ContextSeed | None = None
+    model_endpoint_snapshot: dict[str, Any] | None = None
+    coordination_policy_snapshot: dict[str, Any] = Field(default_factory=dict)
+    recovery_state: dict[str, Any] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
     event_sequence: int = Field(default=0, ge=0)
     resume_session_id: str | None = Field(default=None, min_length=1, max_length=500)
@@ -111,16 +189,20 @@ class RuntimeToolIntent(BaseModel):
     version: str = Field(min_length=1, max_length=50)
     arguments: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=1, max_length=200)
+    checkpoint: dict[str, Any] | None = None
 
 
 class RuntimeToolOutcome(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: str
+    tool_call_id: str | None = None
+    run_step_id: str | None = None
     status: Literal["succeeded", "failed", "timed_out", "cancelled"]
     output: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
+    cached: bool = False
 
 
 class RuntimeToolSession(BaseModel):
@@ -137,6 +219,25 @@ class RuntimeToolHandler(Protocol):
     async def list_tools(self) -> tuple[RuntimeToolSpec, ...]: ...
 
     async def execute_tool(self, intent: RuntimeToolIntent) -> RuntimeToolOutcome: ...
+
+
+@runtime_checkable
+class RuntimeCoordinationHandler(Protocol):
+    async def coordinate(self, intent: RuntimeCoordinationIntent) -> RuntimeCoordinationOutcome: ...
+
+
+@runtime_checkable
+class RuntimeArtifactHandler(Protocol):
+    async def store_artifact(self, intent: RuntimeArtifactIntent) -> RuntimeArtifactOutcome: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeServices:
+    """Narrow capabilities exposed to a provider; never contains persistence sessions."""
+
+    tool_handler: RuntimeToolHandler | None = None
+    coordination_handler: RuntimeCoordinationHandler | None = None
+    artifact_handler: RuntimeArtifactHandler | None = None
 
 
 class RuntimeSessionHandle(BaseModel):
@@ -167,6 +268,74 @@ class RuntimeResult(BaseModel):
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
     external_session_id: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class RuntimeOutcome(BaseModel):
+    """Protocol v2 result, including durable suspension without terminating the Run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    disposition: RuntimeDisposition
+    status: RuntimeSessionStatus
+    output: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    usage: dict[str, Any] = Field(default_factory=dict)
+    checkpoint: dict[str, Any] | None = None
+    wake_condition: dict[str, Any] | None = None
+    external_session_id: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @classmethod
+    def terminal(
+        cls,
+        *,
+        status: RuntimeSessionStatus,
+        output: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+        usage: dict[str, Any] | None = None,
+        checkpoint: dict[str, Any] | None = None,
+        external_session_id: str | None = None,
+    ) -> RuntimeOutcome:
+        if status is RuntimeSessionStatus.SUSPENDED:
+            raise ValueError("terminal outcome cannot use suspended status")
+        return cls(
+            disposition=RuntimeDisposition.TERMINAL,
+            status=status,
+            output=output,
+            error=error,
+            usage=usage or {},
+            checkpoint=checkpoint,
+            external_session_id=external_session_id,
+        )
+
+    @classmethod
+    def suspended(
+        cls,
+        *,
+        checkpoint: dict[str, Any],
+        wake_condition: dict[str, Any],
+        usage: dict[str, Any] | None = None,
+        external_session_id: str | None = None,
+    ) -> RuntimeOutcome:
+        return cls(
+            disposition=RuntimeDisposition.SUSPENDED,
+            status=RuntimeSessionStatus.SUSPENDED,
+            usage=usage or {},
+            checkpoint=checkpoint,
+            wake_condition=wake_condition,
+            external_session_id=external_session_id,
+        )
+
+    def to_result(self) -> RuntimeResult:
+        if self.disposition is not RuntimeDisposition.TERMINAL:
+            raise ValueError("only a terminal runtime outcome can become a RuntimeResult")
+        return RuntimeResult(
+            status=self.status,
+            output=self.output,
+            error=self.error,
+            usage=self.usage,
+            checkpoint=self.checkpoint,
+            external_session_id=self.external_session_id,
+        )
 
 
 class RuntimeTrajectory(BaseModel):
@@ -211,3 +380,56 @@ class AgentRuntimeProvider(Protocol):
     ) -> AsyncIterator[RuntimeEvent]: ...
 
     async def export_trajectory(self, external_session_id: str) -> RuntimeTrajectory: ...
+
+
+@runtime_checkable
+class AgentRuntimeProviderV2(Protocol):
+    """Protocol v2 provider; v1 providers are supported by ``execute_provider``."""
+
+    @property
+    def descriptor(self) -> RuntimeProviderDescriptor: ...
+
+    async def create_session(self, request: RuntimeSessionRequest) -> RuntimeSessionHandle: ...
+
+    async def execute(
+        self,
+        external_session_id: str,
+        request: RuntimeSessionRequest,
+        services: RuntimeServices,
+    ) -> RuntimeOutcome: ...
+
+    async def pause(self, external_session_id: str) -> RuntimeSessionHandle: ...
+
+    async def resume(self, external_session_id: str) -> RuntimeSessionHandle: ...
+
+    async def cancel(self, external_session_id: str) -> RuntimeSessionHandle: ...
+
+    async def get_status(self, external_session_id: str) -> RuntimeSessionHandle: ...
+
+    def stream_events(
+        self, external_session_id: str, *, after_sequence: int = 0
+    ) -> AsyncIterator[RuntimeEvent]: ...
+
+    async def export_trajectory(self, external_session_id: str) -> RuntimeTrajectory: ...
+
+
+async def execute_provider(
+    provider: AgentRuntimeProvider | AgentRuntimeProviderV2,
+    external_session_id: str,
+    request: RuntimeSessionRequest,
+    services: RuntimeServices,
+) -> RuntimeOutcome:
+    """Execute v2 natively or adapt one v1 terminal result without changing its behavior."""
+
+    execute = getattr(provider, "execute", None)
+    if execute is not None:
+        return await execute(external_session_id, request, services)
+    result = await provider.run(external_session_id, request, services.tool_handler)  # type: ignore[union-attr]
+    return RuntimeOutcome.terminal(
+        status=result.status,
+        output=result.output,
+        error=result.error,
+        usage=result.usage,
+        checkpoint=result.checkpoint,
+        external_session_id=result.external_session_id,
+    )

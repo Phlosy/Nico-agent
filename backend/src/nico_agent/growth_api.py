@@ -1,4 +1,4 @@
-"""FastAPI routes for Goal F controlled Memory and Skill growth."""
+"""FastAPI routes for controlled Memory and Skill growth."""
 
 from __future__ import annotations
 

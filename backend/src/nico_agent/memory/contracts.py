@@ -48,6 +48,7 @@ class MemorySearchResult:
     memory_type: str
     scope_type: str
     content: str
+    content_hash: str
     confidence: float
     similarity: float
     chunk_index: int

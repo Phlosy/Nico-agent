@@ -158,6 +158,31 @@ async def test_openapi_describes_goal_c_control_plane(ready_report: ReadinessRep
 
 
 @pytest.mark.asyncio
+async def test_openapi_describes_cli_goal_c_conversations(
+    ready_report: ReadinessReport,
+) -> None:
+    client, _ = make_client(ready_report)
+
+    async with client:
+        document = (await client.get("/openapi.json")).json()
+
+    paths = document["paths"]
+    assert {
+        "/api/v1/conversations",
+        "/api/v1/conversations/{conversation_id}",
+        "/api/v1/conversations/{conversation_id}/turns",
+        "/api/v1/conversation-turns/{turn_id}",
+        "/api/v1/conversation-turns/{turn_id}/cancel",
+        "/api/v1/conversation-turns/{turn_id}/retry",
+    } <= paths.keys()
+    turn_properties = document["components"]["schemas"]["ConversationTurnRead"]["properties"]
+    assert {"conversation_id", "task_id", "run_id", "run_status", "run_revision"} <= set(
+        turn_properties
+    )
+    assert "tenant_id" not in turn_properties
+
+
+@pytest.mark.asyncio
 async def test_openapi_describes_goal_f_growth_lifecycle(
     ready_report: ReadinessReport,
 ) -> None:
@@ -247,6 +272,7 @@ async def test_development_tenant_context_is_rejected_in_production(
         settings=Settings(
             environment="production",
             sandbox_runner_token="production-runner-token-for-api-test",
+            minio_secret_key="production-minio-secret-for-api-test",
             _env_file=None,
         ),
         health_service=StubHealthService(ready_report),

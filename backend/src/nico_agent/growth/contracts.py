@@ -79,6 +79,28 @@ class SnapshotRuntime(BaseModel):
     trajectory: dict[str, Any]
 
 
+class SnapshotKnowledgeUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    source_type: Literal["memory", "skill_version"]
+    memory_id: UUID | None = None
+    skill_id: UUID | None = None
+    skill_version_id: UUID | None = None
+    source_version: int
+    content_hash: str
+    scope_type: str
+    status: str
+    first_context_snapshot_id: UUID | None = None
+    first_model_call_id: UUID | None = None
+    context_count: int
+    model_call_count: int
+    outcome_status: str | None = None
+    result_hash: str | None = None
+    selection: dict[str, Any]
+    effect_metadata: dict[str, Any]
+
+
 class TrajectorySnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -104,10 +126,14 @@ class TrajectorySnapshot(BaseModel):
     ended_at: datetime
     steps: tuple[SnapshotStep, ...]
     runtime: SnapshotRuntime | None = None
+    knowledge_usages: tuple[SnapshotKnowledgeUsage, ...] = ()
     snapshot_hash: str
 
     def payload_without_hash(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", exclude={"snapshot_hash"})
+        excluded = {"snapshot_hash"}
+        if not self.knowledge_usages:
+            excluded.add("knowledge_usages")
+        return self.model_dump(mode="json", exclude=excluded)
 
 
 class MemoryCandidateDraft(BaseModel):

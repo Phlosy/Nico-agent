@@ -1,0 +1,107 @@
+{
+  "id": "effe311c-4c7a-4de1-bd53-6f0a17544293",
+  "run_id": "196aeb52-0809-4945-ba08-193220e0abea",
+  "provider_name": "mock",
+  "provider_version": "1.0",
+  "protocol_version": "1.0",
+  "provider_resolution_source": "agent_version",
+  "legacy_resolver_used": false,
+  "provider_compatibility": {
+    "implementation": "test",
+    "terminal_v1_shim": true,
+    "production_supported": false,
+    "resume_protocol_versions": [
+      "1.0"
+    ],
+    "resume_provider_versions": [
+      "1.0"
+    ]
+  },
+  "external_session_id": "mock:196aeb52-0809-4945-ba08-193220e0abea",
+  "status": "completed",
+  "capabilities": [
+    "artifacts",
+    "cancel",
+    "checkpoint",
+    "coordination",
+    "pause",
+    "planning",
+    "platform_tools",
+    "reflection",
+    "resume",
+    "status",
+    "stream_events",
+    "trajectory"
+  ],
+  "provider_state": {
+    "checkpoint": null
+  },
+  "execution_mode": "direct",
+  "loop_state": "completed",
+  "execution_manifest": {
+    "model": null,
+    "execution_mode": "direct",
+    "schema_version": 1,
+    "agent_version_id": "191b5a99-74a9-4bc3-827e-341e22574c18",
+    "runtime_provider": "mock",
+    "model_endpoint_id": null
+  },
+  "model_endpoint_snapshot": null,
+  "coordination_policy_snapshot": {
+    "errors": [],
+    "enabled": false,
+    "version": 1,
+    "max_depth": 0,
+    "max_children": 0,
+    "max_parallelism": 0,
+    "allowed_secret_refs": [],
+    "allowed_agent_version_ids": []
+  },
+  "knowledge_policy_snapshot": {
+    "skill": {
+      "top_k": 5,
+      "scopes": [],
+      "enabled": false,
+      "max_chars": 16000,
+      "max_tokens": 4000,
+      "allowed_skill_ids": []
+    },
+    "errors": [],
+    "memory": {
+      "top_k": 5,
+      "scopes": [],
+      "enabled": false,
+      "max_chars": 12000,
+      "max_tokens": 3000,
+      "memory_types": [
+        "episodic",
+        "procedural",
+        "semantic",
+        "working"
+      ],
+      "minimum_similarity": 0.0
+    },
+    "version": 1,
+    "content_hash": "292e7739e7e6f0cef914c824a3cca8135223e40138bd16643f3e05c8eb35d62b"
+  },
+  "current_context_snapshot_id": null,
+  "last_model_call_id": null,
+  "checkpoint": {
+    "completed_steps": 2
+  },
+  "checkpoint_schema_version": 1,
+  "checkpoint_revision": 2,
+  "checkpoint_hash": null,
+  "usage": {
+    "steps": 2,
+    "tool_calls": 0,
+    "input_units": 1,
+    "output_units": 1
+  },
+  "last_event_sequence": 11,
+  "started_at": "2026-07-19T10:18:31.778671Z",
+  "ended_at": "2026-07-19T10:18:31.893552Z",
+  "revision": 15,
+  "created_at": "2026-07-19T10:18:31.749161Z",
+  "updated_at": "2026-07-19T10:18:31.895123Z"
+}

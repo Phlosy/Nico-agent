@@ -277,7 +277,9 @@ async def test_gateway_success_is_redacted_audited_and_idempotent() -> None:
             )
         assert call is not None and call.arguments["password"] == "[REDACTED]"
         assert call.result == first.output
-        assert step is not None and step.sequence >= 1_000_000
+        assert step is not None and step.sequence == 1
+        assert step.step_key == "tool:same-call"
+        assert step.step_type == "tool"
         assert runtime_session is not None
         assert "very-secret-value" not in str(runtime_session.tool_policy_snapshot)
         assert runtime_session.tool_policy_snapshot["secret_refs"] == {

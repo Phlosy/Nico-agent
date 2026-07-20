@@ -551,69 +551,135 @@ class SkillLifecycleService:
         run_id: UUID,
     ) -> SkillResolution:
         async with self.database.tenant_transaction(context) as session:
-            skill = await self._get_skill(session, skill_id)
-            if skill.status != "published" or skill.current_version_id is None:
-                raise DomainConflict(
-                    "SKILL_NOT_RESOLVABLE",
-                    "only a published skill can be resolved for execution",
-                    details={"skill_id": str(skill_id), "status": skill.status},
-                )
-            row = (
-                await session.execute(
-                    select(Run, Task).join(Task, Task.id == Run.task_id).where(Run.id == run_id)
-                )
-            ).one_or_none()
-            if row is None:
-                raise ResourceNotFound("run", str(run_id))
-            run, task = row
-            self._authorize_run_scope(skill, task.project_id, run.agent_id)
-            deployment = await session.scalar(
-                select(SkillDeployment)
+            return await self.resolve_in_session(session, skill_id, run_id)
+
+    async def resolve_in_session(
+        self,
+        session: AsyncSession,
+        skill_id: UUID,
+        run_id: UUID,
+    ) -> SkillResolution:
+        skill = await self._get_skill(session, skill_id)
+        if skill.status != "published" or skill.current_version_id is None:
+            raise DomainConflict(
+                "SKILL_NOT_RESOLVABLE",
+                "only a published skill can be resolved for execution",
+                details={"skill_id": str(skill_id), "status": skill.status},
+            )
+        row = (
+            await session.execute(
+                select(Run, Task).join(Task, Task.id == Run.task_id).where(Run.id == run_id)
+            )
+        ).one_or_none()
+        if row is None:
+            raise ResourceNotFound("run", str(run_id))
+        run, task = row
+        self._authorize_run_scope(skill, task.project_id, run.agent_id)
+        return await self._resolve_for_run(session, skill, run, task)
+
+    async def resolve_available_in_session(
+        self,
+        session: AsyncSession,
+        run: Run,
+        task: Task,
+        *,
+        allowed_skill_ids: frozenset[UUID],
+        allowed_scope_types: frozenset[str],
+        limit: int,
+    ) -> tuple[tuple[Skill, SkillVersion, SkillResolution], ...]:
+        """Resolve an explicit, scope-bounded published Skill allowlist for one Run."""
+
+        if not 1 <= limit <= 100:
+            raise ValueError("Skill runtime limit must be between 1 and 100")
+        if not allowed_scope_types <= {"tenant", "project", "agent"}:
+            raise ValueError("Skill runtime scopes contain unsupported values")
+        if not allowed_skill_ids or not allowed_scope_types:
+            return ()
+        skills = list(
+            await session.scalars(
+                select(Skill)
                 .where(
-                    SkillDeployment.skill_id == skill.id,
-                    SkillDeployment.status == "active",
-                    or_(
-                        and_(
-                            SkillDeployment.scope_type == "agent",
-                            SkillDeployment.agent_id == run.agent_id,
-                        ),
-                        and_(
-                            SkillDeployment.scope_type == "project",
-                            SkillDeployment.project_id == task.project_id,
-                        ),
-                    ),
+                    Skill.id.in_(allowed_skill_ids),
+                    Skill.status == "published",
+                    Skill.current_version_id.is_not(None),
+                    Skill.scope_type.in_(allowed_scope_types),
                 )
                 .order_by(
-                    case((SkillDeployment.scope_type == "agent", 0), else_=1),
-                    SkillDeployment.id,
+                    case(
+                        (Skill.scope_type == "agent", 0),
+                        (Skill.scope_type == "project", 1),
+                        else_=2,
+                    ),
+                    Skill.name,
+                    Skill.id,
                 )
             )
-            selected_id = skill.current_version_id
-            selection: Literal["stable", "canary"] = "stable"
-            bucket: int | None = None
-            if deployment is not None:
-                bucket = stable_rollout_bucket(run.id, deployment.id)
-                if bucket < deployment.rollout_percentage:
-                    selected_id = deployment.skill_version_id
-                    selection = "canary"
-            version = await self._get_version(session, skill.id, selected_id)
-            if version.status != "published":
-                raise DomainConflict(
-                    "SKILL_POINTER_INVALID",
-                    "resolved skill pointer does not reference a published version",
-                )
-            return SkillResolution(
-                skill_id=skill.id,
-                skill_version_id=version.id,
-                version=version.version,
-                run_id=run.id,
-                selection=selection,
-                deployment_id=deployment.id if deployment is not None else None,
-                rollout_percentage=(
-                    deployment.rollout_percentage if deployment is not None else None
+        )
+        resolved: list[tuple[Skill, SkillVersion, SkillResolution]] = []
+        for skill in skills:
+            if not self._run_scope_matches(skill, task.project_id, run.agent_id):
+                continue
+            resolution = await self._resolve_for_run(session, skill, run, task)
+            version = await self._get_version(session, skill.id, resolution.skill_version_id)
+            resolved.append((skill, version, resolution))
+            if len(resolved) >= limit:
+                break
+        return tuple(resolved)
+
+    async def _resolve_for_run(
+        self,
+        session: AsyncSession,
+        skill: Skill,
+        run: Run,
+        task: Task,
+    ) -> SkillResolution:
+        if skill.current_version_id is None:
+            raise DomainConflict("SKILL_STABLE_VERSION_MISSING", "skill has no stable version")
+        deployment = await session.scalar(
+            select(SkillDeployment)
+            .where(
+                SkillDeployment.skill_id == skill.id,
+                SkillDeployment.status == "active",
+                or_(
+                    and_(
+                        SkillDeployment.scope_type == "agent",
+                        SkillDeployment.agent_id == run.agent_id,
+                    ),
+                    and_(
+                        SkillDeployment.scope_type == "project",
+                        SkillDeployment.project_id == task.project_id,
+                    ),
                 ),
-                bucket=bucket,
             )
+            .order_by(
+                case((SkillDeployment.scope_type == "agent", 0), else_=1),
+                SkillDeployment.id,
+            )
+        )
+        selected_id = skill.current_version_id
+        selection: Literal["stable", "canary"] = "stable"
+        bucket: int | None = None
+        if deployment is not None:
+            bucket = stable_rollout_bucket(run.id, deployment.id)
+            if bucket < deployment.rollout_percentage:
+                selected_id = deployment.skill_version_id
+                selection = "canary"
+        version = await self._get_version(session, skill.id, selected_id)
+        if version.status != "published":
+            raise DomainConflict(
+                "SKILL_POINTER_INVALID",
+                "resolved skill pointer does not reference a published version",
+            )
+        return SkillResolution(
+            skill_id=skill.id,
+            skill_version_id=version.id,
+            version=version.version,
+            run_id=run.id,
+            selection=selection,
+            deployment_id=deployment.id if deployment is not None else None,
+            rollout_percentage=deployment.rollout_percentage if deployment is not None else None,
+            bucket=bucket,
+        )
 
     async def _switch_stable(
         self,
@@ -871,16 +937,19 @@ class SkillLifecycleService:
 
     @staticmethod
     def _authorize_run_scope(skill: Skill, project_id: UUID | None, agent_id: UUID) -> None:
-        allowed = (
-            skill.scope_type == "tenant"
-            or (skill.scope_type == "project" and skill.project_id == project_id)
-            or (skill.scope_type == "agent" and skill.agent_id == agent_id)
-        )
-        if not allowed:
+        if not SkillLifecycleService._run_scope_matches(skill, project_id, agent_id):
             raise AccessDenied(
                 "SKILL_SCOPE_FORBIDDEN",
                 "run context is outside the published skill scope",
             )
+
+    @staticmethod
+    def _run_scope_matches(skill: Skill, project_id: UUID | None, agent_id: UUID) -> bool:
+        return (
+            skill.scope_type == "tenant"
+            or (skill.scope_type == "project" and skill.project_id == project_id)
+            or (skill.scope_type == "agent" and skill.agent_id == agent_id)
+        )
 
     @staticmethod
     def _retire_deployment(

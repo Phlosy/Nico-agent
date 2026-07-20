@@ -38,6 +38,38 @@ async def bootstrap(client: AsyncClient, label: str) -> tuple[str, dict[str, str
     return tenant_id, {"X-Tenant-ID": tenant_id, "X-Actor-ID": "integration-user"}
 
 
+@pytest.mark.asyncio
+async def test_tenant_settings_update_is_revisioned_and_audited(client: AsyncClient) -> None:
+    _, headers = await bootstrap(client, "TenantSettings")
+    settings = {
+        "coordination_policy": {
+            "enabled": True,
+            "max_depth": 2,
+            "max_children": 2,
+            "max_parallelism": 2,
+            "allowed_agent_version_ids": [],
+            "allowed_secret_refs": [],
+        }
+    }
+    updated = await client.patch(
+        "/api/v1/tenant/settings",
+        json={"expected_revision": 1, "settings": settings},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["settings"] == settings
+    assert updated.json()["revision"] == 2
+
+    stale = await client.patch(
+        "/api/v1/tenant/settings",
+        json={"expected_revision": 1, "settings": {}},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    audit = (await client.get("/api/v1/audit", headers=headers)).json()
+    assert any(item["action"] == "tenant.settings.update" for item in audit)
+
+
 async def create_ready_agent(
     client: AsyncClient,
     headers: dict[str, str],

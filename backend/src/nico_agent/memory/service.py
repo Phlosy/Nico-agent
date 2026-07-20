@@ -154,6 +154,30 @@ class MemoryRetriever:
         *,
         limit: int = 10,
         minimum_similarity: float = 0.0,
+        allowed_scope_types: frozenset[str] | None = None,
+        allowed_memory_types: frozenset[str] | None = None,
+    ) -> tuple[MemorySearchResult, ...]:
+        async with self.database.tenant_transaction(context) as session:
+            return await self.search_in_session(
+                session,
+                query_context,
+                query,
+                limit=limit,
+                minimum_similarity=minimum_similarity,
+                allowed_scope_types=allowed_scope_types,
+                allowed_memory_types=allowed_memory_types,
+            )
+
+    async def search_in_session(
+        self,
+        session: AsyncSession,
+        query_context: MemoryQueryContext,
+        query: str,
+        *,
+        limit: int = 10,
+        minimum_similarity: float = 0.0,
+        allowed_scope_types: frozenset[str] | None = None,
+        allowed_memory_types: frozenset[str] | None = None,
     ) -> tuple[MemorySearchResult, ...]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -162,113 +186,127 @@ class MemoryRetriever:
         if query_context.team_id is not None:
             raise AccessDenied(
                 "MEMORY_TEAM_SCOPE_UNAVAILABLE",
-                "team memory scope is unavailable until Goal G establishes membership",
+                "team memory scope is not supported by Nico core",
             )
+        valid_scopes = frozenset({"tenant", "project", "agent"})
+        valid_types = frozenset({"working", "episodic", "semantic", "procedural"})
+        scopes = valid_scopes if allowed_scope_types is None else allowed_scope_types
+        memory_types = valid_types if allowed_memory_types is None else allowed_memory_types
+        if not scopes <= valid_scopes or not memory_types <= valid_types:
+            raise ValueError("Memory runtime filters contain unsupported values")
+        if not scopes or not memory_types:
+            return ()
         query_vector = list(self.embedder.embed([query])[0])
 
-        async with self.database.tenant_transaction(context) as session:
-            await self._validate_context(session, query_context)
-            scope_predicates = [Memory.scope_type == "tenant"]
-            if query_context.project_id is not None:
-                scope_predicates.append(
-                    and_(
-                        Memory.scope_type == "project",
-                        Memory.project_id == query_context.project_id,
-                    )
+        await self._validate_context(session, query_context)
+        scope_predicates = []
+        if "tenant" in scopes:
+            scope_predicates.append(Memory.scope_type == "tenant")
+        if "project" in scopes and query_context.project_id is not None:
+            scope_predicates.append(
+                and_(
+                    Memory.scope_type == "project",
+                    Memory.project_id == query_context.project_id,
                 )
-            if query_context.agent_id is not None:
-                scope_predicates.append(
-                    and_(
-                        Memory.scope_type == "agent",
-                        Memory.agent_id == query_context.agent_id,
-                    )
+            )
+        if "agent" in scopes and query_context.agent_id is not None:
+            scope_predicates.append(
+                and_(
+                    Memory.scope_type == "agent",
+                    Memory.agent_id == query_context.agent_id,
                 )
+            )
+        if not scope_predicates:
+            return ()
 
-            distance = MemoryChunk.embedding.cosine_distance(query_vector)
-            ranked = (
-                select(
-                    Memory.id.label("memory_id"),
-                    Memory.memory_key,
-                    Memory.version,
-                    Memory.memory_type,
-                    Memory.scope_type,
-                    Memory.content.label("memory_content"),
-                    Memory.confidence,
-                    MemoryChunk.chunk_index,
-                    MemoryChunk.content.label("chunk_content"),
-                    distance.label("distance"),
-                    func.row_number()
-                    .over(
-                        partition_by=Memory.id,
-                        order_by=(distance, MemoryChunk.chunk_index),
-                    )
-                    .label("chunk_rank"),
+        distance = MemoryChunk.embedding.cosine_distance(query_vector)
+        ranked = (
+            select(
+                Memory.id.label("memory_id"),
+                Memory.memory_key,
+                Memory.version,
+                Memory.memory_type,
+                Memory.scope_type,
+                Memory.content.label("memory_content"),
+                Memory.content_hash,
+                Memory.confidence,
+                MemoryChunk.chunk_index,
+                MemoryChunk.content.label("chunk_content"),
+                distance.label("distance"),
+                func.row_number()
+                .over(
+                    partition_by=Memory.id,
+                    order_by=(distance, MemoryChunk.chunk_index),
                 )
-                .join(MemoryChunk, MemoryChunk.memory_id == Memory.id)
-                .where(
-                    Memory.status == "active",
-                    or_(Memory.expires_at.is_(None), Memory.expires_at > func.now()),
-                    or_(*scope_predicates),
-                    MemoryChunk.embedding_provider == self.embedder.name,
-                    MemoryChunk.embedding_version == self.embedder.version,
-                    MemoryChunk.embedding_dimension == self.embedder.dimension,
-                    MemoryChunk.chunker_version == self.chunker_version,
-                    distance <= 1.0 - minimum_similarity,
-                )
-                .subquery()
+                .label("chunk_rank"),
             )
-            rows = (
-                (
-                    await session.execute(
-                        select(ranked)
-                        .where(ranked.c.chunk_rank == 1)
-                        .order_by(ranked.c.distance, ranked.c.memory_id)
-                        .limit(limit)
-                    )
-                )
-                .mappings()
-                .all()
+            .join(MemoryChunk, MemoryChunk.memory_id == Memory.id)
+            .where(
+                Memory.status == "active",
+                Memory.memory_type.in_(memory_types),
+                or_(Memory.expires_at.is_(None), Memory.expires_at > func.now()),
+                or_(*scope_predicates),
+                MemoryChunk.embedding_provider == self.embedder.name,
+                MemoryChunk.embedding_version == self.embedder.version,
+                MemoryChunk.embedding_dimension == self.embedder.dimension,
+                MemoryChunk.chunker_version == self.chunker_version,
+                distance <= 1.0 - minimum_similarity,
             )
-            if not rows:
-                return ()
+            .subquery()
+        )
+        rows = (
+            (
+                await session.execute(
+                    select(ranked)
+                    .where(ranked.c.chunk_rank == 1)
+                    .order_by(ranked.c.distance, ranked.c.memory_id)
+                    .limit(limit)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if not rows:
+            return ()
 
-            memory_ids = [row["memory_id"] for row in rows]
-            source_rows = (
-                await session.scalars(
-                    select(GrowthSource)
-                    .where(GrowthSource.memory_id.in_(memory_ids))
-                    .order_by(GrowthSource.memory_id, GrowthSource.created_at, GrowthSource.id)
-                )
-            ).all()
-            sources_by_memory: dict[UUID, list[MemorySourceReference]] = defaultdict(list)
-            for source in source_rows:
-                if source.memory_id is None:
-                    continue
-                sources_by_memory[source.memory_id].append(
-                    MemorySourceReference(
-                        run_id=source.run_id,
-                        run_step_id=source.run_step_id,
-                        tool_call_id=source.tool_call_id,
-                        trajectory_hash=source.trajectory_hash,
-                        source_hash=source.source_hash,
-                    )
-                )
-            return tuple(
-                MemorySearchResult(
-                    memory_id=row["memory_id"],
-                    memory_key=row["memory_key"],
-                    version=row["version"],
-                    memory_type=row["memory_type"],
-                    scope_type=row["scope_type"],
-                    content=row["memory_content"],
-                    confidence=float(row["confidence"]),
-                    similarity=max(0.0, min(1.0, 1.0 - float(row["distance"]))),
-                    chunk_index=row["chunk_index"],
-                    chunk_content=row["chunk_content"],
-                    sources=tuple(sources_by_memory[row["memory_id"]]),
-                )
-                for row in rows
+        memory_ids = [row["memory_id"] for row in rows]
+        source_rows = (
+            await session.scalars(
+                select(GrowthSource)
+                .where(GrowthSource.memory_id.in_(memory_ids))
+                .order_by(GrowthSource.memory_id, GrowthSource.created_at, GrowthSource.id)
             )
+        ).all()
+        sources_by_memory: dict[UUID, list[MemorySourceReference]] = defaultdict(list)
+        for source in source_rows:
+            if source.memory_id is None:
+                continue
+            sources_by_memory[source.memory_id].append(
+                MemorySourceReference(
+                    run_id=source.run_id,
+                    run_step_id=source.run_step_id,
+                    tool_call_id=source.tool_call_id,
+                    trajectory_hash=source.trajectory_hash,
+                    source_hash=source.source_hash,
+                )
+            )
+        return tuple(
+            MemorySearchResult(
+                memory_id=row["memory_id"],
+                memory_key=row["memory_key"],
+                version=row["version"],
+                memory_type=row["memory_type"],
+                scope_type=row["scope_type"],
+                content=row["memory_content"],
+                content_hash=row["content_hash"],
+                confidence=float(row["confidence"]),
+                similarity=max(0.0, min(1.0, 1.0 - float(row["distance"]))),
+                chunk_index=row["chunk_index"],
+                chunk_content=row["chunk_content"],
+                sources=tuple(sources_by_memory[row["memory_id"]]),
+            )
+            for row in rows
+        )
 
     async def _validate_context(self, session, query_context: MemoryQueryContext) -> None:
         if query_context.project_id is not None:

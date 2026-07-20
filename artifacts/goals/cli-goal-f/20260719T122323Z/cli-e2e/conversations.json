@@ -1,0 +1,19 @@
+[
+  {
+    "id": "1df8dfdd-1187-4ab7-b67c-66efe5ff3745",
+    "project_id": "e4faf473-0185-4e24-b387-b3892e7e2392",
+    "agent_id": "dcbbfdb4-903b-4536-88a9-86e8ed334905",
+    "agent_version_id": "124ab9d3-154c-48dd-b0e1-067e939ca2d5",
+    "title": "CLI Goal C 20260719122607-403363",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": "2a728de5-5338-46c3-864a-6db406f5c96f",
+    "created_by": "cli-goal-c",
+    "revision": 3,
+    "created_at": "2026-07-19T12:26:11.442848Z",
+    "updated_at": "2026-07-19T12:26:13.798884Z"
+  }
+]

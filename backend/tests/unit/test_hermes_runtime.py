@@ -12,7 +12,9 @@ import pytest
 
 from nico_agent.runtime.contracts import (
     RuntimeCapability,
+    RuntimeDisposition,
     RuntimeEventType,
+    RuntimeServices,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
     RuntimeToolSession,
@@ -132,6 +134,26 @@ async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path
     export_call = calls[2]
     assert export_call[:2] == ["sessions", "export"]
     assert "--redact" in export_call
+
+
+@pytest.mark.asyncio
+async def test_hermes_executes_protocol_v2_with_honest_capabilities(tmp_path: Path) -> None:
+    provider, _ = _provider(tmp_path)
+    request = _request()
+    handle = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        handle.external_session_id,
+        request,
+        RuntimeServices(),
+    )
+
+    assert outcome.disposition is RuntimeDisposition.TERMINAL
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert provider.descriptor.protocol_version == "2.0"
+    assert provider.descriptor.implementation == "adapter"
+    assert RuntimeCapability.PLANNING not in provider.descriptor.capabilities
+    assert RuntimeCapability.COORDINATION not in provider.descriptor.capabilities
 
 
 @pytest.mark.asyncio

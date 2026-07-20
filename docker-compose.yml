@@ -83,7 +83,16 @@ services:
       NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
       NICO_REDIS_URL: redis://redis:6379/0
       NICO_MINIO_URL: http://minio:9000
+      NICO_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nico-minio}
+      NICO_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+      NICO_MINIO_BUCKET: ${MINIO_BUCKET:-nico-artifacts}
+      NICO_ARTIFACT_MAX_BYTES: ${NICO_ARTIFACT_MAX_BYTES:-10485760}
+      NICO_CONVERSATION_ATTACHMENT_TTL_SECONDS: ${NICO_CONVERSATION_ATTACHMENT_TTL_SECONDS:-86400}
+      NICO_CONVERSATION_ATTACHMENT_EXCERPT_CHARS: ${NICO_CONVERSATION_ATTACHMENT_EXCERPT_CHARS:-16000}
+      NICO_CONVERSATION_ATTACHMENT_MAX_COUNT: ${NICO_CONVERSATION_ATTACHMENT_MAX_COUNT:-16}
+      NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES: ${NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:-26214400}
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
+      NICO_MODEL_ENDPOINT_WRITES_ENABLED: ${NICO_MODEL_ENDPOINT_WRITES_ENABLED:-true}
       NICO_CORS_ORIGINS: '["http://localhost:${WEB_PORT:-18080}","http://localhost:5173"]'
     command:
       - /bin/sh
@@ -125,12 +134,26 @@ services:
       NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
       NICO_REDIS_URL: redis://redis:6379/0
       NICO_MINIO_URL: http://minio:9000
+      NICO_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nico-minio}
+      NICO_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+      NICO_MINIO_BUCKET: ${MINIO_BUCKET:-nico-artifacts}
+      NICO_ARTIFACT_MAX_BYTES: ${NICO_ARTIFACT_MAX_BYTES:-10485760}
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
       NICO_WORKER_HEALTH_INTERVAL_SECONDS: ${NICO_WORKER_HEALTH_INTERVAL_SECONDS:-15}
+      NICO_WORKER_POLL_INTERVAL_SECONDS: ${NICO_WORKER_POLL_INTERVAL_SECONDS:-1}
+      NICO_WORKER_LEASE_SECONDS: ${NICO_WORKER_LEASE_SECONDS:-30}
+      NICO_WORKER_HEARTBEAT_SECONDS: ${NICO_WORKER_HEARTBEAT_SECONDS:-10}
+      NICO_WORKER_CONCURRENCY: ${NICO_WORKER_CONCURRENCY:-1}
+      NICO_WORKER_ID: ${NICO_WORKER_ID:-nico-worker}
+      NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-[]}
+      NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-false}
+      NICO_MODEL_SECRET_GOAL_G: ${NICO_MODEL_SECRET_GOAL_G:-}
+      NICO_NATIVE_POST_TOOL_DELAY_SECONDS: ${NICO_NATIVE_POST_TOOL_DELAY_SECONDS:-0}
+      NICO_TOOL_APPROVAL_REQUIRED_RISKS: ${NICO_TOOL_APPROVAL_REQUIRED_RISKS:-["medium","high"]}
+      NICO_TOOL_APPROVAL_TTL_SECONDS: ${NICO_TOOL_APPROVAL_TTL_SECONDS:-900}
       NICO_SANDBOX_RUNNER_URL: http://sandbox-runner:8090
       NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
       NICO_WORKSPACE_ROOT: /var/lib/nico/workspaces
-      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
     command: ["python", "-m", "nico_agent.worker"]
     depends_on:
       api:
@@ -141,8 +164,70 @@ services:
         condition: service_completed_successfully
     volumes:
       - agent-workspaces:/var/lib/nico/workspaces
-      - hermes-state:/var/lib/nico/hermes
     restart: unless-stopped
+
+  worker-hermes:
+    extends:
+      service: worker
+    profiles: ["hermes"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.hermes
+      args:
+        HERMES_AGENT_SPEC: ${HERMES_AGENT_SPEC:-hermes-agent[mcp]==0.18.2}
+    environment:
+      NICO_HERMES_ENABLED: "true"
+      NICO_HERMES_COMMAND: hermes
+      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
+      NICO_WORKER_ID: nico-hermes-worker
+    depends_on:
+      hermes-state-init:
+        condition: service_completed_successfully
+    volumes:
+      - hermes-state:/var/lib/nico/hermes
+
+  worker-hermes-contract:
+    extends:
+      service: worker
+    profiles: ["goal-l"]
+    environment:
+      NICO_HERMES_ENABLED: "true"
+      NICO_HERMES_COMMAND: python -m nico_agent.testing.fake_hermes_cli
+      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
+      NICO_WORKER_ID: nico-hermes-contract-worker
+    depends_on:
+      hermes-state-init:
+        condition: service_completed_successfully
+    volumes:
+      - hermes-state:/var/lib/nico/hermes
+
+  fake-model:
+    profiles: ["goal-g", "goal-h", "goal-j", "goal-k"]
+    build:
+      context: ./backend
+    environment:
+      NICO_FAKE_MODEL_TOKEN: ${NICO_MODEL_SECRET_GOAL_G:-goal-g-fake-token}
+      NICO_FAKE_MODEL_GOAL_J_DELAY_SECONDS: ${NICO_FAKE_MODEL_GOAL_J_DELAY_SECONDS:-0}
+    command:
+      - uvicorn
+      - nico_agent.testing.fake_model:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8100"
+      - --log-config
+      - logging.json
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8100/healthz', timeout=3)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: "no"
 
   worker-state-init:
     build:
@@ -152,11 +237,26 @@ services:
       - /bin/sh
       - -ec
       - |
-        install -d -o nico -g nico -m 0700 /var/lib/nico/workspaces /var/lib/nico/hermes
-        chown -R nico:nico /var/lib/nico/workspaces /var/lib/nico/hermes
-        chmod 0700 /var/lib/nico/workspaces /var/lib/nico/hermes
+        install -d -o nico -g nico -m 0700 /var/lib/nico/workspaces
+        chown -R nico:nico /var/lib/nico/workspaces
+        chmod 0700 /var/lib/nico/workspaces
     volumes:
       - agent-workspaces:/var/lib/nico/workspaces
+    restart: "no"
+
+  hermes-state-init:
+    profiles: ["hermes", "goal-l"]
+    build:
+      context: ./backend
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        install -d -o nico -g nico -m 0700 /var/lib/nico/hermes
+        chown -R nico:nico /var/lib/nico/hermes
+        chmod 0700 /var/lib/nico/hermes
+    volumes:
       - hermes-state:/var/lib/nico/hermes
     restart: "no"
 

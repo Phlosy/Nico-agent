@@ -9,16 +9,20 @@ Runtime 只能产生规范化 tool intent，不能直接 import Executor、访�
 1. 校验 tenant、run、worker owner、lease token、expiry 与 Run 活跃状态；
 2. 按精确 `name@version` 取得 Registry 实现并核对 Definition/implementation Hash；
 3. 读取首次领取时冻结的租户策略与 AgentVersion 策略交集；
-4. 创建或恢复幂等 ToolCall/RunStep，并在拒绝时同样留下审计事实；
-5. 校验 input Schema，解析允许的 Secret 引用，执行 timeout/retry/cancel；
-6. 校验 output Schema 与字节上限；
-7. 仅在同一有效 Run 租约下提交 ToolCall、RunStep、Event、Audit 与 usage。
+4. 校验并同事务保存 Native ReAct schema-v2 或 Plan schema-v3 的副作用前 checkpoint；
+5. 创建或恢复幂等 ToolCall/RunStep，并在拒绝时同样留下审计事实；
+6. medium/high 工具先创建 ToolApprovalRequest、发布 `ApprovalRequested` 并挂起 Run；批准后才继续；
+7. 校验 input Schema，解析允许的 Secret 引用，执行 timeout/retry/cancel；
+8. 校验 output Schema 与字节上限；
+9. 仅在同一有效 Run 租约下提交 ToolCall、RunStep、Event、Audit 与 usage。
 
-终态 ToolCall 由数据库 trigger 阻止更新和删除。同一 Run、工具版本、幂等键和参数返回已有终态；同键不同参数返回 `TOOL_IDEMPOTENCY_CONFLICT`。MCP 幂等键由稳定 JSON-RPC 调用 ID、工具版本和规范化参数计算，因此子进程/Worker 恢复不会把重放变成新副作用。
+终态 ToolCall 由数据库 trigger 阻止更新和删除。同一 Run、工具版本、幂等键和参数返回已有终态；同键不同参数返回 `TOOL_IDEMPOTENCY_CONFLICT`。ReAct 与 Plan 模式都在副作用前持久化带完整性 Hash 的 checkpoint；Plan 工具 RunStep 还会关联对应的 Plan 执行父步骤。MCP/Runtime 幂等键由稳定调用 ID、工具版本和执行位置计算，因此子进程或 Worker 恢复不会把重放变成新副作用。
+
+默认审批风险集合为 `medium/high`。请求、脱敏参数 Hash、期限和决定保存在 PostgreSQL；批准范围是当前调用的 `once`，或当前 Run 中同一 ToolDefinition 的 `run`。CLI 断线或 Worker 重启不会丢失请求。拒绝、超时和 Run 取消都会终态化请求及待执行 ToolCall；Worker 每次领取前通过最小权限数据库函数回收超时请求。没有 Native pre-action checkpoint 的 Adapter 调用会失败关闭，不能以一次本地确认绕过恢复保护。
 
 ## 权限配置
 
-权限默认拒绝，通配符不受支持。当前有效允许集合是 Tenant `settings.tool_policy` 与 AgentVersion `tool_policy` 的交集。AgentVersion 是不可变版本，Run 首次领取后再冻结一次；后续修改 Tenant 不改变历史 Run。Goal E 尚无 Role/Plugin 权限层，AgentVersion 包含 `plugin_refs` 时平台会清空工具授权并记录策略错误。
+权限默认拒绝，通配符不受支持。当前有效允许集合是 Tenant `settings.tool_policy` 与 AgentVersion `tool_policy` 的交集。AgentVersion 是不可变版本，Run 首次领取后再冻结一次；后续修改 Tenant 不改变历史 Run。Role/Plugin 权限层尚未实现，AgentVersion 包含 `plugin_refs` 时平台会清空工具授权并记录策略错误。
 
 租户配置示例：
 
@@ -125,22 +129,18 @@ python -m pip install 'hermes-agent[mcp]==0.18.2'
 
 平台开发依赖固定 `mcp==1.26.0` 与修复版本 `starlette==1.0.1`，用于对本地 Hermes 0.18.2 做真实无模型凭据发现测试。该测试只证明 MCP 边界兼容，不证明模型推理质量。
 
-## 查询与验收
+## 查询
 
 - `GET /api/v1/tool-definitions`：当前租户已实例化的工具版本快照；
 - `GET /api/v1/runs/{run_id}/tool-calls`：脱敏参数、状态、尝试、结果/错误、usage 和时间；
 - `GET /api/v1/runs/{run_id}/events`：`ToolDefinitionRegistered`、`ToolCallStarted/Rejected/Succeeded/Failed/TimedOut/Cancelled`；
 - `GET /api/v1/audit`：`tool.definition.register`、`tool.call.start/reject/finish`；
 - `GET /api/v1/runs/{run_id}/trajectory`：Runtime 的 `tool.call.started/completed` 规范事件。
+- `GET /api/v1/tool-approval-requests`：按 Run/状态读取持久化请求；
+- `POST /api/v1/tool-approval-requests/{id}/decision`：批准 once/run 或拒绝，要求 revision 与幂等键。
 
-平台没有直接工具执行 REST API。完整验收运行：
+平台没有直接工具执行 REST API。工具只能由持有有效 Run 租约的 Worker 经 Gateway 调用。
 
-```bash
-NICO_EVIDENCE_DIR=artifacts/goals/goal-e/<timestamp> scripts/verify-goal-e.sh
-```
+## 当前限制
 
-它先运行 Goal D 全回归，再执行 Tool/Sandbox 单元与真实集成，并通过 Compose 完成文件、报告和真实 Python 容器调用；最后检查固定镜像与零残留 sandbox 容器。
-
-## 明确未实现
-
-Goal E 不包含 Memory/Skill 候选与成长、Team/Role/Workflow、Plugin 动态加载、量化策略/交易工具、正式 Approval、API Key/JWT、SSE、SDK 或业务 Web Console。HTTP/DB 是通用只读工具，不能用于实盘下单；任何未来外部写/交易工具必须复用 Gateway，并增加更严格权限与 Approval，不能靠 Prompt 扩权。
+Plugin 动态加载、Role 权限层、量化交易工具、API Key/JWT 和限额管理尚未实现。工具审批已有持久化与审计边界，但当前操作者身份仍来自受信网络 Header，不等于生产级身份认证。HTTP/DB 是通用只读工具，不能用于实盘下单；任何未来外部写入或交易工具都必须复用 Gateway，并增加更严格的权限与 Approval，不能靠 Prompt 扩权。

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -20,10 +20,16 @@ from nico_agent.domain.models import (
     Run,
     RunStep,
     RuntimeSession,
+    ToolApprovalRequest,
     ToolCall,
     ToolDefinition,
 )
-from nico_agent.domain.states import RunStatus, RunStepStatus, ToolCallStatus
+from nico_agent.domain.states import (
+    RunStatus,
+    RunStepStatus,
+    ToolApprovalStatus,
+    ToolCallStatus,
+)
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
     ToolExecutionContext,
@@ -33,6 +39,8 @@ from nico_agent.tools.contracts import (
 )
 from nico_agent.tools.errors import (
     ToolAccessDenied,
+    ToolApprovalCheckpointRequired,
+    ToolApprovalRequired,
     ToolCallInProgress,
     ToolDisabled,
     ToolError,
@@ -63,7 +71,6 @@ _TERMINAL_CALL_STATUSES = {
     ToolCallStatus.CANCELLED,
 }
 _MAX_INPUT_BYTES = 1_048_576
-_FIRST_TOOL_STEP_SEQUENCE = 1_000_000
 
 
 class ToolGatewayRequest(BaseModel):
@@ -74,6 +81,7 @@ class ToolGatewayRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=1, max_length=200)
     caller: str = Field(min_length=1, max_length=200)
+    checkpoint: dict[str, Any] | None = None
     correlation_id: UUID = Field(default_factory=uuid4)
 
 
@@ -101,6 +109,14 @@ class _PreparedCall:
     secrets: dict[str, str] = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _ApprovalPending:
+    approval_id: UUID
+    tool_call_id: UUID
+    run_step_id: UUID
+    risk_level: str
+
+
 class ToolGateway:
     def __init__(
         self,
@@ -108,10 +124,18 @@ class ToolGateway:
         registry: ToolRegistry,
         *,
         secret_resolver: SecretResolver | None = None,
+        approval_required_risks: frozenset[str] = frozenset({"medium", "high"}),
+        approval_ttl_seconds: int = 900,
     ) -> None:
+        if not approval_required_risks <= {"medium", "high"}:
+            raise ValueError("approval_required_risks may contain only medium and high")
+        if approval_ttl_seconds < 1 or approval_ttl_seconds > 86_400:
+            raise ValueError("approval_ttl_seconds must be between 1 and 86400")
         self.database = database
         self.registry = registry
         self.secret_resolver = secret_resolver or EnvironmentSecretResolver()
+        self.approval_required_risks = approval_required_risks
+        self.approval_ttl_seconds = approval_ttl_seconds
 
     async def list_authorized(
         self,
@@ -182,6 +206,13 @@ class ToolGateway:
         )
         if isinstance(prepared_or_result, ToolGatewayResult):
             return prepared_or_result
+        if isinstance(prepared_or_result, _ApprovalPending):
+            raise ToolApprovalRequired(
+                approval_id=prepared_or_result.approval_id,
+                tool_call_id=prepared_or_result.tool_call_id,
+                run_step_id=prepared_or_result.run_step_id,
+                risk_level=prepared_or_result.risk_level,
+            )
         prepared = prepared_or_result
         secrets = prepared.secrets
         attempts = list(prepared.previous_attempts)
@@ -325,10 +356,12 @@ class ToolGateway:
         request: ToolGatewayRequest,
         executor: ToolExecutor,
         arguments_hash: str,
-    ) -> _PreparedCall | ToolGatewayResult:
+    ) -> _PreparedCall | _ApprovalPending | ToolGatewayResult:
         context = TenantContext(claim.tenant_id, f"worker:{worker_id}", request.correlation_id)
         async with self.database.tenant_transaction(context) as session:
             run = await self._owned_run(session, claim, worker_id)
+            if request.checkpoint is not None:
+                await self._persist_pre_action_checkpoint(session, run, request.checkpoint)
             definition = await self._definition(session, context, executor, run.id)
             existing = await session.scalar(
                 select(ToolCall)
@@ -346,11 +379,37 @@ class ToolGateway:
                 status = ToolCallStatus(existing.status)
                 if status in _TERMINAL_CALL_STATUSES:
                     return self._result(existing, cached=True)
+                approval = await session.scalar(
+                    select(ToolApprovalRequest).where(
+                        ToolApprovalRequest.tenant_id == claim.tenant_id,
+                        ToolApprovalRequest.tool_call_id == existing.id,
+                    )
+                )
+                if approval is not None and approval.status == ToolApprovalStatus.REQUESTED.value:
+                    run.status = RunStatus.WAITING_FOR_APPROVAL.value
+                    run.revision += 1
+                    return _ApprovalPending(
+                        approval_id=approval.id,
+                        tool_call_id=existing.id,
+                        run_step_id=existing.run_step_id,
+                        risk_level=approval.risk_level,
+                    )
+                if (
+                    executor.spec.risk.value in self.approval_required_risks
+                    and approval is None
+                    and not await self._run_scope_grant(session, claim, definition.id)
+                ):
+                    raise ToolAccessDenied(
+                        executor.spec.name,
+                        executor.spec.version,
+                        "sensitive tool call has no durable approval",
+                    )
                 if existing.execution_lease_token == claim.lease_token:
                     raise ToolCallInProgress(str(existing.id))
                 existing.execution_owner = worker_id
                 existing.execution_lease_token = claim.lease_token
                 existing.status = ToolCallStatus.RUNNING.value
+                existing.started_at = existing.started_at or datetime.now(UTC)
                 existing.revision += 1
                 step = await session.scalar(
                     select(RunStep)
@@ -381,34 +440,119 @@ class ToolGateway:
             rejected: ToolError | None = None
             authorization: ToolAuthorization | None = None
             secrets: dict[str, str] = {}
+            approval_required = False
+            run_scope_grant: ToolApprovalRequest | None = None
             try:
                 authorization = await self._authorization(session, claim, executor.spec, definition)
                 executor.spec.validate_input(request.arguments)
-                secrets = resolve_secrets(self.secret_resolver, authorization.secret_refs)
+                if executor.spec.risk.value in self.approval_required_risks:
+                    if request.checkpoint is None:
+                        raise ToolApprovalCheckpointRequired(
+                            executor.spec.name, executor.spec.version
+                        )
+                    run_scope_grant = await self._run_scope_grant(session, claim, definition.id)
+                    approval_required = run_scope_grant is None
+                if not approval_required:
+                    secrets = resolve_secrets(self.secret_resolver, authorization.secret_refs)
             except ToolError as exc:
                 rejected = exc
 
             sequence = (
                 await session.scalar(
-                    select(
-                        func.coalesce(func.max(RunStep.sequence), _FIRST_TOOL_STEP_SEQUENCE - 1)
-                    ).where(
+                    select(func.coalesce(func.max(RunStep.sequence), 0)).where(
                         RunStep.tenant_id == claim.tenant_id,
                         RunStep.run_id == claim.run_id,
-                        RunStep.sequence >= _FIRST_TOOL_STEP_SEQUENCE,
                     )
                 )
             ) + 1
+            checkpoint_iteration = (
+                int(request.checkpoint["iteration"])
+                if request.checkpoint is not None
+                and type(request.checkpoint.get("iteration")) is int
+                and request.checkpoint["iteration"] > 0
+                else None
+            )
+            plan_step_state = (
+                request.checkpoint.get("step_state")
+                if request.checkpoint is not None
+                and request.checkpoint.get("execution_mode") == "plan_and_execute"
+                and isinstance(request.checkpoint.get("step_state"), dict)
+                else None
+            )
+            plan_revision = (
+                request.checkpoint.get("plan_revision")
+                if request.checkpoint is not None
+                and type(request.checkpoint.get("plan_revision")) is int
+                else None
+            )
+            plan_step_key = plan_step_state.get("step_key") if plan_step_state is not None else None
+            plan_attempt = (
+                plan_step_state.get("attempt")
+                if plan_step_state is not None and type(plan_step_state.get("attempt")) is int
+                else None
+            )
+            tool_step_key = (
+                f"tool:{request.idempotency_key}"
+                if len(request.idempotency_key) <= 195
+                else f"tool:{canonical_hash(request.idempotency_key)}"
+            )
+            runtime_projection = await session.scalar(
+                select(RuntimeSession).where(
+                    RuntimeSession.tenant_id == claim.tenant_id,
+                    RuntimeSession.run_id == claim.run_id,
+                )
+            )
+            parent_step_id = None
+            if checkpoint_iteration is not None:
+                parent_step_id = await session.scalar(
+                    select(RunStep.id).where(
+                        RunStep.tenant_id == claim.tenant_id,
+                        RunStep.run_id == claim.run_id,
+                        RunStep.step_key == f"reasoning:{checkpoint_iteration}",
+                    )
+                )
+            elif (
+                plan_revision is not None
+                and isinstance(plan_step_key, str)
+                and plan_step_key
+                and plan_attempt is not None
+            ):
+                parent_step_id = await session.scalar(
+                    select(RunStep.id).where(
+                        RunStep.tenant_id == claim.tenant_id,
+                        RunStep.run_id == claim.run_id,
+                        RunStep.step_key
+                        == f"plan:{plan_revision}:{plan_step_key}:attempt:{plan_attempt}",
+                    )
+                )
             now = datetime.now(UTC)
             step = RunStep(
                 tenant_id=claim.tenant_id,
                 run_id=claim.run_id,
                 sequence=sequence,
+                step_key=tool_step_key,
+                step_type="tool",
+                iteration=checkpoint_iteration or plan_attempt,
+                parent_step_id=parent_step_id,
+                context_snapshot_id=(
+                    runtime_projection.current_context_snapshot_id
+                    if runtime_projection is not None
+                    else None
+                ),
+                model_call_id=(
+                    runtime_projection.last_model_call_id
+                    if runtime_projection is not None
+                    else None
+                ),
                 kind=f"tool:{executor.spec.name}"[:100],
                 status=(
                     RunStepStatus.FAILED.value
                     if rejected is not None
-                    else RunStepStatus.RUNNING.value
+                    else (
+                        RunStepStatus.WAITING.value
+                        if approval_required
+                        else RunStepStatus.RUNNING.value
+                    )
                 ),
                 input={
                     "tool": executor.spec.reference,
@@ -440,14 +584,18 @@ class ToolGateway:
                 status=(
                     ToolCallStatus.FAILED.value
                     if rejected is not None
-                    else ToolCallStatus.RUNNING.value
+                    else (
+                        ToolCallStatus.PENDING.value
+                        if approval_required
+                        else ToolCallStatus.RUNNING.value
+                    )
                 ),
                 error=(
                     {"code": rejected.code, "message": rejected.message}
                     if rejected is not None
                     else None
                 ),
-                started_at=now,
+                started_at=None if approval_required else now,
                 ended_at=now if rejected is not None else None,
             )
             session.add(call)
@@ -455,9 +603,17 @@ class ToolGateway:
             self._record(
                 session,
                 context,
-                event_type="ToolCallRejected" if rejected is not None else "ToolCallStarted",
+                event_type=(
+                    "ToolCallRejected"
+                    if rejected is not None
+                    else ("ToolCallPendingApproval" if approval_required else "ToolCallStarted")
+                ),
                 call=call,
-                action="tool.call.reject" if rejected is not None else "tool.call.start",
+                action=(
+                    "tool.call.reject"
+                    if rejected is not None
+                    else ("tool.call.await_approval" if approval_required else "tool.call.start")
+                ),
                 payload={
                     "tool": executor.spec.reference,
                     "status": call.status,
@@ -468,9 +624,119 @@ class ToolGateway:
             if rejected is not None:
                 return self._result(call)
             assert authorization is not None
+            if approval_required:
+                approval = ToolApprovalRequest(
+                    tenant_id=claim.tenant_id,
+                    run_id=claim.run_id,
+                    run_step_id=step.id,
+                    tool_call_id=call.id,
+                    tool_definition_id=definition.id,
+                    risk_level=executor.spec.risk.value,
+                    requester=request.caller,
+                    arguments_redacted=redact_value(request.arguments),
+                    arguments_hash=arguments_hash,
+                    expires_at=now + timedelta(seconds=self.approval_ttl_seconds),
+                )
+                session.add(approval)
+                await session.flush()
+                run.status = RunStatus.WAITING_FOR_APPROVAL.value
+                run.revision += 1
+                if runtime_projection is not None:
+                    runtime_projection.loop_state = "waiting_for_approval"
+                    runtime_projection.revision += 1
+                self._record_approval_requested(session, context, approval, call)
+                return _ApprovalPending(
+                    approval_id=approval.id,
+                    tool_call_id=call.id,
+                    run_step_id=step.id,
+                    risk_level=approval.risk_level,
+                )
+            if run_scope_grant is not None:
+                self._record_approval_grant_reused(session, context, run_scope_grant, call)
             run.status = RunStatus.WAITING_FOR_TOOL.value
             run.revision += 1
             return self._prepared(call, executor, authorization, request, context, secrets)
+
+    @staticmethod
+    async def _run_scope_grant(
+        session: AsyncSession,
+        claim: RunClaim,
+        tool_definition_id: UUID,
+    ) -> ToolApprovalRequest | None:
+        return await session.scalar(
+            select(ToolApprovalRequest)
+            .where(
+                ToolApprovalRequest.tenant_id == claim.tenant_id,
+                ToolApprovalRequest.run_id == claim.run_id,
+                ToolApprovalRequest.tool_definition_id == tool_definition_id,
+                ToolApprovalRequest.status == ToolApprovalStatus.APPROVED.value,
+                ToolApprovalRequest.allowed_scope == "run",
+            )
+            .order_by(ToolApprovalRequest.decided_at.desc())
+            .limit(1)
+        )
+
+    @staticmethod
+    async def _persist_pre_action_checkpoint(
+        session: AsyncSession,
+        run: Run,
+        checkpoint: dict[str, Any],
+    ) -> None:
+        execution_mode = checkpoint.get("execution_mode")
+        schema_version = checkpoint.get("schema_version")
+        step_state = checkpoint.get("step_state")
+        valid_react_boundary = (
+            execution_mode == "react"
+            and schema_version == 2
+            and checkpoint.get("loop_state") == "waiting_for_tool"
+            and bool(checkpoint.get("pending_actions"))
+        )
+        valid_plan_boundary = (
+            execution_mode == "plan_and_execute"
+            and schema_version == 3
+            and checkpoint.get("loop_state") == "executing"
+            and isinstance(step_state, dict)
+            and bool(step_state.get("pending_actions"))
+        )
+        if not valid_react_boundary and not valid_plan_boundary:
+            raise ToolSchemaViolation(
+                code="TOOL_CHECKPOINT_INVALID",
+                message="tool execution requires a valid native pre-action checkpoint",
+                path=[],
+                validator="checkpoint",
+            )
+        expected_hash = checkpoint.get("checkpoint_hash")
+        hash_payload = dict(checkpoint)
+        hash_payload.pop("checkpoint_hash", None)
+        if not isinstance(expected_hash, str) or canonical_hash(hash_payload) != expected_hash:
+            raise ToolSchemaViolation(
+                code="TOOL_CHECKPOINT_INVALID",
+                message="tool execution checkpoint failed its integrity check",
+                path=[],
+                validator="checkpoint_hash",
+            )
+        # The RuntimeSession and Run are already protected by the owned Run row
+        # lock. This write commits in the same transaction that creates or
+        # reclaims the ToolCall, before the executor can produce a side effect.
+        runtime_session = await session.scalar(
+            select(RuntimeSession).where(
+                RuntimeSession.tenant_id == run.tenant_id,
+                RuntimeSession.run_id == run.id,
+            )
+        )
+        if runtime_session is None:
+            raise ToolAccessDenied("runtime", "checkpoint", "runtime session is unavailable")
+        runtime_session.checkpoint = checkpoint
+        runtime_session.checkpoint_schema_version = schema_version
+        runtime_session.checkpoint_revision += 1
+        runtime_session.checkpoint_hash = expected_hash
+        runtime_session.loop_state = "waiting_for_tool"
+        runtime_session.revision += 1
+        run.checkpoint = checkpoint
+        run.checkpoint_schema_version = schema_version
+        run.checkpoint_revision += 1
+        run.checkpoint_hash = expected_hash
+        run.revision += 1
 
     async def _checkpoint_attempts(
         self,
@@ -776,6 +1042,86 @@ class ToolGateway:
                 action="tool.definition.register",
                 resource_type="tool_definition",
                 resource_id=definition.id,
+                actor_id=context.actor_id,
+                details=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+
+    @staticmethod
+    def _record_approval_requested(
+        session: AsyncSession,
+        context: TenantContext,
+        approval: ToolApprovalRequest,
+        call: ToolCall,
+    ) -> None:
+        payload = {
+            "approval_id": str(approval.id),
+            "tool_call_id": str(call.id),
+            "run_step_id": str(call.run_step_id),
+            "tool": f"{call.tool_name}@{call.tool_version}",
+            "risk_level": approval.risk_level,
+            "arguments": approval.arguments_redacted,
+            "expires_at": approval.expires_at.isoformat(),
+            "allowed_scopes": ["once", "run"],
+            "status": approval.status,
+        }
+        session.add(
+            Event(
+                tenant_id=context.tenant_id,
+                event_type="ApprovalRequested",
+                aggregate_type="tool_approval_request",
+                aggregate_id=approval.id,
+                run_id=call.run_id,
+                actor_id=context.actor_id,
+                payload=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+        session.add(
+            AuditRecord(
+                tenant_id=context.tenant_id,
+                action="tool.approval.request",
+                resource_type="tool_approval_request",
+                resource_id=approval.id,
+                actor_id=context.actor_id,
+                details=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+
+    @staticmethod
+    def _record_approval_grant_reused(
+        session: AsyncSession,
+        context: TenantContext,
+        approval: ToolApprovalRequest,
+        call: ToolCall,
+    ) -> None:
+        payload = {
+            "approval_id": str(approval.id),
+            "tool_call_id": str(call.id),
+            "tool": f"{call.tool_name}@{call.tool_version}",
+            "allowed_scope": "run",
+            "status": "approved",
+        }
+        session.add(
+            Event(
+                tenant_id=context.tenant_id,
+                event_type="ToolApprovalGrantReused",
+                aggregate_type="tool_approval_request",
+                aggregate_id=approval.id,
+                run_id=call.run_id,
+                actor_id=context.actor_id,
+                payload=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+        session.add(
+            AuditRecord(
+                tenant_id=context.tenant_id,
+                action="tool.approval.grant_reuse",
+                resource_type="tool_approval_request",
+                resource_id=approval.id,
                 actor_id=context.actor_id,
                 details=payload,
                 correlation_id=context.correlation_id,

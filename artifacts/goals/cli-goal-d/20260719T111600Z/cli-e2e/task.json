@@ -1,0 +1,18 @@
+{
+  "id": "434a19ec-5ef2-4bbc-8090-f19316c3083f",
+  "project_id": "62cbb5e1-e744-4410-ae4f-d5118686f1a3",
+  "title": "Nico first Run 20260719111842-49816",
+  "input": {
+    "request": "Show a deterministic Nico result"
+  },
+  "acceptance": {
+    "runtime": "mock"
+  },
+  "assignee_agent_id": "f4e95b8d-7765-46be-bf93-292a0021852a",
+  "parent_task_id": null,
+  "status": "waiting_for_review",
+  "priority": 10,
+  "revision": 3,
+  "created_at": "2026-07-19T11:18:42.984724Z",
+  "updated_at": "2026-07-19T11:18:43.922592Z"
+}

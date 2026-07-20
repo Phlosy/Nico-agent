@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     database_password: str = "nico"
     redis_url: str = "redis://localhost:6379/0"
     minio_url: str = "http://localhost:9000"
+    minio_access_key: str = Field(default="nico-minio", min_length=3, max_length=200)
+    minio_secret_key: str = Field(
+        default="nico-minio-change-me", min_length=8, max_length=500, repr=False
+    )
+    minio_bucket: str = Field(default="nico-artifacts", pattern=r"^[a-z0-9][a-z0-9.-]{1,61}$")
+    artifact_max_bytes: int = Field(default=10_485_760, ge=1, le=104_857_600)
+    conversation_attachment_ttl_seconds: int = Field(default=86_400, ge=60, le=604_800)
+    conversation_attachment_excerpt_chars: int = Field(default=16_000, ge=0, le=64_000)
+    conversation_attachment_max_count: int = Field(default=16, ge=1, le=100)
+    conversation_attachment_max_total_bytes: int = Field(default=26_214_400, ge=1, le=524_288_000)
     dependency_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     worker_health_interval_seconds: float = Field(default=15.0, gt=0, le=300)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
@@ -44,6 +54,7 @@ class Settings(BaseSettings):
     worker_heartbeat_seconds: float = Field(default=10.0, gt=0, le=1800)
     worker_concurrency: int = Field(default=1, ge=1, le=64)
     worker_id: str = Field(default="nico-worker", min_length=1, max_length=180)
+    hermes_enabled: bool = False
     hermes_command: str = Field(default="hermes", min_length=1, max_length=1000)
     hermes_cwd: str | None = None
     hermes_state_root: str = Field(default="/tmp/nico-agent-hermes", min_length=1, max_length=2000)
@@ -55,6 +66,18 @@ class Settings(BaseSettings):
     http_read_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     http_max_redirects: int = Field(default=3, ge=0, le=10)
     http_allow_loopback: bool = False
+    model_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    model_read_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
+    model_max_response_bytes: int = Field(default=10_485_760, ge=1024, le=104_857_600)
+    model_allow_http_loopback: bool = False
+    model_trusted_private_hosts: list[str] = []
+    model_allow_http_trusted_hosts: bool = False
+    model_max_attempts: int = Field(default=3, ge=1, le=10)
+    model_retry_base_seconds: float = Field(default=0.2, ge=0, le=30)
+    model_endpoint_writes_enabled: bool = False
+    native_post_tool_delay_seconds: float = Field(default=0, ge=0, le=300)
+    tool_approval_required_risks: list[Literal["medium", "high"]] = ["medium", "high"]
+    tool_approval_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     database_tool_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     database_tool_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     database_tool_max_rows: int = Field(default=500, ge=1, le=5_000)
@@ -116,6 +139,8 @@ class Settings(BaseSettings):
             and self.sandbox_runner_token == "nico-sandbox-development-token"
         ):
             raise ValueError("production requires a non-default Sandbox Runner token")
+        if self.environment == "production" and self.minio_secret_key == "nico-minio-change-me":
+            raise ValueError("production requires non-default MinIO credentials")
         return self
 
     @property

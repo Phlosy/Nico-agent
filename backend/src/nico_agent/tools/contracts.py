@@ -113,7 +113,10 @@ class ToolDefinitionSpec(BaseModel):
 
     @property
     def content_hash(self) -> str:
-        return canonical_hash(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        payload["secret_names"] = sorted(self.secret_names)
+        payload["retry_policy"]["retryable_codes"] = sorted(self.retry_policy.retryable_codes)
+        return canonical_hash(payload)
 
     def validate_input(self, value: dict[str, Any]) -> None:
         _validate_instance(self.input_schema, value, code="TOOL_INPUT_INVALID")

@@ -44,6 +44,11 @@ describe("infrastructure status page", () => {
 
     render(<App />, { wrapper });
 
+    expect(screen.getByRole("heading", { name: /可靠执行.*受控成长/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Nico Agent Platform 首页").querySelector("img")).toHaveAttribute(
+      "src",
+      "/brand/nico-logo.png",
+    );
     expect(await screen.findByText("平台基础设施已就绪")).toBeInTheDocument();
     expect(screen.getByText("PostgreSQL + pgvector")).toBeInTheDocument();
     expect(screen.getByText("Redis")).toBeInTheDocument();
@@ -86,4 +91,3 @@ describe("infrastructure status page", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
-

@@ -1,0 +1,241 @@
+{
+  "conversation": {
+    "id": "d0d3b9fa-c80b-43ce-bbfa-267d5f0f7267",
+    "project_id": "0406423d-92cd-4a21-8c86-464d8da4452e",
+    "agent_id": "229003e2-cb58-47d5-a735-eaca2421f4e5",
+    "agent_version_id": "14938af0-ba14-4890-80d4-7fb0f3b6cde6",
+    "title": "New conversation",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": null,
+    "created_by": "cli-goal-f",
+    "revision": 1,
+    "created_at": "2026-07-19T12:27:13.601615Z",
+    "updated_at": "2026-07-19T12:27:13.601624Z"
+  },
+  "turn": {
+    "id": "b0dadce2-92c9-4c8b-a803-7a8f6698fcc9",
+    "conversation_id": "d0d3b9fa-c80b-43ce-bbfa-267d5f0f7267",
+    "sequence": 1,
+    "user_input": "执行需要审批的两个工具并给出结论",
+    "task_id": "f4b80db0-149f-42a7-bf64-adea45b66988",
+    "run_id": "350cd111-4a64-4f8a-8fcc-d9b2961585d9",
+    "status": "waiting_for_approval",
+    "run_status": "waiting_for_approval",
+    "run_revision": 7,
+    "assistant_output": null,
+    "artifact_refs": [],
+    "usage": {
+      "cost_status": "unknown",
+      "model_calls": 1,
+      "input_tokens": 40,
+      "total_tokens": 52,
+      "output_tokens": 12
+    },
+    "error": null,
+    "revision": 4,
+    "created_at": "2026-07-19T12:27:13.671667Z",
+    "updated_at": "2026-07-19T12:27:14.106587Z"
+  },
+  "events": [
+    {
+      "id": "1429cddf-6d10-41a4-97a0-e8f7bdea1f90",
+      "sequence": 1472,
+      "type": "TaskCreated",
+      "payload": {
+        "status": "running",
+        "conversation_turn_id": "b0dadce2-92c9-4c8b-a803-7a8f6698fcc9"
+      },
+      "created_at": "2026-07-19T12:27:13.617934+00:00"
+    },
+    {
+      "id": "9e7eb2b1-8f15-4797-8f01-8e203486ac9b",
+      "sequence": 1473,
+      "type": "RunCreated",
+      "payload": {
+        "attempt": 1,
+        "task_id": "f4b80db0-149f-42a7-bf64-adea45b66988"
+      },
+      "created_at": "2026-07-19T12:27:13.617934+00:00"
+    },
+    {
+      "id": "4625e3a1-2c15-41da-ba2c-06c10851929d",
+      "sequence": 1474,
+      "type": "ConversationTurnQueued",
+      "payload": {
+        "run_id": "350cd111-4a64-4f8a-8fcc-d9b2961585d9",
+        "task_id": "f4b80db0-149f-42a7-bf64-adea45b66988",
+        "sequence": 1,
+        "conversation_id": "d0d3b9fa-c80b-43ce-bbfa-267d5f0f7267"
+      },
+      "created_at": "2026-07-19T12:27:13.617934+00:00"
+    },
+    {
+      "id": "c82d9793-5615-4d89-9bae-20a197aeca4b",
+      "sequence": 1475,
+      "type": "RuntimeProviderResolved",
+      "payload": {
+        "legacy": false,
+        "source": "agent_version",
+        "provider": "nico_native",
+        "removal_version": null
+      },
+      "created_at": "2026-07-19T12:27:13.856150+00:00"
+    },
+    {
+      "id": "49a4a582-cb0d-4aca-9f7f-94d2a6922dfd",
+      "sequence": 1476,
+      "type": "RunPlanningStarted",
+      "payload": {
+        "revision": 2,
+        "worker_id": "nico-worker-1"
+      },
+      "created_at": "2026-07-19T12:27:13.856150+00:00"
+    },
+    {
+      "id": "de7daf0e-4b07-4839-97ab-70af90420318",
+      "sequence": 1477,
+      "type": "RuntimeSessionBound",
+      "payload": {
+        "provider": "nico_native",
+        "external_session_id": "nico:350cd111-4a64-4f8a-8fcc-d9b2961585d9:aac758b207094bc9b5a2672d9c03f931"
+      },
+      "created_at": "2026-07-19T12:27:13.943819+00:00"
+    },
+    {
+      "id": "7a6eb47a-841f-4f2d-b91c-f8347fc3a3ef",
+      "sequence": 1478,
+      "type": "ToolDefinitionRegistered",
+      "payload": {
+        "name": "file.write",
+        "version": "1.0.0",
+        "content_hash": "aff96545709151a2c60831b7dc39233a1fcb7cd0ec100170148fdaa29d2ff9d7",
+        "implementation_hash": "33be58059c2408489cff4c688f92ca308bbd0c95a5bcf8793d10fb867cad0590"
+      },
+      "created_at": "2026-07-19T12:27:13.951895+00:00"
+    },
+    {
+      "id": "eecd769f-5d29-4309-ae91-c2b79a45a34f",
+      "sequence": 1479,
+      "type": "ToolDefinitionRegistered",
+      "payload": {
+        "name": "python.execute",
+        "version": "1.0.0",
+        "content_hash": "749ff98d115e11be6d65b3a9c48f86682383cd12418d4908d84762d04c7e6f4a",
+        "implementation_hash": "b3f5b68515bf573a38bc765ad99e6383cef2350cde13aa1ffc4a856a08f68bd0"
+      },
+      "created_at": "2026-07-19T12:27:13.951895+00:00"
+    },
+    {
+      "id": "260c2c70-8a06-4343-9f29-3a3048eef110",
+      "sequence": 1480,
+      "type": "RuntimeSessionCreated",
+      "payload": {
+        "type": "session.created",
+        "message": null,
+        "payload": {
+          "run_id": "350cd111-4a64-4f8a-8fcc-d9b2961585d9",
+          "protocol_version": "2.0"
+        },
+        "occurred_at": "2026-07-19T12:27:13.943254+00:00",
+        "provider_sequence": 1
+      },
+      "created_at": "2026-07-19T12:27:13.951986+00:00"
+    },
+    {
+      "id": "779cab5e-4431-492d-87a8-14c84e184c0c",
+      "sequence": 1481,
+      "type": "RuntimeRunStarted",
+      "payload": {
+        "type": "run.started",
+        "message": null,
+        "payload": {},
+        "occurred_at": "2026-07-19T12:27:13.951171+00:00",
+        "provider_sequence": 2
+      },
+      "created_at": "2026-07-19T12:27:13.974251+00:00"
+    },
+    {
+      "id": "95d149a4-b0c1-4cf7-923f-843cb289ef04",
+      "sequence": 1482,
+      "type": "RuntimeStepStarted",
+      "payload": {
+        "type": "step.started",
+        "message": null,
+        "payload": {
+          "name": "react.reasoning",
+          "step_key": "reasoning:1",
+          "iteration": 1,
+          "step_type": "reasoning"
+        },
+        "occurred_at": "2026-07-19T12:27:13.966161+00:00",
+        "provider_sequence": 3
+      },
+      "created_at": "2026-07-19T12:27:13.980234+00:00"
+    },
+    {
+      "id": "6804a1b7-8d86-4a36-91e0-5d68be517b16",
+      "sequence": 1483,
+      "type": "ToolCallPendingApproval",
+      "payload": {
+        "code": null,
+        "tool": "file.write@1.0.0",
+        "status": "pending",
+        "run_step_id": "07965a00-99b5-432e-b61e-aa82bc5eb6b2"
+      },
+      "created_at": "2026-07-19T12:27:13.985907+00:00"
+    },
+    {
+      "id": "c5c09579-0b89-4b0d-a98e-5376e280d241",
+      "sequence": 1484,
+      "type": "ApprovalRequested",
+      "payload": {
+        "tool": "file.write@1.0.0",
+        "status": "requested",
+        "arguments": {
+          "path": "goal-h/recovery-proof.txt",
+          "content": "written exactly once before worker recovery\n"
+        },
+        "expires_at": "2026-07-19T12:42:14.013139+00:00",
+        "risk_level": "medium",
+        "approval_id": "ac28e534-db99-442d-87ab-7103b131e851",
+        "run_step_id": "07965a00-99b5-432e-b61e-aa82bc5eb6b2",
+        "tool_call_id": "543adc7a-d291-4100-b143-3c5d1088ee4a",
+        "allowed_scopes": [
+          "once",
+          "run"
+        ]
+      },
+      "created_at": "2026-07-19T12:27:13.985907+00:00"
+    }
+  ],
+  "events_truncated": false,
+  "approval_required": {
+    "id": "ac28e534-db99-442d-87ab-7103b131e851",
+    "run_id": "350cd111-4a64-4f8a-8fcc-d9b2961585d9",
+    "run_step_id": "07965a00-99b5-432e-b61e-aa82bc5eb6b2",
+    "tool_call_id": "543adc7a-d291-4100-b143-3c5d1088ee4a",
+    "tool_definition_id": "24ef8675-8cf5-4349-9820-fb186a54adb6",
+    "tool_name": "file.write",
+    "tool_version": "1.0.0",
+    "risk_level": "medium",
+    "status": "requested",
+    "allowed_scope": null,
+    "requester": "runtime:nico_native",
+    "arguments": {
+      "path": "goal-h/recovery-proof.txt",
+      "content": "written exactly once before worker recovery\n"
+    },
+    "arguments_hash": "5a634854f7219fe77166617b9fff698e974d1d9160c832158b6b030644484e2a",
+    "decided_by": null,
+    "decision": null,
+    "expires_at": "2026-07-19T12:42:14.013139Z",
+    "decided_at": null,
+    "revision": 1,
+    "created_at": "2026-07-19T12:27:14.021535Z",
+    "updated_at": "2026-07-19T12:27:14.021537Z"
+  }
+}

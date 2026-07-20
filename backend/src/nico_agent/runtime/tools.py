@@ -51,6 +51,7 @@ class GatewayRuntimeToolHandler:
                 arguments=intent.arguments,
                 idempotency_key=intent.idempotency_key,
                 caller=self.caller,
+                checkpoint=intent.checkpoint,
             ),
         )
         status = {
@@ -60,8 +61,11 @@ class GatewayRuntimeToolHandler:
         }.get(result.status, "failed")
         return RuntimeToolOutcome(
             call_id=intent.call_id,
+            tool_call_id=str(result.tool_call_id),
+            run_step_id=str(result.run_step_id),
             status=status,
             output=result.output,
             error=result.error,
             usage=result.usage,
+            cached=result.cached,
         )

@@ -12,6 +12,8 @@ def test_settings_use_safe_local_defaults() -> None:
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.minio_url == "http://localhost:9000"
     assert settings.dependency_timeout_seconds == 2.0
+    assert settings.tool_approval_required_risks == ["medium", "high"]
+    assert settings.tool_approval_ttl_seconds == 900
 
 
 def test_settings_read_prefixed_environment(monkeypatch) -> None:
@@ -38,13 +40,15 @@ def test_database_components_are_safely_encoded_in_the_url() -> None:
     )
 
 
-def test_production_rejects_default_sandbox_runner_token() -> None:
+def test_production_rejects_default_infrastructure_credentials() -> None:
     with pytest.raises(ValidationError):
         Settings(environment="production", _env_file=None)
 
     settings = Settings(
         environment="production",
         sandbox_runner_token="production-runner-token-replaced",
+        minio_secret_key="production-minio-secret-replaced",
         _env_file=None,
     )
     assert settings.sandbox_runner_token == "production-runner-token-replaced"
+    assert settings.minio_secret_key == "production-minio-secret-replaced"

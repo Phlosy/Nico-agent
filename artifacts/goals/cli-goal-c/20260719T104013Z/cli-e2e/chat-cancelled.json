@@ -1,0 +1,134 @@
+{
+  "conversation": {
+    "id": "96bf749a-ab5d-4537-a1ee-0ffa45be431f",
+    "project_id": "2607d3b5-7dd7-4ea3-bc0c-0ac27acd152f",
+    "agent_id": "9e929a76-d711-4dea-bc4c-ed6955dd7f1b",
+    "agent_version_id": "1580f724-17ab-4074-a276-463dd42d8c91",
+    "title": "CLI Goal C cancellation 20260719105526-4120245",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": null,
+    "created_by": "cli-goal-c",
+    "revision": 1,
+    "created_at": "2026-07-19T10:55:36.985381Z",
+    "updated_at": "2026-07-19T10:55:36.985391Z"
+  },
+  "turn": {
+    "id": "a486bcae-11a7-4039-b87d-3a8d96717266",
+    "conversation_id": "96bf749a-ab5d-4537-a1ee-0ffa45be431f",
+    "sequence": 1,
+    "user_input": "Cancel this active Run",
+    "task_id": "04a0c326-60a9-4e10-a0c4-bd02cff7a322",
+    "run_id": "4aac3647-5d95-4b35-bd96-90b7aad83903",
+    "status": "cancelled",
+    "run_status": "cancelled",
+    "run_revision": 4,
+    "assistant_output": null,
+    "artifact_refs": [],
+    "usage": {},
+    "error": {
+      "code": "RUN_TREE_CANCELLED",
+      "message": "the Run or one of its ancestors was cancelled"
+    },
+    "revision": 3,
+    "created_at": "2026-07-19T10:55:37.012235Z",
+    "updated_at": "2026-07-19T10:55:38.514646Z"
+  },
+  "events": [
+    {
+      "id": "40d7bc2b-19e5-44e2-939a-6224d890fa2b",
+      "sequence": 1120,
+      "type": "TaskCreated",
+      "payload": {
+        "status": "running",
+        "conversation_turn_id": "a486bcae-11a7-4039-b87d-3a8d96717266"
+      },
+      "created_at": "2026-07-19T10:55:36.998213+00:00"
+    },
+    {
+      "id": "f9728df2-3731-4893-88e6-647e82cbec9b",
+      "sequence": 1121,
+      "type": "RunCreated",
+      "payload": {
+        "attempt": 1,
+        "task_id": "04a0c326-60a9-4e10-a0c4-bd02cff7a322"
+      },
+      "created_at": "2026-07-19T10:55:36.998213+00:00"
+    },
+    {
+      "id": "00bcebbe-e99a-4f76-a79a-9f682935e415",
+      "sequence": 1122,
+      "type": "ConversationTurnQueued",
+      "payload": {
+        "run_id": "4aac3647-5d95-4b35-bd96-90b7aad83903",
+        "task_id": "04a0c326-60a9-4e10-a0c4-bd02cff7a322",
+        "sequence": 1,
+        "conversation_id": "96bf749a-ab5d-4537-a1ee-0ffa45be431f"
+      },
+      "created_at": "2026-07-19T10:55:36.998213+00:00"
+    },
+    {
+      "id": "ff8025b7-4597-4130-a973-e9cc843369bb",
+      "sequence": 1123,
+      "type": "RuntimeProviderResolved",
+      "payload": {
+        "legacy": false,
+        "source": "agent_version",
+        "provider": "mock",
+        "removal_version": null
+      },
+      "created_at": "2026-07-19T10:55:37.966660+00:00"
+    },
+    {
+      "id": "72f85a57-10f4-4dfb-805d-377a201cb6ed",
+      "sequence": 1124,
+      "type": "RunPlanningStarted",
+      "payload": {
+        "revision": 2,
+        "worker_id": "nico-worker-1"
+      },
+      "created_at": "2026-07-19T10:55:37.966660+00:00"
+    },
+    {
+      "id": "89a02988-ed09-4985-920b-5214bb45f6ee",
+      "sequence": 1125,
+      "type": "RuntimeSessionBound",
+      "payload": {
+        "provider": "mock",
+        "external_session_id": "mock:4aac3647-5d95-4b35-bd96-90b7aad83903"
+      },
+      "created_at": "2026-07-19T10:55:37.994572+00:00"
+    },
+    {
+      "id": "15a9b8ed-016a-44d2-8f1f-079382d5a5f0",
+      "sequence": 1126,
+      "type": "RuntimeSessionCreated",
+      "payload": {
+        "type": "session.created",
+        "message": null,
+        "payload": {
+          "run_id": "4aac3647-5d95-4b35-bd96-90b7aad83903"
+        },
+        "occurred_at": "2026-07-19T10:55:37.993088+00:00",
+        "provider_sequence": 1
+      },
+      "created_at": "2026-07-19T10:55:38.005950+00:00"
+    },
+    {
+      "id": "02fe6360-84ff-47e9-b0b6-1a73ea4eb40f",
+      "sequence": 1127,
+      "type": "RuntimeRunStarted",
+      "payload": {
+        "type": "run.started",
+        "message": null,
+        "payload": {},
+        "occurred_at": "2026-07-19T10:55:38.004606+00:00",
+        "provider_sequence": 2
+      },
+      "created_at": "2026-07-19T10:55:38.016541+00:00"
+    }
+  ]
+}

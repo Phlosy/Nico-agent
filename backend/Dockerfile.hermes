@@ -1,0 +1,22 @@
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN groupadd --system nico && useradd --system --gid nico --home-dir /app nico
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY alembic.ini ./alembic.ini
+COPY logging.json ./logging.json
+COPY migrations ./migrations
+
+ARG HERMES_AGENT_SPEC="hermes-agent[mcp]==0.18.2"
+RUN python -m pip install --no-cache-dir . "$HERMES_AGENT_SPEC"
+
+USER nico
+
+CMD ["python", "-m", "nico_agent.worker"]

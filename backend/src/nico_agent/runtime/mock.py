@@ -47,7 +47,14 @@ class MockRuntimeProvider:
     descriptor = RuntimeProviderDescriptor(
         name="mock",
         version="1.0",
+        implementation="test",
         capabilities=frozenset(RuntimeCapability),
+        compatibility={
+            "terminal_v1_shim": True,
+            "production_supported": False,
+            "resume_provider_versions": ["1.0"],
+            "resume_protocol_versions": ["1.0"],
+        },
     )
 
     def __init__(self) -> None:

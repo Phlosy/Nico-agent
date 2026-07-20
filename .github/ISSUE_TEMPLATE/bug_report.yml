@@ -1,0 +1,58 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Nico Agent
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, prompts containing confidential data, or security vulnerabilities. Report vulnerabilities through the private process in SECURITY.md.
+  - type: input
+    id: revision
+    attributes:
+      label: Nico revision
+      description: Commit SHA or release identifier, if one exists.
+      placeholder: git rev-parse --short HEAD
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker version, Docker Compose version, and deployment method.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest repeatable sequence and sanitized inputs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove tokens, passwords, tenant data, prompts, and other secrets.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing Issues for the same problem.
+          required: true
+        - label: This report does not disclose a security vulnerability or secret.
+          required: true

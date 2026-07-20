@@ -87,3 +87,19 @@ class Database:
                 lease_token=row["lease_token"],
                 previous_status=row["previous_status"],
             )
+
+    async def reconcile_coordination_waiters(self) -> int:
+        """Wake DB-authoritative parents whose complete child set is already terminal."""
+
+        async with self.sessions() as session, session.begin():
+            await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
+            value = await session.scalar(text("SELECT reconcile_coordination_waiters()"))
+            return int(value or 0)
+
+    async def reconcile_expired_tool_approvals(self) -> int:
+        """Expire durable approval requests and wake their suspended Runs."""
+
+        async with self.sessions() as session, session.begin():
+            await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
+            value = await session.scalar(text("SELECT reconcile_expired_tool_approvals()"))
+            return int(value or 0)

@@ -1,4 +1,4 @@
-"""Small facade wiring Goal F application services for HTTP dependencies."""
+"""Small facade wiring growth application services for HTTP dependencies."""
 
 from nico_agent.database import Database
 from nico_agent.growth.approval import GrowthApprovalService

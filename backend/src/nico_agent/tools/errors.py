@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from nico_agent.domain.errors import DomainError
 
@@ -109,6 +110,40 @@ class ToolLeaseLost(ToolError):
             "TOOL_LEASE_LOST",
             "the Run lease no longer authorizes this tool call",
             details={"run_id": run_id},
+        )
+
+
+class ToolApprovalRequired(ToolError):
+    def __init__(
+        self,
+        *,
+        approval_id: UUID,
+        tool_call_id: UUID,
+        run_step_id: UUID,
+        risk_level: str,
+    ) -> None:
+        super().__init__(
+            "TOOL_APPROVAL_REQUIRED",
+            "tool execution is suspended until a durable human decision is recorded",
+            details={
+                "approval_id": str(approval_id),
+                "tool_call_id": str(tool_call_id),
+                "run_step_id": str(run_step_id),
+                "risk_level": risk_level,
+            },
+        )
+        self.approval_id = approval_id
+        self.tool_call_id = tool_call_id
+        self.run_step_id = run_step_id
+        self.risk_level = risk_level
+
+
+class ToolApprovalCheckpointRequired(ToolError):
+    def __init__(self, name: str, version: str) -> None:
+        super().__init__(
+            "TOOL_APPROVAL_CHECKPOINT_REQUIRED",
+            f"tool {name}@{version} requires a resumable pre-action checkpoint",
+            details={"name": name, "version": version},
         )
 
 

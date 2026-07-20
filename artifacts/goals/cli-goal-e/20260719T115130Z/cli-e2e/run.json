@@ -1,0 +1,36 @@
+{
+  "id": "4a1bd6fe-1669-48d8-b6cd-4a2ecbf3e613",
+  "task_id": "63e91919-6c69-4098-8a72-fa030e4e15ed",
+  "agent_id": "1cf14d6b-a67a-4e45-a2fb-e89ffddea444",
+  "agent_version_id": "19c800cc-74a5-4fee-8bb3-5e80970eb182",
+  "retry_of_run_id": null,
+  "attempt": 1,
+  "status": "completed",
+  "max_steps": 8,
+  "token_budget": 1000,
+  "timeout_seconds": 30,
+  "budgets": {},
+  "checkpoint": {
+    "completed_steps": 2
+  },
+  "checkpoint_schema_version": 1,
+  "checkpoint_revision": 2,
+  "checkpoint_hash": null,
+  "cost": {
+    "steps": 2,
+    "tool_calls": 0,
+    "input_units": 1,
+    "output_units": 1
+  },
+  "result": {
+    "message": "Nico completed a recoverable, auditable demo Run.",
+    "runtime": "mock",
+    "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+  },
+  "error": null,
+  "started_at": "2026-07-19T11:49:22.379946Z",
+  "ended_at": "2026-07-19T11:49:22.471107Z",
+  "revision": 6,
+  "created_at": "2026-07-19T11:49:21.157852Z",
+  "updated_at": "2026-07-19T11:49:22.471967Z"
+}
