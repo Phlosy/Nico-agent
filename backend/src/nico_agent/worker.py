@@ -8,6 +8,7 @@ import shlex
 import signal
 
 import httpx
+from anyio import Path
 
 from nico_agent.artifacts.minio import MinioArtifactStore
 from nico_agent.artifacts.service import ArtifactService
@@ -73,6 +74,44 @@ async def execute_loop(
             await asyncio.wait_for(stopping.wait(), timeout=poll_interval_seconds)
         except TimeoutError:
             pass
+
+
+async def health_loop(
+    service: HealthServiceProtocol,
+    stopping: asyncio.Event,
+    *,
+    interval_seconds: float,
+) -> None:
+    while not stopping.is_set():
+        await supervise_once(service)
+        try:
+            await asyncio.wait_for(stopping.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            pass
+
+
+async def supervise_worker_tasks(
+    tasks: list[asyncio.Task[None]],
+    stopping: asyncio.Event,
+) -> None:
+    stop_waiter = asyncio.create_task(stopping.wait(), name="worker-stop-waiter")
+    try:
+        done, _ = await asyncio.wait(
+            [stop_waiter, *tasks],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if stop_waiter in done:
+            return
+        failed = next(task for task in done if task is not stop_waiter)
+        if failed.cancelled():
+            raise RuntimeError(f"worker task {failed.get_name()} was cancelled unexpectedly")
+        error = failed.exception()
+        if error is not None:
+            raise RuntimeError(f"worker task {failed.get_name()} failed") from error
+        raise RuntimeError(f"worker task {failed.get_name()} exited unexpectedly")
+    finally:
+        stop_waiter.cancel()
+        await asyncio.gather(stop_waiter, return_exceptions=True)
 
 
 def build_runtime_registry(
@@ -214,7 +253,8 @@ async def worker_main(settings: Settings | None = None) -> None:
                 ),
                 stopping,
                 poll_interval_seconds=runtime_settings.worker_poll_interval_seconds,
-            )
+            ),
+            name=f"run-executor-{index + 1}",
         )
         for index in range(runtime_settings.worker_concurrency)
     ]
@@ -229,22 +269,28 @@ async def worker_main(settings: Settings | None = None) -> None:
                 ),
                 stopping,
                 poll_interval_seconds=(runtime_settings.provider_probe_poll_interval_seconds),
-            )
+            ),
+            name=f"provider-probe-executor-{index + 1}",
         )
         for index in range(runtime_settings.provider_probe_concurrency)
     ]
+    health_task = asyncio.create_task(
+        health_loop(
+            service,
+            stopping,
+            interval_seconds=runtime_settings.worker_health_interval_seconds,
+        ),
+        name="infrastructure-health",
+    )
+    supervised_tasks = [*execution_tasks, *probe_tasks, health_task]
+    health_marker = Path(runtime_settings.worker_health_marker)
     try:
-        while not stopping.is_set():
-            await supervise_once(service)
-            try:
-                await asyncio.wait_for(
-                    stopping.wait(), timeout=runtime_settings.worker_health_interval_seconds
-                )
-            except TimeoutError:
-                pass
+        await health_marker.write_text(f"{runtime_settings.worker_id}\n", encoding="utf-8")
+        await supervise_worker_tasks(supervised_tasks, stopping)
     finally:
+        await health_marker.unlink(missing_ok=True)
         stopping.set()
-        await asyncio.gather(*execution_tasks, *probe_tasks, return_exceptions=True)
+        await asyncio.gather(*supervised_tasks, return_exceptions=True)
         await model_http.aclose()
         await resources.close()
         logger.info("runtime worker stopped")

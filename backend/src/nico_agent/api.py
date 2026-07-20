@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -195,12 +195,41 @@ def create_app(
         )
 
     @app.exception_handler(IntegrityError)
-    async def integrity_error_handler(_request: Request, _exc: IntegrityError) -> JSONResponse:
+    async def integrity_error_handler(_request: Request, exc: IntegrityError) -> JSONResponse:
+        if "RUNTIME_MAINTENANCE" in str(exc.orig):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "RUNTIME_MAINTENANCE",
+                    "message": "new Runs are paused during local Provider maintenance",
+                    "details": {},
+                },
+            )
         return JSONResponse(
             status_code=409,
             content={
                 "code": "DATA_CONFLICT",
                 "message": "the operation conflicts with an existing resource or reference",
+                "details": {},
+            },
+        )
+
+    @app.exception_handler(DBAPIError)
+    async def database_error_handler(_request: Request, exc: DBAPIError) -> JSONResponse:
+        if "RUNTIME_MAINTENANCE" in str(exc.orig):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "RUNTIME_MAINTENANCE",
+                    "message": "new Runs are paused during local Provider maintenance",
+                    "details": {},
+                },
+            )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "the database operation failed",
                 "details": {},
             },
         )

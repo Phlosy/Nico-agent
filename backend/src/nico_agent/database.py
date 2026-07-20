@@ -6,6 +6,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import text
@@ -40,6 +41,13 @@ class ProviderProbeClaim:
     tenant_id: UUID
     lease_token: str
     previous_status: str
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeMaintenanceLease:
+    acquired: bool
+    active_run_count: int
+    lease_expires_at: datetime | None
 
 
 class Database:
@@ -144,3 +152,59 @@ class Database:
                 lease_token=row["lease_token"],
                 previous_status=row["previous_status"],
             )
+
+    async def acquire_runtime_maintenance(
+        self,
+        attempt_id: UUID,
+        token: str,
+        lease_seconds: int,
+    ) -> RuntimeMaintenanceLease:
+        async with self.admin_transaction() as session:
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT active_run_count, lease_expires_at "
+                            "FROM acquire_runtime_maintenance(:attempt_id, :token, :lease_seconds)"
+                        ),
+                        {
+                            "attempt_id": attempt_id,
+                            "token": token,
+                            "lease_seconds": lease_seconds,
+                        },
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            count = int(row["active_run_count"])
+            return RuntimeMaintenanceLease(
+                acquired=count == 0,
+                active_run_count=count,
+                lease_expires_at=row["lease_expires_at"],
+            )
+
+    async def renew_runtime_maintenance(
+        self,
+        attempt_id: UUID,
+        token: str,
+        lease_seconds: int,
+    ) -> bool:
+        async with self.admin_transaction() as session:
+            value = await session.scalar(
+                text("SELECT renew_runtime_maintenance(:attempt_id, :token, :lease_seconds)"),
+                {
+                    "attempt_id": attempt_id,
+                    "token": token,
+                    "lease_seconds": lease_seconds,
+                },
+            )
+            return bool(value)
+
+    async def release_runtime_maintenance(self, attempt_id: UUID, token: str) -> bool:
+        async with self.admin_transaction() as session:
+            value = await session.scalar(
+                text("SELECT release_runtime_maintenance(:attempt_id, :token)"),
+                {"attempt_id": attempt_id, "token": token},
+            )
+            return bool(value)

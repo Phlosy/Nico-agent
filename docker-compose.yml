@@ -150,6 +150,7 @@ services:
       NICO_PROVIDER_PROBE_CONCURRENCY: ${NICO_PROVIDER_PROBE_CONCURRENCY:-1}
       NICO_PROVIDER_PROBE_POLL_INTERVAL_SECONDS: ${NICO_PROVIDER_PROBE_POLL_INTERVAL_SECONDS:-1}
       NICO_PROVIDER_PROBE_LEASE_SECONDS: ${NICO_PROVIDER_PROBE_LEASE_SECONDS:-90}
+      NICO_WORKER_HEALTH_MARKER: /tmp/nico-worker-ready
       NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-[]}
       NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-false}
       NICO_MODEL_SECRET_GOAL_G: ${NICO_MODEL_SECRET_GOAL_G:-}
@@ -170,6 +171,12 @@ services:
     volumes:
       - agent-workspaces:/var/lib/nico/workspaces
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; raise SystemExit(0 if Path('/tmp/nico-worker-ready').is_file() else 1)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   worker-hermes:
     extends:

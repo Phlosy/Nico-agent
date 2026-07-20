@@ -23,6 +23,17 @@ JSON_OBJECT = sa.text("'{}'::jsonb")
 
 def upgrade() -> None:
     op.create_table(
+        "deployment_maintenance",
+        sa.Column("singleton", sa.Boolean(), primary_key=True, server_default=sa.true()),
+        sa.Column("attempt_id", sa.Uuid(), nullable=False, unique=True),
+        sa.Column("token_hash", sa.String(64), nullable=False),
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=NOW),
+        sa.CheckConstraint("singleton", name="ck_deployment_maintenance_singleton"),
+        sa.CheckConstraint("length(token_hash) = 64", name="ck_deployment_maintenance_token_hash"),
+    )
+    op.create_table(
         "provider_probes",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=UUID_DEFAULT),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
@@ -165,9 +176,37 @@ def upgrade() -> None:
     op.execute(
         "GRANT EXECUTE ON FUNCTION claim_next_provider_probe(text, integer) TO nico_worker_claimer"
     )
+    for function_definition in _maintenance_functions():
+        op.execute(function_definition)
+    for signature in (
+        "acquire_runtime_maintenance(uuid, text, integer)",
+        "renew_runtime_maintenance(uuid, text, integer)",
+        "release_runtime_maintenance(uuid, text)",
+    ):
+        op.execute(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
+    op.execute(_run_maintenance_guard())
+    op.execute("REVOKE ALL ON FUNCTION guard_run_insert_during_maintenance() FROM PUBLIC")
+    op.execute(
+        "CREATE TRIGGER guard_run_insert_during_maintenance BEFORE INSERT ON runs "
+        "FOR EACH STATEMENT EXECUTE FUNCTION guard_run_insert_during_maintenance()"
+    )
+    op.execute(_claim_next_run(maintenance_aware=True))
+    op.execute("REVOKE ALL ON FUNCTION claim_next_run(text, integer) FROM PUBLIC")
+    op.execute("GRANT EXECUTE ON FUNCTION claim_next_run(text, integer) TO nico_worker_claimer")
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS guard_run_insert_during_maintenance ON runs")
+    op.execute("DROP FUNCTION IF EXISTS guard_run_insert_during_maintenance()")
+    op.execute(_claim_next_run(maintenance_aware=False))
+    op.execute("REVOKE ALL ON FUNCTION claim_next_run(text, integer) FROM PUBLIC")
+    op.execute("GRANT EXECUTE ON FUNCTION claim_next_run(text, integer) TO nico_worker_claimer")
+    for signature in (
+        "release_runtime_maintenance(uuid, text)",
+        "renew_runtime_maintenance(uuid, text, integer)",
+        "acquire_runtime_maintenance(uuid, text, integer)",
+    ):
+        op.execute(f"DROP FUNCTION IF EXISTS {signature}")
     op.execute("DROP FUNCTION IF EXISTS claim_next_provider_probe(text, integer)")
     op.execute(
         """
@@ -219,6 +258,7 @@ def downgrade() -> None:
     op.execute("DROP TRIGGER guard_provider_probe_write ON provider_probes")
     op.execute("DROP FUNCTION guard_provider_probe_write()")
     op.drop_table("provider_probes")
+    op.execute("DROP TABLE IF EXISTS deployment_maintenance")
 
 
 def _claim_next_provider_probe() -> str:
@@ -264,6 +304,173 @@ def _claim_next_provider_probe() -> str:
         )
         SELECT c.id, c.tenant_id, c.lease_token::text, c.previous_status
         FROM claimed AS c;
+    END;
+    $function$;
+    """
+
+
+def _maintenance_functions() -> tuple[str, ...]:
+    definitions = r"""
+    CREATE FUNCTION acquire_runtime_maintenance(
+        p_attempt_id uuid, p_token text, p_lease_seconds integer
+    )
+    RETURNS TABLE(active_run_count bigint, lease_expires_at timestamptz)
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE
+        v_now timestamptz := clock_timestamp();
+        run_count bigint;
+        expires_at timestamptz;
+    BEGIN
+        IF p_attempt_id IS NULL OR p_token IS NULL OR length(p_token) < 32
+           OR length(p_token) > 500 THEN
+            RAISE EXCEPTION 'invalid runtime maintenance capability';
+        END IF;
+        IF p_lease_seconds < 30 OR p_lease_seconds > 900 THEN
+            RAISE EXCEPTION 'maintenance lease_seconds must be between 30 and 900';
+        END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended('nico:runtime-maintenance', 0));
+        DELETE FROM public.deployment_maintenance
+        WHERE singleton AND deployment_maintenance.lease_expires_at <= v_now;
+
+        IF EXISTS (SELECT 1 FROM public.deployment_maintenance WHERE singleton) THEN
+            IF EXISTS (
+                SELECT 1 FROM public.deployment_maintenance
+                WHERE singleton AND attempt_id = p_attempt_id
+                  AND token_hash = encode(public.digest(p_token, 'sha256'), 'hex')
+            ) THEN
+                UPDATE public.deployment_maintenance
+                SET lease_expires_at = v_now + make_interval(secs => p_lease_seconds),
+                    updated_at = v_now
+                WHERE singleton
+                RETURNING deployment_maintenance.lease_expires_at INTO expires_at;
+                RETURN QUERY SELECT 0::bigint, expires_at;
+                RETURN;
+            END IF;
+            RAISE EXCEPTION 'RUNTIME_MAINTENANCE_ALREADY_ACTIVE';
+        END IF;
+
+        SELECT count(*) INTO run_count FROM public.runs
+        WHERE status NOT IN ('completed', 'failed', 'cancelled', 'timed_out');
+        IF run_count > 0 THEN
+            RETURN QUERY SELECT run_count, NULL::timestamptz;
+            RETURN;
+        END IF;
+        expires_at := v_now + make_interval(secs => p_lease_seconds);
+        INSERT INTO public.deployment_maintenance(
+            singleton, attempt_id, token_hash, lease_expires_at, created_at, updated_at
+        ) VALUES (
+            true, p_attempt_id, encode(public.digest(p_token, 'sha256'), 'hex'),
+            expires_at, v_now, v_now
+        );
+        RETURN QUERY SELECT 0::bigint, expires_at;
+    END;
+    $function$;
+
+    CREATE FUNCTION renew_runtime_maintenance(
+        p_attempt_id uuid, p_token text, p_lease_seconds integer
+    ) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE v_now timestamptz := clock_timestamp();
+    BEGIN
+        IF p_lease_seconds < 30 OR p_lease_seconds > 900 THEN
+            RETURN false;
+        END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended('nico:runtime-maintenance', 0));
+        UPDATE public.deployment_maintenance
+        SET lease_expires_at = v_now + make_interval(secs => p_lease_seconds),
+            updated_at = v_now
+        WHERE singleton AND attempt_id = p_attempt_id
+          AND lease_expires_at > v_now
+          AND token_hash = encode(public.digest(p_token, 'sha256'), 'hex');
+        RETURN FOUND;
+    END;
+    $function$;
+
+    CREATE FUNCTION release_runtime_maintenance(p_attempt_id uuid, p_token text)
+    RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended('nico:runtime-maintenance', 0));
+        DELETE FROM public.deployment_maintenance
+        WHERE singleton AND attempt_id = p_attempt_id
+          AND token_hash = encode(public.digest(p_token, 'sha256'), 'hex');
+        RETURN FOUND;
+    END;
+    $function$;
+    """
+    return tuple(
+        f"{definition.strip()}\n$function$;"
+        for definition in definitions.split("$function$;")
+        if definition.strip()
+    )
+
+
+def _run_maintenance_guard() -> str:
+    return r"""
+    CREATE FUNCTION guard_run_insert_during_maintenance()
+    RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+    AS $function$
+    BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended('nico:runtime-maintenance', 0));
+        IF EXISTS (
+            SELECT 1 FROM public.deployment_maintenance
+            WHERE singleton AND lease_expires_at > clock_timestamp()
+        ) THEN
+            RAISE EXCEPTION 'RUNTIME_MAINTENANCE'
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+        RETURN NULL;
+    END;
+    $function$;
+    """
+
+
+def _claim_next_run(*, maintenance_aware: bool) -> str:
+    guard = ""
+    if maintenance_aware:
+        guard = r"""
+            PERFORM pg_advisory_xact_lock(hashtextextended('nico:runtime-maintenance', 0));
+            IF EXISTS (
+                SELECT 1 FROM public.deployment_maintenance
+                WHERE singleton AND lease_expires_at > claimed_at
+            ) THEN
+                RETURN;
+            END IF;
+        """
+    return f"""
+    CREATE OR REPLACE FUNCTION claim_next_run(p_worker_id text, p_lease_seconds integer)
+    RETURNS TABLE(run_id uuid, tenant_id uuid, lease_token uuid, previous_status text)
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+    AS $function$
+    DECLARE claimed_at timestamptz := clock_timestamp();
+    BEGIN
+        IF p_worker_id IS NULL OR length(p_worker_id) < 1 OR length(p_worker_id) > 200 THEN
+            RAISE EXCEPTION 'worker_id must contain between 1 and 200 characters';
+        END IF;
+        IF p_lease_seconds < 5 OR p_lease_seconds > 3600 THEN
+            RAISE EXCEPTION 'lease_seconds must be between 5 and 3600';
+        END IF;
+        {guard}
+        RETURN QUERY
+        WITH candidate AS (
+            SELECT r.id FROM public.runs AS r
+            JOIN public.tasks AS t ON t.tenant_id = r.tenant_id AND t.id = r.task_id
+            WHERE r.status IN ('pending', 'planning', 'running', 'waiting_for_tool')
+              AND (r.lease_expires_at IS NULL OR r.lease_expires_at <= claimed_at)
+            ORDER BY t.priority DESC, r.created_at, r.id
+            FOR UPDATE OF r SKIP LOCKED LIMIT 1
+        ), claimed AS (
+            UPDATE public.runs AS r
+            SET lease_owner = p_worker_id, lease_token = gen_random_uuid(),
+                lease_expires_at = claimed_at + make_interval(secs => p_lease_seconds),
+                heartbeat_at = claimed_at, updated_at = claimed_at
+            FROM candidate AS c WHERE r.id = c.id
+            RETURNING r.id, r.tenant_id, r.lease_token, r.status
+        )
+        SELECT c.id, c.tenant_id, c.lease_token, c.status::text FROM claimed AS c;
     END;
     $function$;
     """

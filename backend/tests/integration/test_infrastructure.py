@@ -115,6 +115,7 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         "runtime_knowledge_usages",
         "tool_approval_requests",
         "provider_probes",
+        "deployment_maintenance",
     }
 
 
