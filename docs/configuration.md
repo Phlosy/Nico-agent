@@ -17,6 +17,10 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `COMPOSE_PROJECT_NAME` | `nico-agent-platform` | Compose resource prefix |
+| `NICO_BACKEND_IMAGE` | `nico-agent-backend:local` | API、Native Worker 与辅助服务镜像；Release 安装器固定为版本 Tag |
+| `NICO_HERMES_IMAGE` | `nico-agent-hermes:local` | 可选 Hermes Worker 镜像；Release 安装器固定为版本 Tag |
+| `NICO_WEB_IMAGE` | `nico-agent-web:local` | Console 镜像；Release 安装器固定为版本 Tag |
+| `NICO_RUNTIME` | `native` | `nico-service` 选择的已安装 Worker Profile：`native` 或 `hermes` |
 | `POSTGRES_DB` | `nico_agent` | Platform database |
 | `POSTGRES_USER` | `nico` | Initial database owner |
 | `POSTGRES_PASSWORD` | `nico-change-me` | Initial database password |
@@ -46,6 +50,9 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | `NICO_HERMES_COMMAND` | `hermes` | Hermes CLI command parsed by the adapter |
 | `NICO_HERMES_ENABLED` | `false` | Explicitly register the optional Hermes adapter |
 | `HERMES_AGENT_SPEC` | `hermes-agent[mcp]==0.18.2` | Package spec used only when building the optional `hermes` profile |
+| `OPENROUTER_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
+| `OPENAI_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
+| `ANTHROPIC_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
 | `NICO_MODEL_ENDPOINT_WRITES_ENABLED` | `false` | Enable trusted-control-plane model endpoint writes; Compose development defaults to `true` |
 | `NICO_SANDBOX_RUNNER_TOKEN` | local placeholder | Private Worker-to-Runner bearer token |
 
@@ -92,7 +99,16 @@ The following settings exist in `nico_agent.config.Settings`. Compose supplies i
 | `NICO_WORKSPACE_MAX_FILE_BYTES` | `1048576` | Maximum file size |
 | `NICO_WORKSPACE_MAX_TOTAL_BYTES` | `10485760` | Maximum per-Run workspace size |
 
-The default Worker image does not install Hermes CLI or mount Hermes state. To use an explicitly configured Hermes AgentVersion, stop the default Worker and start the optional pinned image:
+GitHub Release 安装把配置保存在 `~/.nico/config/deployment.env`，权限为
+`0600`，并通过 `nico-service` 保证 Native 与 Hermes Worker 二选一。切换
+已安装部署时重新运行安装器：
+
+```bash
+bash install.sh --runtime hermes --provider openrouter
+```
+
+源码部署的默认 Worker 镜像不安装 Hermes CLI，也不挂载 Hermes 状态。要
+运行显式配置的 Hermes AgentVersion，先停止默认 Worker，再启动可选镜像：
 
 ```bash
 docker compose stop worker

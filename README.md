@@ -95,21 +95,33 @@ Artifact:  not produced by this Mock Runtime demo
 
 ### 环境要求
 
-- Docker Engine 和 Docker Compose v2
-- 用于 Demo 的 `curl` 和 Python 3
+- Docker Engine 和 Docker Compose 2.24.4 或更高版本
+- Python 3.11 或更高版本，以及 `bash` 和 `curl`
 - Linux 环境下需要访问 Docker；`sandbox-runner` 会挂载 `/var/run/docker.sock`
 
-### 启动服务
+### 一条命令安装服务与 CLI
 
 ```bash
-cp .env.example .env
-scripts/dev.sh --detach
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh | bash
 ```
 
-API 启动前会自动执行 Alembic 数据库迁移。检查服务是否就绪：
+安装固定版本（例如 `v0.2.0`）：
 
 ```bash
-curl http://localhost:18000/api/v1/health/ready
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/download/v0.2.0/install.sh \
+  | bash -s -- --version v0.2.0
+```
+
+安装器会校验 Release bundle、生成私有部署配置、安装 `nico` 与
+`nico-service`、启动默认的 Nico Native 栈，并创建可复用的本地 CLI
+Profile。首次版本 Tag 成功发布后，上述稳定地址才会存在。
+
+检查服务和查看日志：
+
+```bash
+nico-service doctor
+nico-service status
+nico-service logs
 ```
 
 服务入口：
@@ -118,29 +130,34 @@ curl http://localhost:18000/api/v1/health/ready
 - Swagger UI：<http://localhost:18000/docs>
 - OpenAPI：<http://localhost:18000/openapi.json>
 
-获得第一个持久化 Run 结果：
+安装器会输出 Demo Project、Agent 和 AgentVersion ID，以及可直接执行的
+`nico chat` 命令。完整安装、固定版本、Hermes、升级和移除说明见
+[安装与部署](docs/installation.md)。
+
+### 从源码启动（贡献者）
+
+```bash
+cp .env.example .env
+scripts/dev.sh --detach
+```
+
+API 启动前会自动执行 Alembic 数据库迁移。获得第一个持久化 Run 结果：
 
 ```bash
 scripts/demo.sh
 ```
 
-停止容器并保留数据：
+停止源码部署并保留数据：
 
 ```bash
 scripts/cleanup.sh
-```
-
-停止容器并删除所有命名卷：
-
-```bash
-scripts/cleanup.sh --volumes
 ```
 
 完整首次运行流程参见[快速入门](docs/getting-started.md)，常见问题参见[故障排查](docs/troubleshooting.md)。
 
 ### Nico CLI 与持续对话
 
-安装当前仓库中的 CLI：
+Release 安装器已经同时安装 CLI。源码开发时可以单独安装当前仓库版本：
 
 ```bash
 python3 -m venv .venv
@@ -257,7 +274,16 @@ Runtime 负责执行 Agent 并返回规范化事件和结果。它不能导入�
 
 ### 可选 Hermes Adapter
 
-默认 `docker compose up` 只启动 Native-first Worker，不安装、不注册也不要求 Hermes。只有已有 AgentVersion 明确选择 `runtime_provider=hermes` 时才需要切换 Worker：
+Release 安装使用同一个入口选择 Hermes，并确保 Native Worker 不会同时运行：
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh \
+  | bash -s -- --runtime hermes --provider openrouter
+```
+
+Provider Key 从已有环境变量或隐藏提示读取，不作为命令参数。已有
+AgentVersion 仍需明确选择 `runtime_provider=hermes`。源码部署默认只启动
+Native-first Worker；贡献者可以手工切换：
 
 ```bash
 docker compose stop worker
@@ -291,8 +317,31 @@ docker compose --profile hermes up --detach --build worker-hermes
 
 在个人电脑以外部署前，请先阅读[安全与部署边界](docs/security.md)。安全漏洞必须按照 [SECURITY.md](SECURITY.md) 使用私密渠道报告，切勿在公开 Issue 中披露。
 
+## CI 与版本发布
+
+GitHub Actions 将测试与发布分开，普通合并不会意外创建 Release：
+
+| Git 事件 | 自动执行 |
+| --- | --- |
+| 面向 `main` 的 Pull Request | 后端与前端测试、构建、安装/发布合同测试、Workflow 和 Markdown 检查 |
+| Push 或 merge 到 `main` | 执行同一套 `Test` CI，不发布镜像或 Release |
+| Push `v*` Tag | 复用 `Test` CI，校验 Tag 与 Python 包版本一致，构建多架构 GHCR 镜像并发布安装器、校验和及 Release bundle |
+
+创建正式版本时，先确保对应提交已进入 `main`，并让 Tag 与
+`backend/pyproject.toml` 中的版本一致：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+首次 Release 完成后，还应确认三个 GHCR Package 允许匿名拉取，再公开推荐
+一键安装命令。工作流定义见 [Test](.github/workflows/ci.yml) 和
+[Release](.github/workflows/release.yml)，发布细节见[安装与部署](docs/installation.md)。
+
 ## 文档
 
+- [安装与部署](docs/installation.md)
 - [快速入门](docs/getting-started.md)
 - [配置说明](docs/configuration.md)
 - [REST API](docs/api.md)
@@ -316,6 +365,7 @@ docker compose --profile hermes up --detach --build worker-hermes
 - [x] 可恢复 ReAct、Plan/Reflection 与动态多 Agent 委托
 - [x] 私有内容寻址 Artifact 与 Child→Parent 受控共享
 - [x] 本地 Compose、状态页、只读 Run Inspector 和无需凭据的 Demo
+- [x] GitHub Release 一键安装、服务管理 CLI 与 Tag-only Release CI
 
 规划方向，不承诺具体交付日期：
 

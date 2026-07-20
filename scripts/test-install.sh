@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+fail() {
+  printf '[nico-install-test] FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+assert_eq() {
+  local actual="$1"
+  local expected="$2"
+  local label="$3"
+  [[ "$actual" == "$expected" ]] || fail "$label: expected '$expected', got '$actual'"
+}
+
+assert_contains() {
+  local value="$1"
+  local expected="$2"
+  local label="$3"
+  [[ "$value" == *"$expected"* ]] || fail "$label: missing '$expected'"
+}
+
+export NICO_INSTALLER_SOURCE_ONLY=1
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/install.sh"
+unset NICO_INSTALLER_SOURCE_ONLY
+
+if grep -Eq '(mapfile|readarray)' \
+  "$ROOT_DIR/scripts/install.sh" \
+  "$ROOT_DIR/scripts/nico-service.sh" \
+  "$ROOT_DIR/scripts/demo.sh" \
+  "$ROOT_DIR/scripts/lib.sh"; then
+  fail "release scripts use commands unavailable in macOS Bash 3.2"
+fi
+
+assert_eq "$(normalize_version 0.2.0)" "v0.2.0" "plain version normalization"
+assert_eq "$(normalize_version v0.2.0-rc.1)" "v0.2.0-rc.1" "tag normalization"
+compose_version_supported v2.24.4 || fail "minimum Compose version was rejected"
+compose_version_supported 5.1.0 || fail "new Compose major version was rejected"
+if compose_version_supported v2.24.3; then
+  fail "unsupported Compose version was accepted"
+fi
+if normalize_version latest >/dev/null 2>&1; then
+  fail "normalize_version accepted the latest alias"
+fi
+if normalize_version '../v0.2.0' >/dev/null 2>&1; then
+  fail "normalize_version accepted an unsafe version"
+fi
+ORIGINAL_NICO_HOME="$NICO_HOME"
+ORIGINAL_BIN_DIR="$BIN_DIR"
+NICO_HOME=relative-nico-home
+BIN_DIR=relative-bin-dir
+resolve_install_paths
+assert_eq "$NICO_HOME" "$ROOT_DIR/relative-nico-home" "relative home normalization"
+assert_eq "$BIN_DIR" "$ROOT_DIR/relative-bin-dir" "relative bin normalization"
+NICO_HOME="$ORIGINAL_NICO_HOME"
+BIN_DIR="$ORIGINAL_BIN_DIR"
+
+ENV_FILE="$TMP_DIR/deployment.env"
+printf 'POSTGRES_PASSWORD=keep-me\nCUSTOM_VALUE=operator-owned\n' > "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+set_env_value "$ENV_FILE" POSTGRES_PASSWORD replace-me preserve
+set_env_value "$ENV_FILE" NICO_BACKEND_IMAGE ghcr.io/phlosy/nico-agent-backend:v0.2.0 replace
+set_env_value "$ENV_FILE" NICO_RUNTIME native replace
+assert_contains "$(cat "$ENV_FILE")" "POSTGRES_PASSWORD=keep-me" "existing secret preservation"
+assert_contains "$(cat "$ENV_FILE")" "CUSTOM_VALUE=operator-owned" "unrelated environment preservation"
+assert_contains "$(cat "$ENV_FILE")" \
+  "NICO_BACKEND_IMAGE=ghcr.io/phlosy/nico-agent-backend:v0.2.0" \
+  "image replacement"
+assert_eq "$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE")" "600" \
+  "environment permissions"
+if (set_env_value "$ENV_FILE" INVALID_VALUE $'first\nsecond' replace) >/dev/null 2>&1; then
+  fail "environment writer accepted a multiline value"
+fi
+set_env_value "$ENV_FILE" NICO_RUNTIME hermes replace
+RUNTIME=native
+RUNTIME_EXPLICIT=false
+resolve_existing_runtime "$ENV_FILE"
+assert_eq "$RUNTIME" hermes "existing Runtime preservation"
+set_env_value "$ENV_FILE" OPENROUTER_API_KEY stored-provider-secret replace
+PROVIDER=openrouter
+NON_INTERACTIVE=true
+unset OPENROUTER_API_KEY
+configure_provider_secret "$ENV_FILE"
+assert_contains "$(cat "$ENV_FILE")" "OPENROUTER_API_KEY=stored-provider-secret" \
+  "existing Provider secret reuse"
+RUNTIME=native
+RUNTIME_EXPLICIT=false
+PROVIDER=""
+NON_INTERACTIVE=false
+
+printf 'verified content\n' > "$TMP_DIR/asset.tar.gz"
+(
+  cd "$TMP_DIR"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum asset.tar.gz > SHA256SUMS
+  else
+    shasum -a 256 asset.tar.gz > SHA256SUMS
+  fi
+)
+verify_release_asset "$TMP_DIR/asset.tar.gz" "$TMP_DIR/SHA256SUMS"
+printf 'tampered\n' >> "$TMP_DIR/asset.tar.gz"
+if verify_release_asset "$TMP_DIR/asset.tar.gz" "$TMP_DIR/SHA256SUMS" >/dev/null 2>&1; then
+  fail "checksum verification accepted a modified asset"
+fi
+
+DRY_RUN="$({
+  NICO_HOME="$TMP_DIR/nico-home" bash "$ROOT_DIR/scripts/install.sh" \
+    --dry-run --runtime hermes --version v0.2.0 --no-start --non-interactive
+} 2>&1)"
+assert_contains "$DRY_RUN" "version=v0.2.0" "dry-run version"
+assert_contains "$DRY_RUN" "runtime=hermes" "dry-run runtime"
+assert_contains "$DRY_RUN" "start=false" "dry-run no-start"
+if bash "$ROOT_DIR/scripts/install.sh" --dry-run --runtime invalid >/dev/null 2>&1; then
+  fail "installer accepted an invalid runtime"
+fi
+NICO_HOME="$TMP_DIR/missing-install" bash "$ROOT_DIR/scripts/nico-service.sh" --help \
+  >/dev/null || fail "service help required an existing installation"
+
+FAKE_WHEEL="$TMP_DIR/nico_agent_platform-0.2.0-py3-none-any.whl"
+printf 'fake wheel for archive contract\n' > "$FAKE_WHEEL"
+DIST_DIR="$TMP_DIR/dist"
+mkdir -p "$DIST_DIR"
+printf 'operator file\n' > "$DIST_DIR/keep.txt"
+"$ROOT_DIR/scripts/package-release.sh" --tag v0.2.0 --wheel "$FAKE_WHEEL" --output "$DIST_DIR"
+[[ -f "$DIST_DIR/keep.txt" ]] || fail "release packaging removed unrelated output"
+
+for asset in install.sh nico-agent-bundle.tar.gz version.txt SHA256SUMS; do
+  [[ -f "$DIST_DIR/$asset" ]] || fail "release packaging omitted $asset"
+done
+assert_eq "$(cat "$DIST_DIR/version.txt")" "v0.2.0" "release version metadata"
+
+INSTALL_INPUT="$TMP_DIR/install-input"
+mkdir -p "$INSTALL_INPUT"
+cp "$DIST_DIR/nico-agent-bundle.tar.gz" "$INSTALL_INPUT/nico-agent-bundle.tar.gz"
+ORIGINAL_NICO_HOME="$NICO_HOME"
+NICO_HOME="$TMP_DIR/installed-nico"
+RESOLVED_VERSION=v0.2.0
+install_release_files "$INSTALL_INPUT"
+printf 'preserve immutable release\n' > "$RELEASE_DIR/operator-sentinel"
+install_release_files "$INSTALL_INPUT"
+[[ -f "$RELEASE_DIR/operator-sentinel" ]] || fail \
+  "same-version reinstall replaced the immutable release directory"
+printf 'v9.9.9\n' > "$RELEASE_DIR/version.txt"
+if (validate_release_directory "$RELEASE_DIR") >/dev/null 2>&1; then
+  fail "release validation accepted mismatched internal version metadata"
+fi
+printf 'v0.2.0\n' > "$RELEASE_DIR/version.txt"
+BUNDLE_RELEASE_DIR="$RELEASE_DIR"
+NICO_HOME="$ORIGINAL_NICO_HOME"
+
+UNSAFE_ARCHIVE="$TMP_DIR/unsafe.tar.gz"
+python3 - "$UNSAFE_ARCHIVE" <<'PY'
+import io
+import tarfile
+import sys
+
+with tarfile.open(sys.argv[1], "w:gz") as archive:
+    payload = b"unsafe\n"
+    member = tarfile.TarInfo("nico-agent/../../escaped")
+    member.size = len(payload)
+    archive.addfile(member, io.BytesIO(payload))
+PY
+if extract_release_bundle "$UNSAFE_ARCHIVE" "$TMP_DIR/unsafe-output" >/dev/null 2>&1; then
+  fail "release extraction accepted a path traversal member"
+fi
+(
+  cd "$DIST_DIR"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum --check SHA256SUMS >/dev/null
+  else
+    shasum -a 256 --check SHA256SUMS >/dev/null
+  fi
+)
+
+tar -tzf "$DIST_DIR/nico-agent-bundle.tar.gz" > "$TMP_DIR/archive-members.txt"
+printf '%s\n' \
+  nico-agent/ \
+  nico-agent/.env.example \
+  nico-agent/docker-compose.yml \
+  nico-agent/deploy/ \
+  nico-agent/deploy/docker-compose.release.yml \
+  nico-agent/docs/ \
+  nico-agent/docs/installation.md \
+  nico-agent/scripts/ \
+  nico-agent/scripts/demo.sh \
+  nico-agent/scripts/lib.sh \
+  nico-agent/scripts/nico-service.sh \
+  nico-agent/version.txt \
+  nico-agent/wheels/ \
+  "nico-agent/wheels/$(basename "$FAKE_WHEEL")" \
+  > "$TMP_DIR/expected-archive-members.txt"
+if ! diff -u \
+  <(sort "$TMP_DIR/expected-archive-members.txt") \
+  <(sort "$TMP_DIR/archive-members.txt"); then
+  fail "release archive differs from the explicit allowlist"
+fi
+
+if "$ROOT_DIR/scripts/package-release.sh" \
+  --tag v9.9.9 --wheel "$FAKE_WHEEL" --output "$TMP_DIR/bad-dist" >/dev/null 2>&1; then
+  fail "release packaging accepted a tag/package version mismatch"
+fi
+
+command -v docker >/dev/null 2>&1 || fail "Docker is required for Compose contract tests"
+docker compose version >/dev/null 2>&1 || fail "Docker Compose is required for contract tests"
+COMPOSE=(docker compose --project-directory "$ROOT_DIR" --file "$ROOT_DIR/docker-compose.yml")
+RELEASE_FILE="$ROOT_DIR/deploy/docker-compose.release.yml"
+"${COMPOSE[@]}" config --quiet
+"${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config --quiet
+"${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config --quiet
+NATIVE_CONFIG="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config)"
+HERMES_CONFIG="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config)"
+BUNDLE_CONFIG="$(docker compose \
+  --project-directory "$BUNDLE_RELEASE_DIR" \
+  --file "$BUNDLE_RELEASE_DIR/docker-compose.yml" \
+  --file "$BUNDLE_RELEASE_DIR/deploy/docker-compose.release.yml" \
+  --profile native config)"
+if grep -Eq '^[[:space:]]{4}build:' <<< "$NATIVE_CONFIG$HERMES_CONFIG$BUNDLE_CONFIG"; then
+  fail "release Compose retained a source build context"
+fi
+if grep -q 'OPENROUTER_API_KEY' <<< "$NATIVE_CONFIG"; then
+  fail "native release profile received a Hermes Provider credential"
+fi
+grep -q 'OPENROUTER_API_KEY' <<< "$HERMES_CONFIG" || fail \
+  "Hermes release profile omitted Provider credentials"
+DEFAULT_SERVICES="$("${COMPOSE[@]}" config --services)"
+NATIVE_SERVICES="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config --services)"
+HERMES_SERVICES="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config --services)"
+grep -Fxq worker <<< "$DEFAULT_SERVICES" || fail "source Compose default omitted worker"
+if grep -Fxq worker-hermes <<< "$DEFAULT_SERVICES"; then
+  fail "source Compose default included Hermes worker"
+fi
+grep -Fxq worker <<< "$NATIVE_SERVICES" || fail "native release profile omitted worker"
+if grep -Fxq worker-hermes <<< "$NATIVE_SERVICES"; then
+  fail "native release profile included Hermes worker"
+fi
+grep -Fxq worker-hermes <<< "$HERMES_SERVICES" || fail "Hermes profile omitted worker-hermes"
+if grep -Fxq worker <<< "$HERMES_SERVICES"; then
+  fail "Hermes release profile included native worker"
+fi
+
+python3 - "$ROOT_DIR" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+ci = (root / ".github/workflows/ci.yml").read_text()
+release = (root / ".github/workflows/release.yml").read_text()
+
+assert re.search(r"push:\s*\n\s+branches:\s*\[main\]", ci)
+assert re.search(r"pull_request:\s*\n\s+branches:\s*\[main\]", ci)
+assert "workflow_call:" in ci
+assert "scripts/test.sh" in ci
+assert "scripts/test-install.sh" in ci
+assert "contents: write" not in ci
+assert "packages: write" not in ci
+
+assert 'tags: ["v*"]' in release
+assert "branches:" not in release
+assert "uses: ./.github/workflows/ci.yml" in release
+assert "packages: write" in release
+assert "contents: write" in release
+assert "scripts/package-release.sh" in release
+assert "gh release" in release
+assert "--clobber" not in release
+assert "actionlint/cmd/actionlint@v1.7.12" in ci
+assert "!reset null" in (root / "deploy/docker-compose.release.yml").read_text()
+
+for workflow in (ci, release):
+    for action in re.findall(r"uses:\s+([^\s#]+)", workflow):
+        if action.startswith("./"):
+            continue
+        assert re.search(r"@[0-9a-f]{40}$", action), f"unpinned action: {action}"
+PY
+
+printf '[nico-install-test] all installer and release contracts passed\n'

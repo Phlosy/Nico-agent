@@ -78,7 +78,13 @@ Hermes 不是 Nico Native 的运行依赖。只有显式设置 `NICO_HERMES_ENAB
 
 每个 Run 使用独立 `HERMES_HOME/<tenant>/<run>`。配置将 platform CLI toolsets 限定为 `nico`，并禁用 terminal、web、browser、file、memory、skills 和 delegate；Nico MCP stdio 子进程再通过 `0600` Unix socket 和随机 token 回到当前 Worker。broker 每次 list/call 都复核 Run 租约和冻结权限。终态导出、取消、超时或启动失败会清理含 token 的 Run 目录。
 
-默认 Compose Worker 镜像不包含 Hermes，也没有 Hermes 状态卷。可选 `hermes` profile 使用 `backend/Dockerfile.hermes` 构建固定 `hermes-agent[mcp]==0.18.2` 的独立 Worker；切换前必须停止默认 Worker，避免不同 Provider 集合竞争同一队列。`goal-l` profile 只运行仓库内 fake CLI 合同，不是用户部署方式。
+默认 Compose Worker 镜像不包含 Hermes，也没有 Hermes 状态卷。可选
+`hermes` profile 使用 `backend/Dockerfile.hermes` 构建固定
+`hermes-agent[mcp]==0.18.2` 的独立 Worker。GitHub Release 安装器接受
+`--runtime hermes`，release overlay 和 `nico-service` 会停止 Native Worker
+并只激活 Hermes Profile；源码部署仍需在切换前手工停止默认 Worker，避免
+不同 Provider 集合竞争同一队列。`goal-l` profile 只运行仓库内 fake CLI
+合同，不是用户部署方式。
 
 仓库已完成 Hermes 0.18.2 CLI/MCP 发现、协议 v2、禁用失败关闭、成功/失败/取消/resume、Secret 脱敏和 Compose contract E2E；真实模型推理仍未执行，不能据此声称模型质量、外部 Provider 或生产部署可用。
 

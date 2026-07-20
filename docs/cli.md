@@ -4,7 +4,19 @@
 
 ## 安装
 
-Nico CLI 与服务端 Python 包一同发布。当前仓库版本可安装到独立虚拟环境：
+面向本机或受信网络的 Release 安装会同时部署服务栈与 CLI：
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh | bash
+nico --version
+nico-service doctor
+```
+
+安装器将 CLI 放在 `~/.nico/releases/<tag>/venv` 管理的虚拟环境中，并默认把 `nico` 和
+`nico-service` 链接到 `~/.local/bin`。如果该目录不在 `PATH` 中，安装器会
+给出提示。CLI 仍是独立的 HTTP 客户端，不会在终端进程中运行 Agent Loop。
+
+当前仓库版本也可以单独安装到开发虚拟环境：
 
 ```bash
 python3 -m venv .venv
@@ -12,7 +24,8 @@ python3 -m venv .venv
 .venv/bin/nico --version
 ```
 
-CLI 是 HTTP 客户端，不会在本地执行 Agent Loop，也不需要访问 PostgreSQL、Redis 或 MinIO。API 和 Worker 必须已经运行。
+单独安装 CLI 时，API 和 Worker 必须已经运行。完整的固定版本、Hermes、
+升级与移除流程见[安装与部署](installation.md)。
 
 ## 配置第一个 Profile
 

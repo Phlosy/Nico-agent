@@ -71,6 +71,7 @@ services:
     restart: "no"
 
   api:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     environment:
@@ -122,6 +123,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     environment:
@@ -170,6 +172,7 @@ services:
     extends:
       service: worker
     profiles: ["hermes"]
+    image: ${NICO_HERMES_IMAGE:-nico-agent-hermes:local}
     build:
       context: ./backend
       dockerfile: Dockerfile.hermes
@@ -180,6 +183,9 @@ services:
       NICO_HERMES_COMMAND: hermes
       NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
       NICO_WORKER_ID: nico-hermes-worker
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       hermes-state-init:
         condition: service_completed_successfully
@@ -190,6 +196,7 @@ services:
     extends:
       service: worker
     profiles: ["goal-l"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     environment:
       NICO_HERMES_ENABLED: "true"
       NICO_HERMES_COMMAND: python -m nico_agent.testing.fake_hermes_cli
@@ -203,6 +210,7 @@ services:
 
   fake-model:
     profiles: ["goal-g", "goal-h", "goal-j", "goal-k"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     environment:
@@ -230,6 +238,7 @@ services:
     restart: "no"
 
   worker-state-init:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     user: "0:0"
@@ -246,6 +255,7 @@ services:
 
   hermes-state-init:
     profiles: ["hermes", "goal-l"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     user: "0:0"
@@ -261,6 +271,7 @@ services:
     restart: "no"
 
   sandbox-runner:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
     user: "0:0"
@@ -294,6 +305,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: ${NICO_WEB_IMAGE:-nico-agent-web:local}
     build:
       context: ./frontend
     ports:

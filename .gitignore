@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+backend/build/
 .pytest_cache/
 .ruff_cache/
 htmlcov/
@@ -11,6 +12,7 @@ htmlcov/
 node_modules/
 frontend/dist/
 frontend/coverage/
+dist/
 
 # Generated documentation and local editor output
 docs/_build/

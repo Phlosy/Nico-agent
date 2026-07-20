@@ -38,7 +38,10 @@ request() {
 
 load_reusable_state() {
   [[ -f "$STATE_FILE" ]] || return 1
-  mapfile -t values < <(
+  local values=()
+  while IFS= read -r value; do
+    values[${#values[@]}]="$value"
+  done < <(
     python3 - "$STATE_FILE" <<'PY'
 import json
 import sys
@@ -53,7 +56,7 @@ try:
 except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 PY
-  ) || return 1
+  )
   [[ "${#values[@]}" -eq 4 ]] || return 1
 
   TENANT_ID="${values[0]}"

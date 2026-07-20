@@ -1,0 +1,37 @@
+services:
+  api:
+    build: !reset null
+    pull_policy: always
+
+  worker:
+    build: !reset null
+    profiles: ["native"]
+    pull_policy: always
+
+  worker-hermes:
+    build: !reset null
+    pull_policy: always
+
+  worker-hermes-contract:
+    build: !reset null
+    pull_policy: always
+
+  fake-model:
+    build: !reset null
+    pull_policy: always
+
+  worker-state-init:
+    build: !reset null
+    pull_policy: always
+
+  hermes-state-init:
+    build: !reset null
+    pull_policy: always
+
+  sandbox-runner:
+    build: !reset null
+    pull_policy: always
+
+  web:
+    build: !reset null
+    pull_policy: always

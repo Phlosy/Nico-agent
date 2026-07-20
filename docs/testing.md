@@ -5,6 +5,7 @@
 | Scope | Command | Coverage |
 | --- | --- | --- |
 | Standard local gate | `scripts/test.sh` | Ruff check/format, backend unit tests, frontend tests, TypeScript, and production build |
+| Installer/Release contracts | `scripts/test-install.sh` | 参数、Secret 保留、校验和、bundle allowlist、Compose Runtime 互斥及 CI trigger/权限 |
 | Backend unit tests | `.venv/bin/pytest backend/tests/unit` | Domain state, Runtime, tools, tenant isolation contracts, Memory, and Skill lifecycle |
 | Frontend tests | `npm --prefix frontend test` | Health states plus Run Inspector deep link, ordering, loading/empty/error/partial/cancelled/redacted and hostile-text behavior |
 | Real dependencies | `scripts/test-integration.sh` | Alembic replay, PostgreSQL RLS, Worker claims, Runtime/Tool persistence, and growth invariants |
@@ -33,6 +34,12 @@
 Integration tests are skipped by ordinary `pytest`. The integration script starts
 or checks the required services and sets `RUN_INTEGRATION=1`; a skipped integration
 test is not evidence of a passing integration suite.
+
+GitHub 的 `Test` workflow 在面向 `main` 的 Pull Request 和进入 `main` 的
+push 上执行 `scripts/test.sh` 与 `scripts/test-install.sh`，并以
+`workflow_call` 暴露同一测试门。`Release` workflow 只监听 `v*` Tag；它先
+复用测试门并校验 Tag 与 Python 包版本一致，随后才获得 GHCR/GitHub Release
+所需的写权限。普通 merge 不发布镜像或 Release。
 
 ## Security-sensitive coverage
 
