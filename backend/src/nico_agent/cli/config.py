@@ -35,6 +35,8 @@ class Profile(BaseModel):
     api_token_env: str | None = None
     timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     verify_tls: bool = True
+    service_command: str | None = None
+    install_root: str | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -55,6 +57,13 @@ class Profile(BaseModel):
     def validate_token_env(cls, value: str | None) -> str | None:
         if value is not None and not ENV_NAME_RE.fullmatch(value):
             raise ValueError("api_token_env must be an environment variable name")
+        return value
+
+    @field_validator("service_command", "install_root")
+    @classmethod
+    def validate_local_path(cls, value: str | None) -> str | None:
+        if value is not None and (not value.startswith("/") or "\x00" in value):
+            raise ValueError("local service paths must be absolute")
         return value
 
 
@@ -93,6 +102,8 @@ class ResolvedProfile(BaseModel):
     api_token: str | None = Field(default=None, exclude=True, repr=False)
     timeout_seconds: float
     verify_tls: bool
+    service_command: str | None = None
+    install_root: str | None = None
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +115,8 @@ class ResolvedProfile(BaseModel):
             "api_token_available": self.api_token is not None,
             "timeout_seconds": self.timeout_seconds,
             "verify_tls": self.verify_tls,
+            "service_command": self.service_command,
+            "install_root": self.install_root,
         }
 
 
@@ -240,5 +253,9 @@ def _serialize(config: CliConfig) -> str:
             lines.append(f"api_token_env = {json.dumps(profile.api_token_env)}")
         lines.append(f"timeout_seconds = {profile.timeout_seconds}")
         lines.append(f"verify_tls = {'true' if profile.verify_tls else 'false'}")
+        if profile.service_command is not None:
+            lines.append(f"service_command = {json.dumps(profile.service_command)}")
+        if profile.install_root is not None:
+            lines.append(f"install_root = {json.dumps(profile.install_root)}")
         lines.append("")
     return "\n".join(lines)

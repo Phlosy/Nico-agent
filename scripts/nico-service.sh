@@ -123,6 +123,19 @@ doctor() {
   compose --profile "$selected" ps
 }
 
+provider_secret() {
+  local action="${1:-}"
+  case "$action" in
+    begin | renew | commit | rollback | recover) ;;
+    *) die "provider-secret requires begin, renew, commit, rollback, or recover" ;;
+  esac
+  [[ "$(runtime)" == "native" ]] || die \
+    "Provider secret transactions require the native Runtime"
+  [[ -x "$CURRENT/venv/bin/python" ]] || die "installed Nico Python runtime is unavailable"
+  NICO_HOME="$NICO_HOME" "$CURRENT/venv/bin/python" \
+    -m nico_agent.local_secret_transaction "$action"
+}
+
 usage() {
   cat <<'EOF'
 Usage: nico-service <command>
@@ -134,6 +147,8 @@ Commands:
   status          Show service status
   logs [SERVICE]  Follow logs, optionally for one service
   doctor          Validate Compose and check API/Web readiness
+  provider-secret begin|renew|commit|rollback|recover
+                  Manage one recoverable Native Provider secret transaction
   purge --yes     Stop containers and permanently remove data volumes
   version         Show the installed release version
 EOF
@@ -164,6 +179,7 @@ main() {
     status) compose --profile "$(runtime)" ps ;;
     logs) compose --profile "$(runtime)" logs --follow --tail=100 "$@" ;;
     doctor) doctor ;;
+    provider-secret) provider_secret "${1:-}" ;;
     purge)
       [[ "${1:-}" == "--yes" ]] || die "purge permanently deletes data; pass --yes"
       compose --profile native --profile hermes down --remove-orphans --volumes

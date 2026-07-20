@@ -126,6 +126,9 @@ services:
     image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
+    env_file:
+      - path: ${NICO_MODEL_SECRETS_FILE:-./config/model-secrets.env}
+        required: false
     environment:
       NICO_ENVIRONMENT: development
       NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
@@ -181,6 +184,7 @@ services:
   worker-hermes:
     extends:
       service: worker
+    env_file: !reset []
     profiles: ["hermes"]
     image: ${NICO_HERMES_IMAGE:-nico-agent-hermes:local}
     build:
@@ -205,6 +209,7 @@ services:
   worker-hermes-contract:
     extends:
       service: worker
+    env_file: !reset []
     profiles: ["goal-l"]
     image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     environment:

@@ -405,6 +405,8 @@ def config_set(
     clear_token_env: bool = typer.Option(False, "--clear-token-env"),
     timeout_seconds: float | None = typer.Option(None, "--timeout"),
     verify_tls: bool | None = typer.Option(None, "--verify-tls/--no-verify-tls"),
+    service_command: str | None = typer.Option(None, "--service-command", hidden=True),
+    install_root: str | None = typer.Option(None, "--install-root", hidden=True),
 ) -> None:
     state = _state(ctx)
 
@@ -426,6 +428,10 @@ def config_set(
             values["timeout_seconds"] = timeout_seconds
         if verify_tls is not None:
             values["verify_tls"] = verify_tls
+        if service_command is not None:
+            values["service_command"] = service_command
+        if install_root is not None:
+            values["install_root"] = install_root
         try:
             profile = Profile.model_validate(values)
         except ValueError as exc:
@@ -445,6 +451,8 @@ def config_set(
             "api_token_env": profile.api_token_env,
             "timeout_seconds": profile.timeout_seconds,
             "verify_tls": profile.verify_tls,
+            "service_command": profile.service_command,
+            "install_root": profile.install_root,
         },
         title="Profile Saved",
     )

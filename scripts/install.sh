@@ -349,6 +349,13 @@ prepare_environment() {
     cp "$template" "$env_file"
     chmod 600 "$env_file"
   fi
+  local model_secrets_file="$(dirname "$env_file")/model-secrets.env"
+  if [[ ! -f "$model_secrets_file" ]]; then
+    : > "$model_secrets_file"
+  fi
+  chmod 600 "$model_secrets_file"
+  set_env_value "$env_file" NICO_MODEL_SECRETS_FILE \
+    "$(absolute_path "$model_secrets_file")" replace
 
   local current
   current="$(env_value "$env_file" POSTGRES_PASSWORD)"
@@ -389,6 +396,15 @@ prepare_environment() {
   set_env_value "$env_file" NICO_PULL_POLICY "$pull_policy" replace
   configure_provider_secret "$env_file"
   chmod 600 "$env_file"
+}
+
+configure_cli_service_profile() {
+  "$RELEASE_DIR/venv/bin/nico" config set local \
+    --api-url "http://localhost:$(env_value "$NICO_HOME/config/deployment.env" API_PORT 18000)" \
+    --actor-id local-operator \
+    --service-command "$NICO_HOME/bin/nico-service" \
+    --install-root "$NICO_HOME"
+  "$RELEASE_DIR/venv/bin/nico" config use local
 }
 
 resolve_release() {
@@ -577,6 +593,7 @@ main() {
   install_cli
   prepare_environment "$NICO_HOME/config/deployment.env" "$RELEASE_DIR/.env.example"
   switch_current_release
+  configure_cli_service_profile
 
   if [[ "$START_SERVICES" == true ]]; then
     log "starting the $RUNTIME runtime profile"

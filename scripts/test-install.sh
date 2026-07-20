@@ -155,6 +155,10 @@ assert_contains "$(cat "$LOCAL_ENV_FILE")" \
   "MINIO_CONSOLE_PORT=29011" "local MinIO Console port"
 assert_contains "$(cat "$LOCAL_ENV_FILE")" "API_PORT=28000" "local API port"
 assert_contains "$(cat "$LOCAL_ENV_FILE")" "WEB_PORT=28080" "local Web port"
+LOCAL_MODEL_SECRETS="$(env_value "$LOCAL_ENV_FILE" NICO_MODEL_SECRETS_FILE)"
+[[ -f "$LOCAL_MODEL_SECRETS" ]] || fail "installer did not create the model secret file"
+assert_eq "$(stat -c '%a' "$LOCAL_MODEL_SECRETS" 2>/dev/null || stat -f '%Lp' "$LOCAL_MODEL_SECRETS")" \
+  "600" "model secret permissions"
 LOCAL_IMAGES=false
 
 REMOTE_ENV_FILE="$TMP_DIR/remote-deployment.env"
@@ -403,6 +407,13 @@ RELEASE_FILE="$ROOT_DIR/deploy/docker-compose.release.yml"
 "${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config --quiet
 NATIVE_CONFIG="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config)"
 HERMES_CONFIG="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config)"
+TEST_MODEL_SECRETS="$TMP_DIR/compose-model-secrets.env"
+printf 'NICO_MODEL_SECRET_COMPOSE_CANARY=compose-canary-value\n' > "$TEST_MODEL_SECRETS"
+chmod 600 "$TEST_MODEL_SECRETS"
+NATIVE_SECRET_CONFIG="$(NICO_MODEL_SECRETS_FILE="$TEST_MODEL_SECRETS" \
+  "${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config)"
+HERMES_SECRET_CONFIG="$(NICO_MODEL_SECRETS_FILE="$TEST_MODEL_SECRETS" \
+  "${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config)"
 BUNDLE_CONFIG="$(docker compose \
   --project-directory "$BUNDLE_RELEASE_DIR" \
   --file "$BUNDLE_RELEASE_DIR/docker-compose.yml" \
@@ -416,6 +427,11 @@ if grep -q 'OPENROUTER_API_KEY' <<< "$NATIVE_CONFIG"; then
 fi
 grep -q 'OPENROUTER_API_KEY' <<< "$HERMES_CONFIG" || fail \
   "Hermes release profile omitted Provider credentials"
+grep -q 'NICO_MODEL_SECRET_COMPOSE_CANARY' <<< "$NATIVE_SECRET_CONFIG" || fail \
+  "Native Worker omitted the protected model-secret file"
+if grep -q 'NICO_MODEL_SECRET_COMPOSE_CANARY' <<< "$HERMES_SECRET_CONFIG"; then
+  fail "Hermes profile inherited the Native model-secret file"
+fi
 DEFAULT_SERVICES="$("${COMPOSE[@]}" config --services)"
 NATIVE_SERVICES="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile native config --services)"
 HERMES_SERVICES="$("${COMPOSE[@]}" --file "$RELEASE_FILE" --profile hermes config --services)"
