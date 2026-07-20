@@ -1,0 +1,17 @@
+{
+  "id": "378f77db-7b8a-4e0e-ba7a-0bcdf5941904",
+  "project_id": "e4faf473-0185-4e24-b387-b3892e7e2392",
+  "agent_id": "dcbbfdb4-903b-4536-88a9-86e8ed334905",
+  "agent_version_id": "124ab9d3-154c-48dd-b0e1-067e939ca2d5",
+  "title": "New conversation",
+  "status": "active",
+  "summary": "{\"message\": \"Nico completed a recoverable, auditable demo Run.\", \"runtime\": \"mock\", \"summary\": \"AgentVersion -> Task -> Run -> Worker -> Result\"}",
+  "summary_through_sequence": 2,
+  "summary_input_hash": "750f0d865d889266d0fcb48a42c81900b235aa1996eac46ccd9b310e820a13db",
+  "summary_model_call_id": null,
+  "last_turn_id": "36c23f2a-9be8-417d-9465-b083aca70522",
+  "created_by": "cli-goal-e",
+  "revision": 4,
+  "created_at": "2026-07-19T12:26:49.657159Z",
+  "updated_at": "2026-07-19T12:26:55.577966Z"
+}

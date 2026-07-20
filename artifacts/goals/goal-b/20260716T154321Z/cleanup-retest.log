@@ -1,0 +1,9 @@
+ Container nico-agent-platform-postgres-1 Stopping
+ Container nico-agent-platform-postgres-1 Stopped
+ Container nico-agent-platform-postgres-1 Removing
+ Container nico-agent-platform-postgres-1 Removed
+ Volume nico-agent-platform_postgres-data Removing
+ Network nico-agent-platform_default Removing
+ Volume nico-agent-platform_postgres-data Removed
+ Network nico-agent-platform_default Removed
+[nico] removed platform containers and data volumes

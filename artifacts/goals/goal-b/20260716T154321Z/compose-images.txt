@@ -1,0 +1,8 @@
+CONTAINER                          REPOSITORY                   TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+nico-agent-platform-api-1          nico-agent-platform-api      latest              linux/amd64         96957496f8a2        208MB               34 seconds ago
+nico-agent-platform-minio-1        quay.io/minio/minio          <none>              linux/amd64         69b2ec208575        175MB               10 months ago
+nico-agent-platform-minio-init-1   quay.io/minio/mc             <none>              linux/amd64         c2ad77420d33        84.9MB              10 months ago
+nico-agent-platform-postgres-1     pgvector/pgvector            <none>              linux/amd64         5fa1d4c74299        438MB               7 days ago
+nico-agent-platform-redis-1        redis                        <none>              linux/amd64         b6636bae9624        38.6MB              2 months ago
+nico-agent-platform-web-1          nico-agent-platform-web      latest              linux/amd64         3a2cb5ef9741        62.3MB              2 minutes ago
+nico-agent-platform-worker-1       nico-agent-platform-worker   latest              linux/amd64         3de71cb02a65        208MB               34 seconds ago

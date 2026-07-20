@@ -1,0 +1,42 @@
+{
+  "detached": true,
+  "conversation_id": "97b477d2-15cd-46a9-a56e-e3e6f8cbfca7",
+  "turn_id": "86a62e90-040b-4af9-ae7e-70c8049143a4",
+  "task_id": "9f5eb2e8-8b81-4280-84fa-b48a8758b1bf",
+  "run_id": "23fa4003-a1ae-4918-9106-714dbc94b2c3",
+  "conversation": {
+    "id": "97b477d2-15cd-46a9-a56e-e3e6f8cbfca7",
+    "project_id": "62cbb5e1-e744-4410-ae4f-d5118686f1a3",
+    "agent_id": "f4e95b8d-7765-46be-bf93-292a0021852a",
+    "agent_version_id": "9edaa746-a08b-4c53-aed9-9ed9d10ec207",
+    "title": "CLI Goal D detached",
+    "status": "active",
+    "summary": null,
+    "summary_through_sequence": 0,
+    "summary_input_hash": null,
+    "summary_model_call_id": null,
+    "last_turn_id": null,
+    "created_by": "cli-goal-d",
+    "revision": 1,
+    "created_at": "2026-07-19T11:23:18.159725Z",
+    "updated_at": "2026-07-19T11:23:18.159734Z"
+  },
+  "turn": {
+    "id": "86a62e90-040b-4af9-ae7e-70c8049143a4",
+    "conversation_id": "97b477d2-15cd-46a9-a56e-e3e6f8cbfca7",
+    "sequence": 1,
+    "user_input": "Goal D detached execution",
+    "task_id": "9f5eb2e8-8b81-4280-84fa-b48a8758b1bf",
+    "run_id": "23fa4003-a1ae-4918-9106-714dbc94b2c3",
+    "status": "queued",
+    "run_status": "pending",
+    "run_revision": 1,
+    "assistant_output": null,
+    "artifact_refs": [],
+    "usage": {},
+    "error": null,
+    "revision": 1,
+    "created_at": "2026-07-19T11:23:18.188630Z",
+    "updated_at": "2026-07-19T11:23:18.188635Z"
+  }
+}

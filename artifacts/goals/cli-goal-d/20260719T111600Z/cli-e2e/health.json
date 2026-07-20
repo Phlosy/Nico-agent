@@ -1,0 +1,21 @@
+{
+  "status": "ready",
+  "checked_at": "2026-07-19T11:18:45.886782Z",
+  "components": {
+    "postgres": {
+      "status": "up",
+      "latency_ms": 6.31,
+      "detail": null
+    },
+    "redis": {
+      "status": "up",
+      "latency_ms": 3.24,
+      "detail": null
+    },
+    "minio": {
+      "status": "up",
+      "latency_ms": 3.831,
+      "detail": null
+    }
+  }
+}

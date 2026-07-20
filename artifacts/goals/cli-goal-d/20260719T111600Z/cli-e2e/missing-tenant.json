@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "TENANT_CONTEXT_REQUIRED",
+    "message": "this command requires tenant_id; configure a profile or set NICO_TENANT_ID"
+  }
+}

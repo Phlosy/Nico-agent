@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "generatedBy": "image2-pixel-asset-pipeline",
+  "assets": {
+    "nico-logo": {
+      "source": {
+        "type": "image2",
+        "generationModel": "gpt-image-2",
+        "generationBatch": "nico-brand-20260717",
+        "promptFile": "assets/branding/image2/prompts/nico-logo.txt",
+        "rawFile": "assets/branding/image2/raw/nico-logo.png",
+        "rawSha256": "9f07aae21e33fa26191e5ba1566c684b117f919bcda0860fb3df0a0aaa75abc7",
+        "license": "Project-owned OpenAI-generated brand asset; photo references used only for coat and facial anatomy"
+      },
+      "canvas": {
+        "width": 512,
+        "height": 512,
+        "padding": 40,
+        "anchor": "bottom-center"
+      },
+      "variants": {
+        "base:front": "assets/branding/image2/normalized/nico_logo_base_front_v1.png"
+      }
+    }
+  }
+}

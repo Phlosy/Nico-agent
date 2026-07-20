@@ -1,0 +1,1 @@
+{"status":"not_ready","checked_at":"2026-07-16T15:57:11.058650Z","components":{"postgres":{"status":"up","latency_ms":6.727,"detail":null},"redis":{"status":"down","latency_ms":4.937,"detail":"ConnectionError: dependency check failed"},"minio":{"status":"up","latency_ms":4.156,"detail":null}}}

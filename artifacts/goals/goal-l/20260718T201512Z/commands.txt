@@ -1,0 +1,15 @@
+bash -n scripts/*.sh
+python3 scripts/check-docs.py
+npx --yes markdownlint-cli2@0.22.1 "*.md" "backend/*.md" "docs/*.md" ".github/*.md"
+docker compose config --quiet
+docker compose --profile hermes config --quiet
+docker compose --profile goal-l config --quiet
+scripts/test.sh
+scripts/test-integration.sh
+scripts/e2e.sh
+scripts/e2e-goal-g.sh
+scripts/e2e-goal-h.sh
+scripts/e2e-goal-i.sh
+scripts/e2e-goal-j.sh
+scripts/e2e-goal-k.sh
+scripts/e2e-goal-l.sh

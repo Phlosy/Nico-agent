@@ -1,0 +1,9 @@
+{
+  "name": "local",
+  "base_url": "http://localhost:18000",
+  "tenant_id": "23918b65-3921-4383-b159-b57a2ecabf4d",
+  "actor_id": "cli-goal-c",
+  "api_token_env": null,
+  "timeout_seconds": 30.0,
+  "verify_tls": true
+}

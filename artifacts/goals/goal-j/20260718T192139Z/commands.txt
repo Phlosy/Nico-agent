@@ -1,0 +1,6 @@
+bash -n scripts/*.sh
+docker compose --profile goal-j config --quiet
+scripts/test.sh
+scripts/test-integration.sh
+scripts/e2e.sh
+scripts/e2e-goal-j.sh

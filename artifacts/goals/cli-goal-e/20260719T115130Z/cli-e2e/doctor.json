@@ -1,0 +1,27 @@
+[
+  {
+    "check": "config",
+    "status": "pass",
+    "detail": "local"
+  },
+  {
+    "check": "config_permissions",
+    "status": "pass",
+    "detail": "0600"
+  },
+  {
+    "check": "tenant_context",
+    "status": "pass",
+    "detail": "6ffe533b-9674-4692-99ba-266ebc90398e"
+  },
+  {
+    "check": "api_live",
+    "status": "pass",
+    "detail": "alive"
+  },
+  {
+    "check": "dependencies",
+    "status": "pass",
+    "detail": "ready"
+  }
+]

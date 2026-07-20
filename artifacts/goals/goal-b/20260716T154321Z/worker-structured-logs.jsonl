@@ -1,0 +1,7 @@
+worker-1  | {"timestamp":"2026-07-16T15:56:45.260Z","level":"INFO","logger":"__main__","message":"infrastructure supervisor started","interval_seconds":15.0}
+worker-1  | {"timestamp":"2026-07-16T15:56:45.271Z","level":"INFO","logger":"httpx","message":"HTTP Request: GET http://minio:9000/minio/health/ready \"HTTP/1.1 200 OK\""}
+worker-1  | {"timestamp":"2026-07-16T15:56:45.300Z","level":"INFO","logger":"__main__","message":"infrastructure readiness checked","components":{"postgres":"up","redis":"up","minio":"up"}}
+worker-1  | {"timestamp":"2026-07-16T15:57:00.320Z","level":"INFO","logger":"httpx","message":"HTTP Request: GET http://minio:9000/minio/health/ready \"HTTP/1.1 200 OK\""}
+worker-1  | {"timestamp":"2026-07-16T15:57:00.321Z","level":"INFO","logger":"__main__","message":"infrastructure readiness checked","components":{"postgres":"up","redis":"up","minio":"up"}}
+worker-1  | {"timestamp":"2026-07-16T15:57:15.336Z","level":"INFO","logger":"httpx","message":"HTTP Request: GET http://minio:9000/minio/health/ready \"HTTP/1.1 200 OK\""}
+worker-1  | {"timestamp":"2026-07-16T15:57:15.337Z","level":"WARNING","logger":"__main__","message":"infrastructure readiness degraded","components":{"postgres":"up","redis":"down","minio":"up"}}

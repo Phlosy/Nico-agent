@@ -1,0 +1,80 @@
+"""Slash command parsing and discoverable command metadata."""
+
+from __future__ import annotations
+
+import shlex
+from dataclasses import dataclass
+
+from nico_agent.cli.errors import CliError
+
+
+@dataclass(frozen=True, slots=True)
+class SlashCommand:
+    name: str
+    args: tuple[str, ...]
+    raw_args: str
+
+
+COMMANDS: dict[str, tuple[str, str]] = {
+    "help": ("会话", "显示命令帮助"),
+    "new": ("会话", "创建并切换到新会话"),
+    "continue": ("会话", "切换到最近活跃会话"),
+    "resume": ("会话", "切换到指定会话：/resume ID"),
+    "history": ("会话", "查看当前会话历史"),
+    "conversations": ("会话", "列出活跃会话"),
+    "title": ("会话", "修改标题：/title TEXT"),
+    "compact": ("会话", "压缩已完成历史并保留可审计摘要"),
+    "attach": ("会话", "暂存本地文件到下一轮：/attach PATH"),
+    "download": ("会话", "下载产物：/download ARTIFACT_ID [PATH]"),
+    "exit": ("会话", "退出交互模式"),
+    "status": ("状态", "查看当前会话和最后一次运行"),
+    "agent": ("状态", "查看当前 Agent"),
+    "version": ("状态", "查看冻结的 Agent 版本"),
+    "runtime": ("状态", "查看 Runtime 会话"),
+    "usage": ("状态", "查看 Token 与费用用量"),
+    "context": ("状态", "查看上下文快照"),
+    "plan": ("检查", "查看运行计划"),
+    "steps": ("检查", "查看运行步骤"),
+    "tools": ("检查", "查看工具调用"),
+    "approvals": ("检查", "查看当前运行的工具审批"),
+    "children": ("检查", "查看子运行"),
+    "messages": ("检查", "查看 Agent 消息"),
+    "artifacts": ("检查", "查看产物清单"),
+    "audit": ("检查", "查看相关审计记录"),
+    "inspect": ("检查", "汇总检查当前运行"),
+    "cancel": ("控制", "取消正在运行的最后一轮"),
+    "retry": ("控制", "重试失败的最后一轮"),
+    "approve": ("控制", "批准工具：/approve ID once|run"),
+    "reject": ("控制", "拒绝工具：/reject ID [REASON]"),
+}
+
+
+def parse_slash(value: str) -> SlashCommand | None:
+    stripped = value.strip()
+    if not stripped.startswith("/"):
+        return None
+    command_text = stripped[1:]
+    try:
+        parts = shlex.split(command_text)
+    except ValueError as exc:
+        raise CliError("INVALID_SLASH_COMMAND", str(exc), exit_code=2) from exc
+    if not parts:
+        return SlashCommand("help", (), "")
+    name = parts[0].lower()
+    if name == "quit":
+        name = "exit"
+    if name not in COMMANDS:
+        raise CliError(
+            "UNKNOWN_SLASH_COMMAND",
+            f"unknown command '/{name}'; use /help",
+            exit_code=2,
+        )
+    raw_args = command_text[len(parts[0]) :].strip()
+    return SlashCommand(name, tuple(parts[1:]), raw_args)
+
+
+def help_rows() -> list[dict[str, str]]:
+    return [
+        {"group": group, "command": f"/{name}", "description": description}
+        for name, (group, description) in COMMANDS.items()
+    ]

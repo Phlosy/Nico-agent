@@ -1,0 +1,13 @@
+[
+  {
+    "id": "506d80ab-b5de-4a15-8c3d-6461ee37b796",
+    "name": "nico-demo-agent",
+    "display_name": "Nico Demo Agent",
+    "description": "Deterministic Agent for the local first-run experience",
+    "status": "ready",
+    "current_version_id": "191b5a99-74a9-4bc3-827e-341e22574c18",
+    "revision": 2,
+    "created_at": "2026-07-19T10:18:31.282141Z",
+    "updated_at": "2026-07-19T10:18:31.465430Z"
+  }
+]

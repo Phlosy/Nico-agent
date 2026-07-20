@@ -1,0 +1,328 @@
+name: ${COMPOSE_PROJECT_NAME:-nico-agent-platform}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nico_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-nico}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
+    ports:
+      - "${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.14-alpine@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nico-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+    ports:
+      - "${MINIO_API_PORT:-19010}:9000"
+      - "${MINIO_CONSOLE_PORT:-19011}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  minio-init:
+    image: quay.io/minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nico-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+      MINIO_BUCKET: ${MINIO_BUCKET:-nico-artifacts}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET}"
+        mc anonymous set none "local/$${MINIO_BUCKET}"
+    restart: "no"
+
+  api:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    environment:
+      NICO_ENVIRONMENT: development
+      NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
+      NICO_DATABASE_HOST: postgres
+      NICO_DATABASE_PORT: 5432
+      NICO_DATABASE_NAME: ${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_USER: ${POSTGRES_USER:-nico}
+      NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
+      NICO_REDIS_URL: redis://redis:6379/0
+      NICO_MINIO_URL: http://minio:9000
+      NICO_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nico-minio}
+      NICO_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+      NICO_MINIO_BUCKET: ${MINIO_BUCKET:-nico-artifacts}
+      NICO_ARTIFACT_MAX_BYTES: ${NICO_ARTIFACT_MAX_BYTES:-10485760}
+      NICO_CONVERSATION_ATTACHMENT_TTL_SECONDS: ${NICO_CONVERSATION_ATTACHMENT_TTL_SECONDS:-86400}
+      NICO_CONVERSATION_ATTACHMENT_EXCERPT_CHARS: ${NICO_CONVERSATION_ATTACHMENT_EXCERPT_CHARS:-16000}
+      NICO_CONVERSATION_ATTACHMENT_MAX_COUNT: ${NICO_CONVERSATION_ATTACHMENT_MAX_COUNT:-16}
+      NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES: ${NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:-26214400}
+      NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
+      NICO_MODEL_ENDPOINT_WRITES_ENABLED: ${NICO_MODEL_ENDPOINT_WRITES_ENABLED:-true}
+      NICO_CORS_ORIGINS: '["http://localhost:${WEB_PORT:-18080}","http://localhost:5173"]'
+    command:
+      - /bin/sh
+      - -ec
+      - alembic -c alembic.ini upgrade head && exec uvicorn nico_agent.main:app --host 0.0.0.0 --port 8000 --log-config logging.json
+    ports:
+      - "${API_PORT:-18000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=3)
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  worker:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    environment:
+      NICO_ENVIRONMENT: development
+      NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
+      NICO_DATABASE_HOST: postgres
+      NICO_DATABASE_PORT: 5432
+      NICO_DATABASE_NAME: ${POSTGRES_DB:-nico_agent}
+      NICO_DATABASE_USER: ${POSTGRES_USER:-nico}
+      NICO_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
+      NICO_REDIS_URL: redis://redis:6379/0
+      NICO_MINIO_URL: http://minio:9000
+      NICO_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-nico-minio}
+      NICO_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
+      NICO_MINIO_BUCKET: ${MINIO_BUCKET:-nico-artifacts}
+      NICO_ARTIFACT_MAX_BYTES: ${NICO_ARTIFACT_MAX_BYTES:-10485760}
+      NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
+      NICO_WORKER_HEALTH_INTERVAL_SECONDS: ${NICO_WORKER_HEALTH_INTERVAL_SECONDS:-15}
+      NICO_WORKER_POLL_INTERVAL_SECONDS: ${NICO_WORKER_POLL_INTERVAL_SECONDS:-1}
+      NICO_WORKER_LEASE_SECONDS: ${NICO_WORKER_LEASE_SECONDS:-30}
+      NICO_WORKER_HEARTBEAT_SECONDS: ${NICO_WORKER_HEARTBEAT_SECONDS:-10}
+      NICO_WORKER_CONCURRENCY: ${NICO_WORKER_CONCURRENCY:-1}
+      NICO_WORKER_ID: ${NICO_WORKER_ID:-nico-worker}
+      NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-[]}
+      NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-false}
+      NICO_MODEL_SECRET_GOAL_G: ${NICO_MODEL_SECRET_GOAL_G:-}
+      NICO_NATIVE_POST_TOOL_DELAY_SECONDS: ${NICO_NATIVE_POST_TOOL_DELAY_SECONDS:-0}
+      NICO_TOOL_APPROVAL_REQUIRED_RISKS: ${NICO_TOOL_APPROVAL_REQUIRED_RISKS:-["medium","high"]}
+      NICO_TOOL_APPROVAL_TTL_SECONDS: ${NICO_TOOL_APPROVAL_TTL_SECONDS:-900}
+      NICO_SANDBOX_RUNNER_URL: http://sandbox-runner:8090
+      NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
+      NICO_WORKSPACE_ROOT: /var/lib/nico/workspaces
+    command: ["python", "-m", "nico_agent.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+      sandbox-runner:
+        condition: service_healthy
+      worker-state-init:
+        condition: service_completed_successfully
+    volumes:
+      - agent-workspaces:/var/lib/nico/workspaces
+    restart: unless-stopped
+
+  worker-hermes:
+    extends:
+      service: worker
+    profiles: ["hermes"]
+    image: ${NICO_HERMES_IMAGE:-nico-agent-hermes:local}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.hermes
+      args:
+        HERMES_AGENT_SPEC: ${HERMES_AGENT_SPEC:-hermes-agent[mcp]==0.18.2}
+    environment:
+      NICO_HERMES_ENABLED: "true"
+      NICO_HERMES_COMMAND: hermes
+      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
+      NICO_WORKER_ID: nico-hermes-worker
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      hermes-state-init:
+        condition: service_completed_successfully
+    volumes:
+      - hermes-state:/var/lib/nico/hermes
+
+  worker-hermes-contract:
+    extends:
+      service: worker
+    profiles: ["goal-l"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    environment:
+      NICO_HERMES_ENABLED: "true"
+      NICO_HERMES_COMMAND: python -m nico_agent.testing.fake_hermes_cli
+      NICO_HERMES_STATE_ROOT: /var/lib/nico/hermes
+      NICO_WORKER_ID: nico-hermes-contract-worker
+    depends_on:
+      hermes-state-init:
+        condition: service_completed_successfully
+    volumes:
+      - hermes-state:/var/lib/nico/hermes
+
+  fake-model:
+    profiles: ["goal-g", "goal-h", "goal-j", "goal-k"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    environment:
+      NICO_FAKE_MODEL_TOKEN: ${NICO_MODEL_SECRET_GOAL_G:-goal-g-fake-token}
+      NICO_FAKE_MODEL_GOAL_J_DELAY_SECONDS: ${NICO_FAKE_MODEL_GOAL_J_DELAY_SECONDS:-0}
+    command:
+      - uvicorn
+      - nico_agent.testing.fake_model:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8100"
+      - --log-config
+      - logging.json
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8100/healthz', timeout=3)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: "no"
+
+  worker-state-init:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        install -d -o nico -g nico -m 0700 /var/lib/nico/workspaces
+        chown -R nico:nico /var/lib/nico/workspaces
+        chmod 0700 /var/lib/nico/workspaces
+    volumes:
+      - agent-workspaces:/var/lib/nico/workspaces
+    restart: "no"
+
+  hermes-state-init:
+    profiles: ["hermes", "goal-l"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        install -d -o nico -g nico -m 0700 /var/lib/nico/hermes
+        chown -R nico:nico /var/lib/nico/hermes
+        chmod 0700 /var/lib/nico/hermes
+    volumes:
+      - hermes-state:/var/lib/nico/hermes
+    restart: "no"
+
+  sandbox-runner:
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    user: "0:0"
+    environment:
+      NICO_ENVIRONMENT: development
+      NICO_LOG_LEVEL: ${NICO_LOG_LEVEL:-INFO}
+      NICO_SANDBOX_RUNNER_TOKEN: ${NICO_SANDBOX_RUNNER_TOKEN:-nico-sandbox-development-token}
+      NICO_SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+    command:
+      - uvicorn
+      - nico_agent.sandbox.api:create_sandbox_runner_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+      - --log-config
+      - logging.json
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz', timeout=3)
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  web:
+    image: ${NICO_WEB_IMAGE:-nico-agent-web:local}
+    build:
+      context: ./frontend
+    ports:
+      - "${WEB_PORT:-18080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  agent-workspaces:
+  hermes-state:

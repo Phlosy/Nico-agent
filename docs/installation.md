@@ -1,0 +1,165 @@
+# 安装与部署
+
+Nico Agent 通过 GitHub Release 安装器同时部署 Docker Compose 服务栈和本地
+`nico` HTTP CLI。普通分支变更不会发布安装资产；第一次版本 Tag 成功完成后，
+下面的稳定地址才会存在。
+
+## 环境要求
+
+- Linux、macOS，或 Windows 上的 WSL2；
+- Docker Engine 或 Docker Desktop，以及 Docker Compose 2.24.4 或更高版本；
+- Python 3.11 或更高版本；
+- `bash` 和 `curl`；
+- 当前用户有权访问 Docker daemon，无需把 Docker Socket 改成全局可写。
+
+安装器会检查依赖和 Docker daemon，但不会申请 root 权限、自动安装 Docker，
+也不会修改 Docker daemon 配置。
+
+## 安装最新版本
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh | bash
+```
+
+如果希望先检查脚本再运行：
+
+```bash
+curl -fsSLO https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh
+less install.sh
+bash install.sh
+```
+
+默认安装使用 Nico Native。安装器会：
+
+1. 从最新 Release 解析不可变版本 Tag；
+2. 下载 bundle 和 `SHA256SUMS`，校验后才解压；
+3. 把版本化部署文件放在 `~/.nico/releases/<tag>`；
+4. 在 `~/.nico/config/deployment.env` 生成权限为 `0600` 的共享配置；
+5. 把 Python 包安装到 `~/.nico/releases/<tag>/venv`；
+6. 将 `nico` 和 `nico-service` 链接到 `~/.local/bin`；
+7. 启动服务、等待 API/Console 就绪、创建 Demo 资源并配置 `local` Profile。
+
+如果 `~/.local/bin` 不在 `PATH` 中，请按安装器提示加入 shell 配置。安装完成
+后可以直接运行它输出的 `nico chat` 命令。
+
+## 固定版本与自动化参数
+
+使用同一 Tag 下的不可变安装器和 bundle 安装指定版本：
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/download/v0.2.0/install.sh \
+  | bash -s -- --version v0.2.0
+```
+
+只安装文件与 CLI，不启动服务：
+
+```bash
+bash install.sh --version v0.2.0 --no-start
+```
+
+自动化环境可以使用 `--non-interactive`，并通过 `--dir` 与 `--bin-dir`
+改变数据目录和命令链接目录。运行 `bash install.sh --help` 查看完整参数。
+
+## 使用 Hermes Runtime
+
+Hermes 是可选 Adapter，不是 Nico Native 的依赖。通过同一个安装入口选择它：
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh \
+  | bash -s -- --runtime hermes --provider openrouter
+```
+
+`openrouter`、`openai` 和 `anthropic` 是安装器支持的 Provider 快捷名。凭据只
+从对应环境变量或隐藏交互输入读取，不支持 Secret 命令行参数。非交互示例：
+
+```bash
+export OPENROUTER_API_KEY='由 Secret Store 注入的值'
+bash install.sh --runtime hermes --provider openrouter --non-interactive
+unset OPENROUTER_API_KEY
+```
+
+凭据写入私有部署配置，并且 Compose 只把它显式传给 Hermes Worker。已有
+AgentVersion 仍需选择 `runtime_provider=hermes` 并声明 Provider/模型配置。
+Hermes `0.18.2` 的 Adapter 合同已验证，但带真实凭据的外部推理和模型质量
+仍需部署方验收。
+
+## 操作服务与 CLI
+
+```bash
+nico-service status
+nico-service doctor
+nico-service logs
+nico-service logs worker
+nico-service restart
+nico-service down
+nico-service up
+```
+
+`down` 会保留 PostgreSQL、Redis、MinIO 和 Hermes 状态卷。`purge` 会永久
+删除 Compose 命名卷，应只在明确不需要本地数据时使用：
+
+```bash
+nico-service purge --yes
+```
+
+CLI 是远程 HTTP 客户端，服务端和 CLI 虽由同一脚本安装，但不是同一个进程：
+
+```bash
+nico doctor
+nico agent list
+nico chat --project <project-id> --agent <agent-id>
+```
+
+完整命令说明见 [Nico CLI](cli.md)。
+
+## 升级与切换 Runtime
+
+重新运行安装器即可升级到最新版本；私有配置、已有 Secret 和 Docker 命名卷
+会被保留，当前 Runtime 选择也会保留；镜像引用、版本目录、CLI 环境和
+`current` 指针会更新：
+
+```bash
+curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install.sh | bash
+```
+
+要切换 Runtime，重新运行安装器并传入 `--runtime native` 或
+`--runtime hermes`。`nico-service` 启动所选 Profile 前会停止另一个 Worker，
+避免两个 Provider 集合竞争同一队列。
+
+## 移除
+
+保留数据卷并移除程序文件：
+
+```bash
+nico-service down
+rm -f ~/.local/bin/nico ~/.local/bin/nico-service
+rm -rf ~/.nico
+```
+
+如果连本地服务数据也不保留，应先执行 `nico-service purge --yes`，再删除文件。
+自定义过 `--dir` 或 `--bin-dir` 时，需要替换上面的路径。安装器不会删除
+Docker Engine、共享镜像缓存，或用户自行配置的外部 Secret。
+
+## 从源码开发
+
+贡献者仍可从 checkout 构建本地镜像并以可编辑方式安装 CLI：
+
+```bash
+cp .env.example .env
+scripts/dev.sh --detach
+python3 -m venv .venv
+.venv/bin/pip install -e 'backend[dev]'
+```
+
+源码部署使用根目录 `.env`，Release 安装则使用
+`~/.nico/config/deployment.env`；不要把任一实际 Secret 文件提交到 Git。
+
+## 发布边界
+
+面向 `main` 的 Pull Request 和进入 `main` 的 push 只运行 Test workflow。
+只有与包版本一致的 `vX.Y.Z` Tag 才触发 Release workflow；它复用相同测试门，
+随后发布版本化的 backend、Hermes 和 web GHCR 镜像，再创建带校验和的 GitHub
+Release。首次公开发布前，维护者还必须确认三个 GHCR Package 允许匿名拉取。
+
+这仍是 Alpha 的本机/受信网络部署路径。它没有增加生产身份认证、备份、
+Secret Manager、镜像签名、Kubernetes Manifest 或公网加固。

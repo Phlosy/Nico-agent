@@ -1,0 +1,14 @@
+captured_at_utc=2026-07-19T10:19:51Z
+git_revision=f66b28e42631cb47cc4fb76bd3f9d0dea727cdf8
+python=3.12.7
+nico=0.2.0
+docker=29.3.0
+docker_compose=5.1.0
+alembic_head=20260718_0016
+api=running,healthy
+postgres=running,healthy
+redis=running,healthy
+minio=running,healthy
+sandbox_runner=running,healthy
+worker=running
+

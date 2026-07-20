@@ -1,0 +1,1 @@
+NOT_APPLICABLE: Goal A intentionally contains no Web Console or static UI. Browser screenshots begin when Goal J implements real API-backed pages.

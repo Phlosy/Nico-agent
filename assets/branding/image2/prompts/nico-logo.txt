@@ -1,0 +1,11 @@
+Use case: production UI pixel sprite
+Asset type: refined Image2-authored pixel-art brand avatar
+Asset: Nico blue-golden-white pixel kitten avatar (nico-logo)
+Input images: Image 1 is the rejected first pixel-art draft and controls only the handcrafted pixel density, frontal expression, and overall visual language. Image 2 is a real kitten appearance reference and controls only round facial anatomy plus natural blue-gray, muted warm-gold, and cream-white coat distribution.
+Primary request: keep the successful pixel-art character identity of Image 1, but make a new clean logo composition with the complete head and only a short rounded upper-chest tuft fully visible and fully surrounded by backdrop.
+Subject: one direct front-facing round British Shorthair kitten avatar; compact upright ears; plush desaturated steel-blue-gray crown and outer cheeks; restrained beige-gold ticking around forehead and cheek edges; a clear cream-white forehead blaze, white muzzle, lower cheeks and small chest bib; dusty-pink nose; gentle olive-gray eyes; calm curious expression.
+Style: premium handcrafted 16-bit pixel art; crisp square pixel clusters; deliberate 4-8 pixel color blocks at 512 x 512; dark charcoal stepped outline; restrained palette; hard pixel steps; no smooth gradients and no antialiased painting.
+Composition: exact 1 x 1 sprite cell; centered symmetrical bust occupying about 68 percent of the canvas width and 76 percent of its height; both ears, both outer cheeks, chin, and a short rounded white chest tuft entirely visible; at least 10 percent flat backdrop padding on every side including below the chest; strong silhouette readable at 64 x 64 pixels.
+Backdrop: perfectly flat solid #ff00ff chroma-key background on every empty pixel.
+Constraints: only one kitten; preserve visible white facial areas; outer coat is clearly muted gray-blue, never saturated cobalt; warm gold appears only as soft ticking; no part of the kitten touches any canvas edge.
+Avoid: cropped torso, cut-off chest, full body, side view, floor, cast shadow, labels, letters, logo, watermark, separators, background texture or gradient, props, circuitry, armor, saturated blue, photorealism, vector art, smooth 3D rendering, blurry antialiasing, or #ff00ff inside the subject.

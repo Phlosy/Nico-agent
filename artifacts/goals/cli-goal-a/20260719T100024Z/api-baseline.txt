@@ -1,0 +1,6 @@
+{"status":"ready","checked_at":"2026-07-19T10:02:16.843876Z","components":{"postgres":{"status":"up","latency_ms":6.389,"detail":null},"redis":{"status":"up","latency_ms":2.552,"detail":null},"minio":{"status":"up","latency_ms":4.334,"detail":null}}}
+path_count 79
+conversation_paths []
+sse_paths ['/api/v1/runs/{run_id}/events/stream']
+artifact_paths ['/api/v1/runs/{run_id}/artifacts', '/api/v1/runs/{run_id}/artifacts/{artifact_id}/content']
+approval_paths ['/api/v1/growth-approvals/{approval_id}', '/api/v1/growth-approvals/{approval_id}/cancel', '/api/v1/growth-approvals/{approval_id}/decision', '/api/v1/memories/{memory_id}/approvals', '/api/v1/skills/{skill_id}/versions/{version_id}/approvals']

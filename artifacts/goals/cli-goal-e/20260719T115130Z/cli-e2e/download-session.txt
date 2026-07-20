@@ -1,0 +1,22 @@
+Script started on 2026-07-19 11:51:25+00:00 [COMMAND="TERM=dumb /home/node7/xpk/Nico-agent/.venv/bin/nico --config-file /tmp/tmp.y9lfMXWuwc/config.toml --no-color chat --resume 5bcfcdc5-a1e5-4717-85d1-dfccc64720e4" <not executed on terminal>]
+/download e135bba3-cf0b-47a9-ac3a-3dd7f01eb1df /tmp/tmp.y9lfMXWuwc/downloaded.txt
+/exit
+╭───────────────────────────────── Nico Agent ─────────────────────────────────╮
+│     .-====-.    Agent   Nico Demo Agent                                      │
+│    / /\_/\ \    Version 1                                                    │
+│   | ( o.o ) |   Runtime mock                                                 │
+│   |  > ^ <  |   Project Nico Demo                                            │
+│    '-====-'     Tools   policy default                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[?12l[?25hyou › /download e135bba3-cf0b-47a9-ac3a-3dd7f01eb1df /tmp/tmp.y9lfMXWuwc/downloaded.txt
+╭──────────────────────────── Artifact downloaded ─────────────────────────────╮
+│ {                                                                            │
+│   "artifact_id": "e135bba3-cf0b-47a9-ac3a-3dd7f01eb1df",                     │
+│   "path": "/tmp/tmp.y9lfMXWuwc/downloaded.txt",                              │
+│   "content_type": "text/plain; charset=utf-8",                               │
+│   "size_bytes": 33                                                           │
+│ }                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+you › /exit
+
+Script done on 2026-07-19 11:51:26+00:00 [COMMAND_EXIT_CODE="0"]

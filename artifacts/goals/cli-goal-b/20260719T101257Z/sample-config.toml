@@ -1,0 +1,14 @@
+current_profile = "evidence"
+
+[profiles."default"]
+base_url = "http://localhost:18000"
+actor_id = "nico-cli"
+timeout_seconds = 30.0
+verify_tls = true
+
+[profiles."evidence"]
+base_url = "http://localhost:18000"
+tenant_id = "64468ffb-f471-4a8e-a451-482037d36205"
+actor_id = "evidence"
+timeout_seconds = 30.0
+verify_tls = true

@@ -1,0 +1,25 @@
+[nico] waiting for Nico API at http://localhost:18000
+[nico] Nico API is ready
+[nico] creating reusable Demo Tenant, Project and Agent
+[nico] creating a Task and Run
+[nico] waiting for Worker to complete Run 196aeb52-0809-4945-ba08-193220e0abea
+
+Nico Demo completed
+-------------------
+Run ID:    196aeb52-0809-4945-ba08-193220e0abea
+Status:    completed
+Runtime:   mock 1.0
+Events:    17
+Result:
+{
+  "message": "Nico completed a recoverable, auditable demo Run.",
+  "runtime": "mock",
+  "summary": "AgentVersion -> Task -> Run -> Worker -> Result"
+}
+Artifact:  not produced by this Mock Runtime demo
+
+Console:    http://localhost:18080
+Run API:    http://localhost:18000/api/v1/runs/196aeb52-0809-4945-ba08-193220e0abea
+Events API: http://localhost:18000/api/v1/runs/196aeb52-0809-4945-ba08-193220e0abea/events
+Swagger:    http://localhost:18000/docs
+Tenant ID:  64468ffb-f471-4a8e-a451-482037d36205
