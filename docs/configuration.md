@@ -16,23 +16,24 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COMPOSE_PROJECT_NAME` | `nico-agent-platform` | Compose resource prefix |
+| `COMPOSE_PROJECT_NAME` | `nico-agent-platform` | Compose resource prefix；本地 Release 演练使用 `nico-agent-local-release` |
 | `NICO_BACKEND_IMAGE` | `nico-agent-backend:local` | API、Native Worker 与辅助服务镜像；Release 安装器固定为版本 Tag |
 | `NICO_HERMES_IMAGE` | `nico-agent-hermes:local` | 可选 Hermes Worker 镜像；Release 安装器固定为版本 Tag |
 | `NICO_WEB_IMAGE` | `nico-agent-web:local` | Console 镜像；Release 安装器固定为版本 Tag |
 | `NICO_RUNTIME` | `native` | `nico-service` 选择的已安装 Worker Profile：`native` 或 `hermes` |
+| `NICO_PULL_POLICY` | `always` | Release 服务镜像拉取策略；`make install` 的本地演练固定为 `never` |
 | `POSTGRES_DB` | `nico_agent` | Platform database |
 | `POSTGRES_USER` | `nico` | Initial database owner |
 | `POSTGRES_PASSWORD` | `nico-change-me` | Initial database password |
-| `POSTGRES_PORT` | `15432` | Published PostgreSQL port |
-| `REDIS_PORT` | `16379` | Published Redis port |
+| `POSTGRES_PORT` | `15432` | Published PostgreSQL port；本地 Release 演练使用 `25432` |
+| `REDIS_PORT` | `16379` | Published Redis port；本地 Release 演练使用 `26379` |
 | `MINIO_ROOT_USER` | `nico-minio` | MinIO administrator name |
 | `MINIO_ROOT_PASSWORD` | `nico-minio-change-me` | MinIO administrator password |
 | `MINIO_BUCKET` | `nico-artifacts` | Provisioned private bucket |
-| `MINIO_API_PORT` | `19010` | Published MinIO API port |
-| `MINIO_CONSOLE_PORT` | `19011` | Published MinIO Console port |
-| `API_PORT` | `18000` | Published Nico API port |
-| `WEB_PORT` | `18080` | Published Console port |
+| `MINIO_API_PORT` | `19010` | Published MinIO API port；本地 Release 演练使用 `29010` |
+| `MINIO_CONSOLE_PORT` | `19011` | Published MinIO Console port；本地 Release 演练使用 `29011` |
+| `API_PORT` | `18000` | Published Nico API port；本地 Release 演练使用 `28000` |
+| `WEB_PORT` | `18080` | Published Console port；本地 Release 演练使用 `28080` |
 | `NICO_LOG_LEVEL` | `INFO` | Python log level |
 | `NICO_DEPENDENCY_TIMEOUT_SECONDS` | `2` | Health-probe dependency timeout |
 | `NICO_ARTIFACT_MAX_BYTES` | `10485760` | Maximum bytes accepted for one Artifact |

@@ -134,6 +134,40 @@ nico-service logs
 `nico chat` 命令。完整安装、固定版本、Hermes、升级和移除说明见
 [安装与部署](docs/installation.md)。
 
+### 发布前在本地运行同一安装链路
+
+无需先创建 GitHub Release。`make release` 会在本机构建三个版本化镜像、
+真实 CLI wheel、安装器、bundle 和 `SHA256SUMS`；`make install` 使用同一个
+`install.sh` 安装并启动它们：
+
+```bash
+make release
+make install
+```
+
+也可以只运行 `make install`。如果当前版本的完整资产或本地镜像不存在，它会
+先自动执行 `make release`；都存在时则直接复用。这个目标不会创建 Git Tag、
+不会上传 GitHub，也不会从 GHCR 拉取镜像。为了不接管正在运行的源码开发栈，
+本地安装使用独立的 `nico-agent-local-release` Compose 项目；API 和 Web 默认在
+<http://localhost:28000> 与 <http://localhost:28080>。只验证安装而不启动服务：
+
+```bash
+make install INSTALL_ARGS="--no-start --non-interactive"
+```
+
+本地验证 Hermes 安装链路：
+
+```bash
+OPENROUTER_API_KEY='<secret>' \
+  make install RUNTIME=hermes PROVIDER=openrouter
+```
+
+停止本地 Release 服务并移除 `~/.nico` 与对应命令链接（保留 Docker 数据卷）：
+
+```bash
+make uninstall
+```
+
 ### 从源码启动（贡献者）
 
 ```bash

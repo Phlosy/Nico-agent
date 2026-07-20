@@ -101,7 +101,13 @@ up() {
   else
     compose --profile native stop worker >/dev/null
   fi
-  compose --profile "$selected" pull
+  local pull_policy
+  pull_policy="$(env_value NICO_PULL_POLICY always)"
+  case "$pull_policy" in
+    always) compose --profile "$selected" pull ;;
+    never) log "using preloaded local images" ;;
+    *) die "NICO_PULL_POLICY must be always or never in $ENV_FILE" ;;
+  esac
   compose --profile "$selected" up --detach --no-build --remove-orphans
   wait_for_url "http://localhost:$(env_value API_PORT 18000)/api/v1/health/ready" "API"
   wait_for_url "http://localhost:$(env_value WEB_PORT 18080)/healthz" "Web"
@@ -122,7 +128,7 @@ usage() {
 Usage: nico-service <command>
 
 Commands:
-  up              Pull images and start the configured Runtime profile
+  up              Prepare images and start the configured Runtime profile
   down            Stop containers and preserve data volumes
   restart         Restart the configured Runtime profile
   status          Show service status

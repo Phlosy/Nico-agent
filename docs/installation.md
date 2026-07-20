@@ -15,6 +15,74 @@ Nico Agent 通过 GitHub Release 安装器同时部署 Docker Compose 服务栈�
 安装器会检查依赖和 Docker daemon，但不会申请 root 权限、自动安装 Docker，
 也不会修改 Docker daemon 配置。
 
+## 在 Tag 前本地验证完整安装链路
+
+仓库根目录的 Makefile 可以生成与 GitHub Release 相同结构的安装资产，并用
+同一个 `install.sh` 完成安装。安装阶段会使用本地版本化镜像，并把拉取策略
+设为 `never`。本地服务使用独立的 `nico-agent-local-release` Compose 项目和
+端口，避免复用源码开发栈的数据卷：
+
+```bash
+make release
+make install
+```
+
+`make release` 会完成以下工作：
+
+1. 构建 `nico-agent-backend:<tag>`、`nico-agent-hermes:<tag>` 和
+   `nico-agent-web:<tag>`；
+2. 从当前源码构建真实 CLI wheel；
+3. 调用 `scripts/package-release.sh` 生成 `dist/release/install.sh`、bundle、
+   `version.txt` 和 `SHA256SUMS`。
+
+`make install` 会检查这四个资产、内部版本和三个本地镜像。它们缺失或不完整
+时先自动运行 `make release`，否则直接复用，然后调用：
+
+```bash
+dist/release/install.sh \
+  --version v0.2.0 \
+  --bundle dist/release/nico-agent-bundle.tar.gz \
+  --local-images
+```
+
+本地安装的 API 默认为 <http://localhost:28000>，Web Console 默认为
+<http://localhost:28080>。PostgreSQL、Redis 和 MinIO 也分别使用独立的
+`25432`、`26379`、`29010/29011` 端口。
+
+因此可以直接从干净 checkout 执行：
+
+```bash
+make install
+```
+
+只验证本地打包和 CLI 安装而不启动服务：
+
+```bash
+make install \
+  NICO_HOME=/tmp/nico-test \
+  NICO_BIN_DIR=/tmp/nico-test/bin \
+  INSTALL_ARGS="--no-start --non-interactive"
+```
+
+测试 Hermes 安装路径时，使用与远程安装相同的 Provider 规则：
+
+```bash
+OPENROUTER_API_KEY='<由 Secret Store 注入的值>' \
+  make install RUNTIME=hermes PROVIDER=openrouter
+```
+
+`make release` 只是本地构建，不会创建 Git Tag、GitHub Release 或上传镜像。
+正式发布仍只由 `v*` Tag 触发。
+
+完成本地演练后，可以停止 Release 服务并删除程序文件：
+
+```bash
+make uninstall
+```
+
+该命令只删除指向安装目录的 `nico`/`nico-service` 链接，并默认保留 Docker
+数据卷。需要删除数据时，应在卸载前先执行 `nico-service purge --yes`。
+
 ## 安装最新版本
 
 ```bash
@@ -59,6 +127,8 @@ bash install.sh --version v0.2.0 --no-start
 
 自动化环境可以使用 `--non-interactive`，并通过 `--dir` 与 `--bin-dir`
 改变数据目录和命令链接目录。运行 `bash install.sh --help` 查看完整参数。
+`--local-images` 专用于带明确 `--version` 和 `--bundle` 的本地 Release 演练，
+普通用户不需要手工传入它。
 
 ## 使用 Hermes Runtime
 
@@ -128,7 +198,10 @@ curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install
 
 ## 移除
 
-保留数据卷并移除程序文件：
+从仓库执行的本地 Release 安装可以直接运行 `make uninstall`。它会先停止服务，
+验证安装目录标记，再移除程序文件；不会删除源码开发栈或 Docker 数据卷。
+
+手工移除或通过远程 Release 安装时，保留数据卷并移除程序文件：
 
 ```bash
 nico-service down

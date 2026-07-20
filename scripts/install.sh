@@ -14,6 +14,14 @@ RUN_DEMO=true
 NON_INTERACTIVE=false
 DRY_RUN=false
 LOCAL_BUNDLE=""
+LOCAL_IMAGES=false
+LOCAL_COMPOSE_PROJECT_NAME="${NICO_LOCAL_COMPOSE_PROJECT_NAME:-nico-agent-local-release}"
+LOCAL_POSTGRES_PORT="${NICO_LOCAL_POSTGRES_PORT:-25432}"
+LOCAL_REDIS_PORT="${NICO_LOCAL_REDIS_PORT:-26379}"
+LOCAL_MINIO_API_PORT="${NICO_LOCAL_MINIO_API_PORT:-29010}"
+LOCAL_MINIO_CONSOLE_PORT="${NICO_LOCAL_MINIO_CONSOLE_PORT:-29011}"
+LOCAL_API_PORT="${NICO_LOCAL_API_PORT:-28000}"
+LOCAL_WEB_PORT="${NICO_LOCAL_WEB_PORT:-28080}"
 INSTALL_TEMPORARY=""
 
 log() {
@@ -45,6 +53,7 @@ Options:
   --dir PATH              Nico data and release directory (default: ~/.nico)
   --bin-dir PATH          Command link directory (default: ~/.local/bin)
   --bundle PATH           Install a local release bundle instead of downloading
+  --local-images          Use locally built versioned images and never pull GHCR
   --no-start              Install files and CLI without starting services
   --skip-demo             Start services without bootstrapping Demo resources
   --non-interactive       Never prompt; fail when requested input is unavailable
@@ -101,6 +110,10 @@ parse_args() {
         LOCAL_BUNDLE="$2"
         shift 2
         ;;
+      --local-images)
+        LOCAL_IMAGES=true
+        shift
+        ;;
       --no-start)
         START_SERVICES=false
         shift
@@ -144,6 +157,9 @@ parse_args() {
   fi
   if [[ -n "$LOCAL_BUNDLE" && "$REQUESTED_VERSION" == "latest" ]]; then
     die "--bundle requires an explicit --version"
+  fi
+  if [[ "$LOCAL_IMAGES" == true && -z "$LOCAL_BUNDLE" ]]; then
+    die "--local-images requires --bundle"
   fi
 }
 
@@ -349,12 +365,28 @@ prepare_environment() {
   fi
 
   set_env_value "$env_file" NICO_RUNTIME "$RUNTIME" replace
+  local image_prefix pull_policy
+  if [[ "$LOCAL_IMAGES" == true ]]; then
+    image_prefix="nico-agent"
+    pull_policy=never
+    set_env_value "$env_file" COMPOSE_PROJECT_NAME "$LOCAL_COMPOSE_PROJECT_NAME" replace
+    set_env_value "$env_file" POSTGRES_PORT "$LOCAL_POSTGRES_PORT" replace
+    set_env_value "$env_file" REDIS_PORT "$LOCAL_REDIS_PORT" replace
+    set_env_value "$env_file" MINIO_API_PORT "$LOCAL_MINIO_API_PORT" replace
+    set_env_value "$env_file" MINIO_CONSOLE_PORT "$LOCAL_MINIO_CONSOLE_PORT" replace
+    set_env_value "$env_file" API_PORT "$LOCAL_API_PORT" replace
+    set_env_value "$env_file" WEB_PORT "$LOCAL_WEB_PORT" replace
+  else
+    image_prefix="ghcr.io/phlosy/nico-agent"
+    pull_policy=always
+  fi
   set_env_value "$env_file" NICO_BACKEND_IMAGE \
-    "ghcr.io/phlosy/nico-agent-backend:${RESOLVED_VERSION}" replace
+    "${image_prefix}-backend:${RESOLVED_VERSION}" replace
   set_env_value "$env_file" NICO_HERMES_IMAGE \
-    "ghcr.io/phlosy/nico-agent-hermes:${RESOLVED_VERSION}" replace
+    "${image_prefix}-hermes:${RESOLVED_VERSION}" replace
   set_env_value "$env_file" NICO_WEB_IMAGE \
-    "ghcr.io/phlosy/nico-agent-web:${RESOLVED_VERSION}" replace
+    "${image_prefix}-web:${RESOLVED_VERSION}" replace
+  set_env_value "$env_file" NICO_PULL_POLICY "$pull_policy" replace
   configure_provider_secret "$env_file"
   chmod 600 "$env_file"
 }
@@ -516,6 +548,14 @@ main() {
     printf 'version=%s\n' "$REQUESTED_VERSION"
     printf 'runtime=%s\n' "$RUNTIME"
     printf 'provider=%s\n' "${PROVIDER:-none}"
+    if [[ "$LOCAL_IMAGES" == true ]]; then
+      printf 'image_source=local\n'
+      printf 'compose_project=%s\n' "$LOCAL_COMPOSE_PROJECT_NAME"
+      printf 'api_url=http://localhost:%s\n' "$LOCAL_API_PORT"
+      printf 'web_url=http://localhost:%s\n' "$LOCAL_WEB_PORT"
+    else
+      printf 'image_source=ghcr\n'
+    fi
     printf 'home=%s\n' "$NICO_HOME"
     printf 'bin_dir=%s\n' "$BIN_DIR"
     printf 'start=%s\n' "$START_SERVICES"

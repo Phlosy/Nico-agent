@@ -116,11 +116,55 @@ DRY_RUN="$({
 assert_contains "$DRY_RUN" "version=v0.2.0" "dry-run version"
 assert_contains "$DRY_RUN" "runtime=hermes" "dry-run runtime"
 assert_contains "$DRY_RUN" "start=false" "dry-run no-start"
+if ! LOCAL_DRY_RUN="$({
+  NICO_HOME="$TMP_DIR/local-nico-home" bash "$ROOT_DIR/scripts/install.sh" \
+    --dry-run --local-images --version v0.2.0 --bundle "$TMP_DIR/unused-bundle.tar.gz" \
+    --no-start --non-interactive
+} 2>&1)"; then
+  fail "installer rejected local image mode: $LOCAL_DRY_RUN"
+fi
+assert_contains "$LOCAL_DRY_RUN" "image_source=local" "dry-run local image source"
+assert_contains "$LOCAL_DRY_RUN" \
+  "compose_project=nico-agent-local-release" "dry-run local Compose project"
+assert_contains "$LOCAL_DRY_RUN" "api_url=http://localhost:28000" "dry-run local API URL"
+assert_contains "$LOCAL_DRY_RUN" "web_url=http://localhost:28080" "dry-run local Web URL"
 if bash "$ROOT_DIR/scripts/install.sh" --dry-run --runtime invalid >/dev/null 2>&1; then
   fail "installer accepted an invalid runtime"
 fi
 NICO_HOME="$TMP_DIR/missing-install" bash "$ROOT_DIR/scripts/nico-service.sh" --help \
   >/dev/null || fail "service help required an existing installation"
+
+LOCAL_ENV_FILE="$TMP_DIR/local-deployment.env"
+LOCAL_IMAGES=true
+RESOLVED_VERSION=v0.2.0
+RUNTIME=native
+prepare_environment "$LOCAL_ENV_FILE" "$ROOT_DIR/.env.example"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "NICO_BACKEND_IMAGE=nico-agent-backend:v0.2.0" "local backend image"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "NICO_HERMES_IMAGE=nico-agent-hermes:v0.2.0" "local Hermes image"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "NICO_WEB_IMAGE=nico-agent-web:v0.2.0" "local web image"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "NICO_PULL_POLICY=never" "local pull policy"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "COMPOSE_PROJECT_NAME=nico-agent-local-release" "local Compose project isolation"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "POSTGRES_PORT=25432" "local PostgreSQL port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "REDIS_PORT=26379" "local Redis port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "MINIO_API_PORT=29010" "local MinIO API port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "MINIO_CONSOLE_PORT=29011" "local MinIO Console port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "API_PORT=28000" "local API port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" "WEB_PORT=28080" "local Web port"
+LOCAL_IMAGES=false
+
+REMOTE_ENV_FILE="$TMP_DIR/remote-deployment.env"
+prepare_environment "$REMOTE_ENV_FILE" "$ROOT_DIR/.env.example"
+assert_contains "$(cat "$REMOTE_ENV_FILE")" \
+  "NICO_BACKEND_IMAGE=ghcr.io/phlosy/nico-agent-backend:v0.2.0" "remote backend image"
+assert_contains "$(cat "$REMOTE_ENV_FILE")" "NICO_PULL_POLICY=always" "remote pull policy"
+assert_contains "$(cat "$REMOTE_ENV_FILE")" \
+  "COMPOSE_PROJECT_NAME=nico-agent-platform" "remote Compose project"
+assert_contains "$(cat "$REMOTE_ENV_FILE")" "API_PORT=18000" "remote API port"
 
 FAKE_WHEEL="$TMP_DIR/nico_agent_platform-0.2.0-py3-none-any.whl"
 printf 'fake wheel for archive contract\n' > "$FAKE_WHEEL"
@@ -206,6 +250,150 @@ if "$ROOT_DIR/scripts/package-release.sh" \
   fail "release packaging accepted a tag/package version mismatch"
 fi
 
+FAKE_BIN="$TMP_DIR/fake-bin"
+FAKE_DOCKER_LOG="$TMP_DIR/fake-docker.log"
+mkdir -p "$FAKE_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$FAKE_DOCKER_LOG"' \
+  'if [[ "$*" == "compose version --short" ]]; then printf "2.24.4\n"; fi' \
+  'exit 0' \
+  > "$FAKE_BIN/docker"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$FAKE_BIN/curl"
+chmod 755 "$FAKE_BIN/docker" "$FAKE_BIN/curl"
+
+: > "$FAKE_DOCKER_LOG"
+if FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+  make --no-print-directory -C "$ROOT_DIR" release \
+    TAG=v9.9.9 DOCKER=docker \
+    RELEASE_DIR="$TMP_DIR/invalid-tag-release" \
+    WHEEL_DIR="$TMP_DIR/invalid-tag-wheels" >/dev/null 2>&1; then
+  fail "make release accepted a tag/package version mismatch"
+fi
+[[ ! -s "$FAKE_DOCKER_LOG" ]] || fail \
+  "make release built images before validating the release version"
+
+SERVICE_HOME="$TMP_DIR/service-home"
+mkdir -p "$SERVICE_HOME/current" "$SERVICE_HOME/config"
+printf 'NICO_RUNTIME=native\nNICO_PULL_POLICY=never\n' \
+  > "$SERVICE_HOME/config/deployment.env"
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" NICO_HOME="$SERVICE_HOME" \
+  "$ROOT_DIR/scripts/nico-service.sh" up >/dev/null
+if grep -Eq '(^| )pull($| )' "$FAKE_DOCKER_LOG"; then
+  fail "local service startup attempted to pull images"
+fi
+grep -q ' up --detach --no-build ' "$FAKE_DOCKER_LOG" || fail \
+  "local service startup did not use the installed release Compose stack"
+
+: > "$FAKE_DOCKER_LOG"
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" NICO_HOME="$SERVICE_HOME" \
+  "$ROOT_DIR/scripts/nico-service.sh" down >/dev/null
+grep -q ' down --remove-orphans' "$FAKE_DOCKER_LOG" || fail \
+  "service shutdown did not use the installed release Compose stack"
+if grep -q -- '--volumes' "$FAKE_DOCKER_LOG"; then
+  fail "service shutdown removed Docker data volumes"
+fi
+
+MAKE_RELEASE_DIR="$TMP_DIR/make-release"
+MAKE_INSTALL_LOG="$TMP_DIR/make-install.log"
+mkdir -p "$MAKE_RELEASE_DIR"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" > "$MAKE_INSTALL_LOG"' \
+  > "$MAKE_RELEASE_DIR/install.sh"
+chmod 755 "$MAKE_RELEASE_DIR/install.sh"
+printf 'bundle\n' > "$MAKE_RELEASE_DIR/nico-agent-bundle.tar.gz"
+printf 'checksums\n' > "$MAKE_RELEASE_DIR/SHA256SUMS"
+printf 'v0.2.0\n' > "$MAKE_RELEASE_DIR/version.txt"
+: > "$FAKE_DOCKER_LOG"
+MAKE_INSTALL_LOG="$MAKE_INSTALL_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+  PATH="$FAKE_BIN:$PATH" make --no-print-directory -C "$ROOT_DIR" install \
+    RELEASE_DIR="$MAKE_RELEASE_DIR" DOCKER=docker \
+    NICO_HOME="$TMP_DIR/make-home" NICO_BIN_DIR="$TMP_DIR/make-bin" \
+    INSTALL_ARGS='--no-start --non-interactive' >/dev/null
+MAKE_ARGS="$(cat "$MAKE_INSTALL_LOG")"
+assert_contains "$MAKE_ARGS" "--bundle $MAKE_RELEASE_DIR/nico-agent-bundle.tar.gz" \
+  "make install local bundle"
+assert_contains "$MAKE_ARGS" "--local-images" "make install local image mode"
+assert_contains "$MAKE_ARGS" "--runtime native" "make install Runtime"
+assert_eq "$(wc -l < "$FAKE_DOCKER_LOG" | tr -d '[:space:]')" "1" \
+  "make install image reuse checks"
+
+MISSING_RELEASE_DIR="$TMP_DIR/missing-make-release"
+FAKE_SUBMAKE="$TMP_DIR/fake-submake"
+FAKE_SUBMAKE_LOG="$TMP_DIR/fake-submake.log"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" > "$FAKE_SUBMAKE_LOG"' \
+  'mkdir -p "$FAKE_RELEASE_DIR"' \
+  'cp "$FAKE_INSTALL_TEMPLATE" "$FAKE_RELEASE_DIR/install.sh"' \
+  'printf "bundle\n" > "$FAKE_RELEASE_DIR/nico-agent-bundle.tar.gz"' \
+  'printf "checksums\n" > "$FAKE_RELEASE_DIR/SHA256SUMS"' \
+  'printf "v0.2.0\n" > "$FAKE_RELEASE_DIR/version.txt"' \
+  > "$FAKE_SUBMAKE"
+chmod 755 "$FAKE_SUBMAKE"
+FAKE_RELEASE_DIR="$MISSING_RELEASE_DIR" \
+FAKE_INSTALL_TEMPLATE="$MAKE_RELEASE_DIR/install.sh" \
+FAKE_SUBMAKE_LOG="$FAKE_SUBMAKE_LOG" MAKE_INSTALL_LOG="$MAKE_INSTALL_LOG" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+  make --no-print-directory -C "$ROOT_DIR" install \
+    MAKE="$FAKE_SUBMAKE" RELEASE_DIR="$MISSING_RELEASE_DIR" DOCKER=docker \
+    NICO_HOME="$TMP_DIR/generated-make-home" NICO_BIN_DIR="$TMP_DIR/generated-make-bin" \
+    INSTALL_ARGS='--no-start --non-interactive' >/dev/null
+assert_contains "$(cat "$FAKE_SUBMAKE_LOG")" "release" \
+  "make install generates a missing release"
+assert_contains "$(cat "$MAKE_INSTALL_LOG")" \
+  "--bundle $MISSING_RELEASE_DIR/nico-agent-bundle.tar.gz" \
+  "make install uses the generated bundle"
+
+UNINSTALL_HOME="$TMP_DIR/uninstall-home"
+UNINSTALL_BIN="$TMP_DIR/uninstall-bin"
+UNINSTALL_LOG="$TMP_DIR/uninstall.log"
+mkdir -p \
+  "$UNINSTALL_HOME/bin" \
+  "$UNINSTALL_HOME/config" \
+  "$UNINSTALL_HOME/releases/v0.2.0" \
+  "$UNINSTALL_BIN"
+printf 'COMPOSE_PROJECT_NAME=nico-agent-local-release\n' \
+  > "$UNINSTALL_HOME/config/deployment.env"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" > "$UNINSTALL_LOG"' \
+  > "$UNINSTALL_HOME/bin/nico-service"
+chmod 755 "$UNINSTALL_HOME/bin/nico-service"
+ln -s "$UNINSTALL_HOME/releases/v0.2.0" "$UNINSTALL_HOME/current"
+ln -s "$UNINSTALL_HOME/current/venv/bin/nico" "$UNINSTALL_BIN/nico"
+ln -s "$UNINSTALL_HOME/bin/nico-service" "$UNINSTALL_BIN/nico-service"
+printf 'preserve me\n' > "$UNINSTALL_BIN/operator-file"
+
+UNINSTALL_LOG="$UNINSTALL_LOG" make --no-print-directory -C "$ROOT_DIR" uninstall \
+  NICO_HOME="$UNINSTALL_HOME" NICO_BIN_DIR="$UNINSTALL_BIN" >/dev/null
+assert_contains "$(cat "$UNINSTALL_LOG")" "down" "make uninstall stops installed services"
+[[ ! -e "$UNINSTALL_HOME" ]] || fail "make uninstall retained the installation directory"
+[[ ! -e "$UNINSTALL_BIN/nico" && ! -L "$UNINSTALL_BIN/nico" ]] || fail \
+  "make uninstall retained the Nico CLI link"
+[[ ! -e "$UNINSTALL_BIN/nico-service" && ! -L "$UNINSTALL_BIN/nico-service" ]] || fail \
+  "make uninstall retained the Nico service link"
+[[ -f "$UNINSTALL_BIN/operator-file" ]] || fail \
+  "make uninstall removed an unrelated bin directory file"
+printf 'operator command\n' > "$UNINSTALL_BIN/nico"
+make --no-print-directory -C "$ROOT_DIR" uninstall \
+  NICO_HOME="$UNINSTALL_HOME" NICO_BIN_DIR="$UNINSTALL_BIN" >/dev/null || fail \
+  "make uninstall is not idempotent"
+[[ -f "$UNINSTALL_BIN/nico" && ! -L "$UNINSTALL_BIN/nico" ]] || fail \
+  "make uninstall removed a non-symlink Nico command"
+
+UNSAFE_UNINSTALL_HOME="$TMP_DIR/not-a-nico-install"
+mkdir -p "$UNSAFE_UNINSTALL_HOME"
+printf 'operator data\n' > "$UNSAFE_UNINSTALL_HOME/sentinel"
+if make --no-print-directory -C "$ROOT_DIR" uninstall \
+  NICO_HOME="$UNSAFE_UNINSTALL_HOME" NICO_BIN_DIR="$UNINSTALL_BIN" \
+  >/dev/null 2>&1; then
+  fail "make uninstall removed an unrecognized directory"
+fi
+[[ -f "$UNSAFE_UNINSTALL_HOME/sentinel" ]] || fail \
+  "make uninstall deleted an unrecognized directory"
+
 command -v docker >/dev/null 2>&1 || fail "Docker is required for Compose contract tests"
 docker compose version >/dev/null 2>&1 || fail "Docker Compose is required for contract tests"
 COMPOSE=(docker compose --project-directory "$ROOT_DIR" --file "$ROOT_DIR/docker-compose.yml")
@@ -252,6 +440,7 @@ import sys
 root = Path(sys.argv[1])
 ci = (root / ".github/workflows/ci.yml").read_text()
 release = (root / ".github/workflows/release.yml").read_text()
+pyproject = (root / "backend/pyproject.toml").read_text()
 
 assert re.search(r"push:\s*\n\s+branches:\s*\[main\]", ci)
 assert re.search(r"pull_request:\s*\n\s+branches:\s*\[main\]", ci)
@@ -271,6 +460,17 @@ assert "gh release" in release
 assert "--clobber" not in release
 assert "actionlint/cmd/actionlint@v1.7.12" in ci
 assert "!reset null" in (root / "deploy/docker-compose.release.yml").read_text()
+assert "NICO_PULL_POLICY" in (root / "deploy/docker-compose.release.yml").read_text()
+
+makefile = (root / "Makefile").read_text()
+assert re.search(r"^release:", makefile, re.MULTILINE)
+assert re.search(r"^install:", makefile, re.MULTILINE)
+assert re.search(r"^uninstall:", makefile, re.MULTILINE)
+assert "--local-images" in makefile
+assert "scripts/package-release.sh" in makefile
+assert "scripts/uninstall.sh" in makefile
+assert '"prompt-toolkit==3.0.52"' in pyproject
+assert '"rich==14.3.3"' in pyproject
 
 for workflow in (ci, release):
     for action in re.findall(r"uses:\s+([^\s#]+)", workflow):

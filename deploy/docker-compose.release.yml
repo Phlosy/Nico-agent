@@ -1,37 +1,37 @@
 services:
   api:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   worker:
     build: !reset null
     profiles: ["native"]
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   worker-hermes:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   worker-hermes-contract:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   fake-model:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   worker-state-init:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   hermes-state-init:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   sandbox-runner:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}
 
   web:
     build: !reset null
-    pull_policy: always
+    pull_policy: ${NICO_PULL_POLICY:-always}

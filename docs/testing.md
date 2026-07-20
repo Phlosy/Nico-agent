@@ -5,7 +5,8 @@
 | Scope | Command | Coverage |
 | --- | --- | --- |
 | Standard local gate | `scripts/test.sh` | Ruff check/format, backend unit tests, frontend tests, TypeScript, and production build |
-| Installer/Release contracts | `scripts/test-install.sh` | 参数、Secret 保留、校验和、bundle allowlist、Compose Runtime 互斥及 CI trigger/权限 |
+| Installer/Release contracts | `scripts/test-install.sh` | 参数、Secret 保留、校验和、bundle allowlist、安全卸载、Compose Runtime 互斥及 CI trigger/权限 |
+| Local Release rehearsal | `make release && make install` | 构建本地版本化镜像和真实 Release 资产，再通过正式安装器启动完整服务栈 |
 | Backend unit tests | `.venv/bin/pytest backend/tests/unit` | Domain state, Runtime, tools, tenant isolation contracts, Memory, and Skill lifecycle |
 | Frontend tests | `npm --prefix frontend test` | Health states plus Run Inspector deep link, ordering, loading/empty/error/partial/cancelled/redacted and hostile-text behavior |
 | Real dependencies | `scripts/test-integration.sh` | Alembic replay, PostgreSQL RLS, Worker claims, Runtime/Tool persistence, and growth invariants |
