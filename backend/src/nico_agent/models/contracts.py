@@ -96,6 +96,28 @@ class ModelResponse(BaseModel):
     provider_request_id: str | None = None
 
 
+class DiscoveredModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, max_length=200)
+    capabilities: tuple[ModelCapability, ...] = ()
+
+
+class ModelDiscoveryRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    endpoint: dict[str, Any]
+    limit: int = Field(default=1000, ge=1, le=1000)
+
+
+class ModelDiscoveryResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[DiscoveredModel, ...]
+    truncated: bool = False
+
+
 @runtime_checkable
 class ModelProvider(Protocol):
     @property
@@ -104,3 +126,8 @@ class ModelProvider(Protocol):
     def describe_capabilities(self) -> frozenset[ModelCapability]: ...
 
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]: ...
+
+
+@runtime_checkable
+class ModelDiscoveryProvider(Protocol):
+    def discover(self, request: ModelDiscoveryRequest) -> Any: ...

@@ -21,7 +21,11 @@ from nico_agent.health import (
 from nico_agent.logging import configure_logging
 from nico_agent.models import ModelGateway, ModelProviderRegistry
 from nico_agent.models.gateway import RedisModelRateLimiter
-from nico_agent.models.providers import OpenAICompatibleProvider
+from nico_agent.models.providers import (
+    AnthropicMessagesProvider,
+    GoogleGeminiProvider,
+    OpenAICompatibleProvider,
+)
 from nico_agent.runtime import (
     HermesRuntimeProvider,
     MockRuntimeProvider,
@@ -100,17 +104,22 @@ async def worker_main(settings: Settings | None = None) -> None:
     service = build_health_service(runtime_settings, resources)
     database = Database(resources.engine)
     model_http = httpx.AsyncClient(follow_redirects=False, trust_env=False)
-    model_provider = OpenAICompatibleProvider(
-        client=model_http,
-        connect_timeout=runtime_settings.model_connect_timeout_seconds,
-        read_timeout=runtime_settings.model_read_timeout_seconds,
-        max_response_bytes=runtime_settings.model_max_response_bytes,
-        allow_http_loopback=runtime_settings.model_allow_http_loopback,
-        trusted_private_hosts=runtime_settings.model_trusted_private_hosts,
-        allow_http_trusted_hosts=runtime_settings.model_allow_http_trusted_hosts,
-    )
+    model_provider_options = {
+        "client": model_http,
+        "connect_timeout": runtime_settings.model_connect_timeout_seconds,
+        "read_timeout": runtime_settings.model_read_timeout_seconds,
+        "max_response_bytes": runtime_settings.model_max_response_bytes,
+        "allow_http_loopback": runtime_settings.model_allow_http_loopback,
+        "trusted_private_hosts": runtime_settings.model_trusted_private_hosts,
+        "allow_http_trusted_hosts": runtime_settings.model_allow_http_trusted_hosts,
+    }
+    model_providers = [
+        OpenAICompatibleProvider(**model_provider_options),
+        AnthropicMessagesProvider(**model_provider_options),
+        GoogleGeminiProvider(**model_provider_options),
+    ]
     model_gateway = ModelGateway(
-        ModelProviderRegistry([model_provider]),
+        ModelProviderRegistry(model_providers),
         rate_limiter=RedisModelRateLimiter(resources.redis),
         max_attempts=runtime_settings.model_max_attempts,
         retry_base_seconds=runtime_settings.model_retry_base_seconds,

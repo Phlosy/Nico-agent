@@ -1,0 +1,246 @@
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+
+from nico_agent.models import (
+    ModelDiscoveryRequest,
+    ModelGateway,
+    ModelMessage,
+    ModelRequest,
+    ModelStreamEventType,
+)
+from nico_agent.models.providers import (
+    AnthropicMessagesProvider,
+    GoogleGeminiProvider,
+    OpenAICompatibleProvider,
+)
+from nico_agent.models.registry import ModelProviderRegistry
+
+
+class FakeSecrets:
+    def resolve(self, name: str, reference: str) -> str:
+        assert name == "model_api_key"
+        assert reference == "env:NICO_MODEL_SECRET_TEST"
+        return "canary-provider-key"
+
+
+def _endpoint(protocol: str, base_url: str) -> dict:
+    return {
+        "id": "00000000-0000-0000-0000-000000000010",
+        "protocol": protocol,
+        "base_url": base_url,
+        "credential_ref": "env:NICO_MODEL_SECRET_TEST",
+        "allowed_models": [],
+        "capabilities": {"streaming": True, "tools": True},
+    }
+
+
+def _request(protocol: str, base_url: str, model: str) -> ModelRequest:
+    return ModelRequest(
+        model=model,
+        messages=(
+            ModelMessage(role="system", content="Be concise"),
+            ModelMessage(role="user", content="Hello"),
+        ),
+        endpoint=_endpoint(protocol, base_url),
+        max_output_tokens=16,
+    )
+
+
+def _client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_normalizes_stream_and_discovery_pages() -> None:
+    discovery_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal discovery_calls
+        assert request.headers["x-api-key"] == "canary-provider-key"
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        if request.method == "GET":
+            discovery_calls += 1
+            if discovery_calls == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"id": "claude-sonnet-5", "display_name": "Sonnet"}],
+                        "has_more": True,
+                        "last_id": "claude-sonnet-5",
+                    },
+                )
+            assert request.url.params["after_id"] == "claude-sonnet-5"
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "claude-opus-5"}], "has_more": False},
+            )
+
+        body = json.loads(request.content)
+        assert body["system"] == "Be concise"
+        assert body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert body["max_tokens"] == 16
+        payloads = [
+            (
+                "message_start",
+                {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 3}}},
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"},
+                },
+            ),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 1},
+                },
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        content = "".join(
+            f"event: {event}\ndata: {json.dumps(payload)}\n\n" for event, payload in payloads
+        )
+        return httpx.Response(200, headers={"request-id": "req-a"}, content=content)
+
+    provider = AnthropicMessagesProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    gateway = ModelGateway(ModelProviderRegistry([provider]), max_attempts=1)
+
+    response = await gateway.complete(
+        _request("anthropic_messages", "https://api.anthropic.com", "claude-sonnet-5")
+    )
+    discovered = await gateway.discover(
+        ModelDiscoveryRequest(
+            endpoint=_endpoint("anthropic_messages", "https://api.anthropic.com"),
+            limit=10,
+        )
+    )
+
+    assert response.text == "Hello"
+    assert response.finish_reason == "end_turn"
+    assert response.usage.total_tokens == 4
+    assert response.provider_request_id == "req-a"
+    assert [model.id for model in discovered.models] == ["claude-sonnet-5", "claude-opus-5"]
+    assert discovered.truncated is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_normalizes_stream_and_filters_non_generation_models() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-goog-api-key"] == "canary-provider-key"
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "name": "models/gemini-3.5-flash",
+                            "displayName": "Gemini Flash",
+                            "supportedGenerationMethods": ["generateContent"],
+                        },
+                        {
+                            "name": "models/embedding-001",
+                            "supportedGenerationMethods": ["embedContent"],
+                        },
+                    ]
+                },
+            )
+
+        assert request.url.path.endswith("/v1beta/models/gemini-3.5-flash:streamGenerateContent")
+        assert request.url.params["alt"] == "sse"
+        body = json.loads(request.content)
+        assert body["systemInstruction"]["parts"] == [{"text": "Be concise"}]
+        assert body["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
+        chunks = [
+            {
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "Hi"}]},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 2,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 3,
+                },
+            }
+        ]
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "req-g"},
+            content="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks),
+        )
+
+    provider = GoogleGeminiProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    gateway = ModelGateway(ModelProviderRegistry([provider]), max_attempts=1)
+
+    events = [
+        event
+        async for event in gateway.stream(
+            _request(
+                "google_gemini",
+                "https://generativelanguage.googleapis.com/v1beta",
+                "gemini-3.5-flash",
+            )
+        )
+    ]
+    discovered = await gateway.discover(
+        ModelDiscoveryRequest(
+            endpoint=_endpoint("google_gemini", "https://generativelanguage.googleapis.com/v1beta"),
+            limit=10,
+        )
+    )
+
+    assert "".join(event.text_delta or "" for event in events) == "Hi"
+    assert events[-1].type is ModelStreamEventType.RESPONSE_COMPLETED
+    assert events[-1].usage is not None and events[-1].usage.total_tokens == 3
+    assert [model.id for model in discovered.models] == ["gemini-3.5-flash"]
+
+
+@pytest.mark.asyncio
+async def test_openai_discovery_deduplicates_and_truncates() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "model-a"}, {"id": "model-a"}, {"id": "model-b"}]},
+        )
+
+    gateway = ModelGateway(
+        ModelProviderRegistry(
+            [
+                OpenAICompatibleProvider(
+                    client=_client(handler),
+                    secret_resolver=FakeSecrets(),
+                    resolver=lambda host, port: ["93.184.216.34"],
+                )
+            ]
+        )
+    )
+
+    result = await gateway.discover(
+        ModelDiscoveryRequest(
+            endpoint=_endpoint("openai_compatible", "https://models.example/v1"),
+            limit=1,
+        )
+    )
+
+    assert [model.id for model in result.models] == ["model-a"]
+    assert result.truncated is True

@@ -10,6 +10,9 @@ from typing import Any, Protocol
 
 from nico_agent.models.contracts import (
     ModelCapability,
+    ModelDiscoveryProvider,
+    ModelDiscoveryRequest,
+    ModelDiscoveryResult,
     ModelRequest,
     ModelResponse,
     ModelStreamEvent,
@@ -19,6 +22,7 @@ from nico_agent.models.contracts import (
 )
 from nico_agent.models.errors import (
     ModelCapabilityMismatch,
+    ModelDiscoveryUnavailable,
     ModelProtocolError,
     ModelProviderError,
     ModelRateLimited,
@@ -134,6 +138,19 @@ class ModelGateway:
             usage=usage,
             provider_request_id=request_id,
         )
+
+    async def discover(self, request: ModelDiscoveryRequest) -> ModelDiscoveryResult:
+        protocol = str(request.endpoint.get("protocol", ""))
+        provider = self.registry.get(protocol)
+        if not isinstance(provider, ModelDiscoveryProvider):
+            raise ModelDiscoveryUnavailable()
+        try:
+            result = await provider.discover(request)
+        except ModelProviderError as exc:
+            raise ModelDiscoveryUnavailable(exc.message) from exc
+        if not isinstance(result, ModelDiscoveryResult):
+            raise ModelProtocolError("model discovery returned an invalid result")
+        return result
 
     @staticmethod
     def _tool_call(index: int, value: dict[str, str]) -> ModelToolCall:
