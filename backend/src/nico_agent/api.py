@@ -35,6 +35,7 @@ from nico_agent.health import (
 from nico_agent.logging import configure_logging, request_id_context
 from nico_agent.model_api import router as model_router
 from nico_agent.plan_api import router as plan_router
+from nico_agent.projects.api import router as project_collaboration_router
 from nico_agent.provider_onboarding.api import router as provider_onboarding_router
 from nico_agent.tool_approvals.api import router as tool_approval_router
 
@@ -178,8 +179,15 @@ def create_app(
         elif exc.code == "ARTIFACT_TOO_LARGE":
             status_code = 413
         elif exc.code in {
+            "IDEMPOTENCY_CONFLICT",
             "REVISION_CONFLICT",
             "INVALID_STATE_TRANSITION",
+            "PROJECT_ARCHIVED",
+            "PROJECT_LEAD_INCOMPATIBLE",
+            "PROJECT_LEAD_REQUIRED",
+            "PROJECT_MEMBER_INACTIVE",
+            "PROJECT_MEMBER_REQUIRED",
+            "PROJECT_NOT_MANAGED",
             "TOOL_APPROVAL_ALREADY_DECIDED",
         }:
             status_code = 409
@@ -234,6 +242,7 @@ def create_app(
             },
         )
 
+    app.include_router(project_collaboration_router)
     app.include_router(domain_router)
     app.include_router(conversation_router)
     app.include_router(artifact_router)

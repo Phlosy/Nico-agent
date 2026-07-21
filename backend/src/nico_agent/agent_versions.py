@@ -205,6 +205,31 @@ class AgentVersionLifecycle:
         return value
 
     @staticmethod
+    def project_lead_compatibility_issues(
+        version: AgentVersion,
+        tenant_settings: dict,
+    ) -> list[str]:
+        """Explain why an immutable version cannot coordinate managed Project members."""
+
+        issues: list[str] = []
+        if version.runtime_provider != "nico_native":
+            issues.append("Lead Agent must use the Nico native runtime")
+        if version.execution_mode not in {"react", "plan_and_execute"}:
+            issues.append("Lead Agent must use react or plan_and_execute mode")
+        tenant_policy = tenant_settings.get("coordination_policy", {})
+        for owner, policy in (
+            ("Tenant", tenant_policy),
+            ("Lead AgentVersion", version.coordination_policy),
+        ):
+            if not isinstance(policy, dict) or policy.get("enabled") is not True:
+                issues.append(f"{owner} coordination policy must be enabled")
+                continue
+            scopes = policy.get("allowed_target_scopes", [])
+            if not isinstance(scopes, list) or "project_members" not in scopes:
+                issues.append(f"{owner} must allow the project_members target scope")
+        return issues
+
+    @staticmethod
     def runtime_provider(command: AgentVersionCreate) -> str:
         if command.runtime_provider:
             return command.runtime_provider

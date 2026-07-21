@@ -119,6 +119,13 @@ class Project(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("kind = 'personal'"),
         ),
+        Index(
+            "uq_projects_idempotency",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -132,6 +139,7 @@ class Project(Base, TimestampMixin):
     owner_actor_id: Mapped[str | None] = mapped_column(String(200))
     supervision_cadence_seconds: Mapped[int | None] = mapped_column(Integer)
     next_supervision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str | None] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
@@ -291,6 +299,14 @@ class ProjectMember(Base, TimestampMixin):
             "status",
             "created_at",
         ),
+        Index(
+            "uq_project_members_idempotency",
+            "tenant_id",
+            "project_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -306,6 +322,7 @@ class ProjectMember(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     removal_reason: Mapped[str | None] = mapped_column(Text)
     removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str | None] = mapped_column(String(200))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
@@ -474,6 +491,14 @@ class ProjectSession(Base, TimestampMixin):
             "status",
             "updated_at",
         ),
+        Index(
+            "uq_project_sessions_idempotency",
+            "tenant_id",
+            "project_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -484,6 +509,7 @@ class ProjectSession(Base, TimestampMixin):
     project_member_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     current_conversation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    idempotency_key: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=ProjectSessionStatus.ACTIVE.value
     )

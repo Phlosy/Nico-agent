@@ -61,6 +61,10 @@ class ProjectPatch(BaseModel):
 class ProjectRead(FromAttributesModel):
     id: UUID
     name: str
+    kind: Literal["shared", "personal"]
+    owner_actor_id: str | None
+    supervision_cadence_seconds: int | None
+    next_supervision_at: datetime | None
     description: str | None
     metadata: dict[str, Any] = Field(validation_alias="metadata_json")
     status: ProjectStatus
@@ -185,6 +189,7 @@ class TaskRead(FromAttributesModel):
     acceptance: dict[str, Any]
     assignee_agent_id: UUID | None
     parent_task_id: UUID | None
+    project_session_id: UUID | None
     status: TaskStatus
     priority: int
     revision: int

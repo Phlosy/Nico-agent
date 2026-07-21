@@ -35,6 +35,8 @@ from nico_agent.domain.models import (
     ConversationTurn,
     Event,
     Project,
+    ProjectMember,
+    ProjectSession,
     Run,
     RunStep,
     RuntimeSession,
@@ -50,6 +52,7 @@ from nico_agent.domain.states import (
     RUN_TRANSITIONS,
     TASK_TRANSITIONS,
     AgentStatus,
+    ProjectSessionStatus,
     ProjectStatus,
     RunStatus,
     RunStepStatus,
@@ -141,7 +144,10 @@ class ControlPlaneService:
             return list(
                 await session.scalars(
                     select(Project)
-                    .where(Project.tenant_id == context.tenant_id)
+                    .where(
+                        Project.tenant_id == context.tenant_id,
+                        Project.kind == "shared",
+                    )
                     .order_by(Project.created_at, Project.id)
                 )
             )
@@ -180,6 +186,27 @@ class ControlPlaneService:
                 PROJECT_TRANSITIONS,
             ).value
             project.revision += 1
+            sessions = list(
+                await session.scalars(
+                    select(ProjectSession)
+                    .where(
+                        ProjectSession.tenant_id == context.tenant_id,
+                        ProjectSession.project_id == project.id,
+                        ProjectSession.status != ProjectSessionStatus.ARCHIVED.value,
+                    )
+                    .with_for_update()
+                )
+            )
+            for project_session in sessions:
+                project_session.status = ProjectSessionStatus.ARCHIVED.value
+                project_session.revision += 1
+                self._record_change(
+                    session,
+                    context,
+                    project_session,
+                    "ProjectSessionArchived",
+                    "project_session.archive",
+                )
             self._record_change(session, context, project, "ProjectArchived", "project.archive")
             await session.flush()
             return project
@@ -387,18 +414,27 @@ class ControlPlaneService:
 
     async def create_task(self, context: TenantContext, command: TaskCreate) -> Task:
         async with self.database.tenant_transaction(context) as session:
-            await self._project(session, context, command.project_id)
+            project = await self._project(session, context, command.project_id)
+            self._require_active_project(project)
             if command.parent_task_id is not None:
                 await self._task(session, context, command.parent_task_id)
             status = TaskStatus.CREATED
+            project_session_id = None
             if command.assignee_agent_id is not None:
                 await self._ready_agent(session, context, command.assignee_agent_id)
+                project_session_id = await self._managed_member_session_id(
+                    session,
+                    context,
+                    project,
+                    command.assignee_agent_id,
+                )
                 status = TaskStatus.ASSIGNED
             task = Task(
                 tenant_id=context.tenant_id,
                 project_id=command.project_id,
                 assignee_agent_id=command.assignee_agent_id,
                 parent_task_id=command.parent_task_id,
+                project_session_id=project_session_id,
                 title=command.title,
                 input=command.input,
                 acceptance=command.acceptance,
@@ -425,6 +461,14 @@ class ControlPlaneService:
                 if command.assignee_agent_id is None:
                     raise DomainConflict("ASSIGNEE_REQUIRED", "assigned tasks need an agent")
                 await self._ready_agent(session, context, command.assignee_agent_id)
+                project = await self._project(session, context, task.project_id)
+                self._require_active_project(project)
+                task.project_session_id = await self._managed_member_session_id(
+                    session,
+                    context,
+                    project,
+                    command.assignee_agent_id,
+                )
                 task.assignee_agent_id = command.assignee_agent_id
             task.status = transition_state(
                 "task", TaskStatus(task.status), command.target, TASK_TRANSITIONS
@@ -437,6 +481,8 @@ class ControlPlaneService:
     async def create_run(self, context: TenantContext, task_id: UUID, command: RunCreate) -> Run:
         async with self.database.tenant_transaction(context) as session:
             task = await self._task(session, context, task_id, for_update=True)
+            project = await self._project(session, context, task.project_id)
+            self._require_active_project(project)
             if TaskStatus(task.status) not in {TaskStatus.ASSIGNED, TaskStatus.REVISION_REQUIRED}:
                 raise DomainConflict(
                     "TASK_NOT_RUNNABLE", "task must be assigned or require revision"
@@ -978,6 +1024,49 @@ class ControlPlaneService:
         if AgentStatus(agent.status) is not AgentStatus.READY:
             raise DomainConflict("AGENT_NOT_READY", "assigned agent must be ready")
         return agent
+
+    @staticmethod
+    def _require_active_project(project: Project) -> None:
+        if ProjectStatus(project.status) is ProjectStatus.ARCHIVED:
+            raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
+
+    @staticmethod
+    def _is_managed_project(project: Project) -> bool:
+        value = project.metadata_json.get("_nico_collaboration", {})
+        return isinstance(value, dict) and value.get("managed") is True
+
+    async def _managed_member_session_id(
+        self,
+        session: AsyncSession,
+        context: TenantContext,
+        project: Project,
+        agent_id: UUID,
+    ) -> UUID | None:
+        if not self._is_managed_project(project):
+            return None
+        value = await session.scalar(
+            select(ProjectSession.id)
+            .join(
+                ProjectMember,
+                (
+                    ProjectMember.tenant_id == ProjectSession.tenant_id
+                )
+                & (ProjectMember.id == ProjectSession.project_member_id),
+            )
+            .where(
+                ProjectSession.tenant_id == context.tenant_id,
+                ProjectSession.project_id == project.id,
+                ProjectSession.agent_id == agent_id,
+                ProjectSession.status == ProjectSessionStatus.ACTIVE.value,
+                ProjectMember.status == "active",
+            )
+        )
+        if value is None:
+            raise DomainConflict(
+                "PROJECT_MEMBER_REQUIRED",
+                "assigned Agent must be an active member of the managed Project",
+            )
+        return value
 
     async def _agent_version(
         self,

@@ -158,6 +158,27 @@ async def test_openapi_describes_goal_c_control_plane(ready_report: ReadinessRep
 
 
 @pytest.mark.asyncio
+async def test_openapi_describes_project_collaboration_contract(
+    ready_report: ReadinessReport,
+) -> None:
+    client, _ = make_client(ready_report)
+
+    async with client:
+        document = (await client.get("/openapi.json")).json()
+
+    paths = document["paths"]
+    assert {
+        "/api/v1/projects/collaboration/preflight",
+        "/api/v1/projects/collaboration",
+        "/api/v1/projects/{project_id}/members",
+        "/api/v1/projects/{project_id}/members/{agent_id}/state",
+        "/api/v1/projects/{project_id}/lead",
+        "/api/v1/projects/{project_id}/sessions",
+        "/api/v1/projects/{project_id}/sessions/{session_id}",
+    } <= paths.keys()
+
+
+@pytest.mark.asyncio
 async def test_openapi_describes_cli_goal_c_conversations(
     ready_report: ReadinessReport,
 ) -> None:

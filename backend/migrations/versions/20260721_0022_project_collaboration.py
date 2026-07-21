@@ -46,6 +46,7 @@ def upgrade() -> None:
     op.add_column(
         "projects", sa.Column("next_supervision_at", sa.DateTime(timezone=True))
     )
+    op.add_column("projects", sa.Column("idempotency_key", sa.String(200)))
     op.create_check_constraint("ck_projects_kind", "projects", "kind IN ('shared', 'personal')")
     op.create_check_constraint(
         "ck_projects_kind_owner",
@@ -66,6 +67,13 @@ def upgrade() -> None:
         ["tenant_id", "owner_actor_id"],
         unique=True,
         postgresql_where=sa.text("kind = 'personal'"),
+    )
+    op.create_index(
+        "uq_projects_idempotency",
+        "projects",
+        ["tenant_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key IS NOT NULL"),
     )
 
     op.add_column("conversations", sa.Column("project_session_id", sa.Uuid()))
@@ -92,6 +100,7 @@ def upgrade() -> None:
         sa.Column("created_by", sa.String(200), nullable=False),
         sa.Column("removal_reason", sa.Text()),
         sa.Column("removed_at", sa.DateTime(timezone=True)),
+        sa.Column("idempotency_key", sa.String(200)),
         sa.Column("revision", sa.Integer(), nullable=False, server_default="1"),
         *_timestamps(),
         sa.CheckConstraint("role IN ('lead', 'member')", name="ck_project_members_role"),
@@ -138,6 +147,13 @@ def upgrade() -> None:
         "project_members",
         ["tenant_id", "project_id", "status", "created_at"],
     )
+    op.create_index(
+        "uq_project_members_idempotency",
+        "project_members",
+        ["tenant_id", "project_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key IS NOT NULL"),
+    )
 
     op.create_table(
         "project_sessions",
@@ -147,6 +163,7 @@ def upgrade() -> None:
         sa.Column("project_member_id", sa.Uuid(), nullable=False),
         sa.Column("agent_id", sa.Uuid(), nullable=False),
         sa.Column("current_conversation_id", sa.Uuid()),
+        sa.Column("idempotency_key", sa.String(200)),
         sa.Column("status", sa.String(32), nullable=False, server_default="active"),
         sa.Column("revision", sa.Integer(), nullable=False, server_default="1"),
         *_timestamps(),
@@ -204,6 +221,13 @@ def upgrade() -> None:
         "ix_project_sessions_status",
         "project_sessions",
         ["tenant_id", "project_id", "status", "updated_at"],
+    )
+    op.create_index(
+        "uq_project_sessions_idempotency",
+        "project_sessions",
+        ["tenant_id", "project_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text("idempotency_key IS NOT NULL"),
     )
     op.create_foreign_key(
         "fk_conversations_project_session",
@@ -432,10 +456,12 @@ def downgrade() -> None:
     )
     op.drop_column("conversations", "project_session_id")
     op.drop_index("uq_projects_personal_owner", table_name="projects")
+    op.drop_index("uq_projects_idempotency", table_name="projects")
     op.drop_constraint("ck_projects_supervision_cadence", "projects", type_="check")
     op.drop_constraint("ck_projects_kind_owner", "projects", type_="check")
     op.drop_constraint("ck_projects_kind", "projects", type_="check")
     op.drop_column("projects", "next_supervision_at")
+    op.drop_column("projects", "idempotency_key")
     op.drop_column("projects", "supervision_cadence_seconds")
     op.drop_column("projects", "owner_actor_id")
     op.drop_column("projects", "kind")
