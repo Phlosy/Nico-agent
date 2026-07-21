@@ -346,6 +346,26 @@ configure_provider_secret() {
   unset value
 }
 
+migrate_environment() {
+  local env_file="$1"
+  local schema_version
+  schema_version="$(env_value "$env_file" NICO_INSTALL_CONFIG_VERSION 1)"
+  [[ "$schema_version" =~ ^[0-9]+$ ]] || schema_version=1
+
+  if ((schema_version < 2)); then
+    # Releases before config schema 2 wrote these secure defaults explicitly.
+    # Preserve custom values, but upgrade the old default pair so containers can
+    # reach local Ollama, LM Studio, and vLLM endpoints through the host gateway.
+    if [[ "$(env_value "$env_file" NICO_MODEL_TRUSTED_PRIVATE_HOSTS '[]')" == "[]" \
+      && "$(env_value "$env_file" NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS false)" == "false" ]]; then
+      set_env_value "$env_file" NICO_MODEL_TRUSTED_PRIVATE_HOSTS \
+        '["host.docker.internal"]' replace
+      set_env_value "$env_file" NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS true replace
+    fi
+    set_env_value "$env_file" NICO_INSTALL_CONFIG_VERSION 2 replace
+  fi
+}
+
 prepare_environment() {
   local env_file="$1"
   local template="$2"
@@ -354,6 +374,7 @@ prepare_environment() {
     cp "$template" "$env_file"
     chmod 600 "$env_file"
   fi
+  migrate_environment "$env_file"
   local model_secrets_file="$(dirname "$env_file")/model-secrets.env"
   if [[ ! -f "$model_secrets_file" ]]; then
     : > "$model_secrets_file"
@@ -536,6 +557,7 @@ switch_current_release() {
   ln -sfn "$RELEASE_DIR" "$NICO_HOME/current"
   ln -sfn "$NICO_HOME/current/venv/bin/nico" "$BIN_DIR/nico"
   ln -sfn "$NICO_HOME/bin/nico-service" "$BIN_DIR/nico-service"
+  rm -f "$NICO_HOME/.uninstalled"
 }
 
 bootstrap_setup_profile() {

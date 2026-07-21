@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-nico}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nico-change-me}
     ports:
-      - "${POSTGRES_PORT:-15432}:5432"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
     image: redis:7.2.14-alpine@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
-      - "${REDIS_PORT:-16379}:6379"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-16379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -40,8 +40,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nico-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nico-minio-change-me}
     ports:
-      - "${MINIO_API_PORT:-19010}:9000"
-      - "${MINIO_CONSOLE_PORT:-19011}:9001"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-19010}:9000"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-19011}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -94,6 +94,8 @@ services:
       NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES: ${NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:-26214400}
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
       NICO_MODEL_ENDPOINT_WRITES_ENABLED: ${NICO_MODEL_ENDPOINT_WRITES_ENABLED:-true}
+      NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-["host.docker.internal"]}
+      NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-true}
       NICO_PROVIDER_E2E_ALLOW_HTTP: ${NICO_PROVIDER_E2E_ALLOW_HTTP:-false}
       NICO_PROVIDER_E2E_BASE_URL: ${NICO_PROVIDER_E2E_BASE_URL:-}
       NICO_CORS_ORIGINS: '["http://localhost:${WEB_PORT:-18080}","http://localhost:5173"]'
@@ -102,7 +104,7 @@ services:
       - -ec
       - alembic -c alembic.ini upgrade head && exec uvicorn nico_agent.main:app --host 0.0.0.0 --port 8000 --log-config logging.json
     ports:
-      - "${API_PORT:-18000}:8000"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-18000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,8 +158,8 @@ services:
       NICO_PROVIDER_PROBE_POLL_INTERVAL_SECONDS: ${NICO_PROVIDER_PROBE_POLL_INTERVAL_SECONDS:-1}
       NICO_PROVIDER_PROBE_LEASE_SECONDS: ${NICO_PROVIDER_PROBE_LEASE_SECONDS:-90}
       NICO_WORKER_HEALTH_MARKER: /tmp/nico-worker-ready
-      NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-[]}
-      NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-false}
+      NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-["host.docker.internal"]}
+      NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-true}
       NICO_PROVIDER_E2E_ALLOW_HTTP: ${NICO_PROVIDER_E2E_ALLOW_HTTP:-false}
       NICO_PROVIDER_E2E_BASE_URL: ${NICO_PROVIDER_E2E_BASE_URL:-}
       NICO_MODEL_SECRET_GOAL_G: ${NICO_MODEL_SECRET_GOAL_G:-}
@@ -177,6 +179,8 @@ services:
         condition: service_completed_successfully
     volumes:
       - agent-workspaces:/var/lib/nico/workspaces
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "from pathlib import Path; raise SystemExit(0 if Path('/tmp/nico-worker-ready').is_file() else 1)"]
@@ -328,7 +332,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "${WEB_PORT:-18080}:8080"
+      - "${NICO_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-18080}:8080"
     depends_on:
       api:
         condition: service_healthy

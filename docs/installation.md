@@ -80,8 +80,11 @@ OPENROUTER_API_KEY='<由 Secret Store 注入的值>' \
 make uninstall
 ```
 
-该命令只删除指向安装目录的 `nico`/`nico-service` 链接，并默认保留 Docker
-数据卷。需要删除数据时，应在卸载前先执行 `nico-service purge --yes`。
+该命令会删除版本目录、服务命令和 `nico`/`nico-service` 链接，并默认保留
+Docker 数据卷、`~/.nico/config` 中与数据卷绑定的数据库/Provider 凭据，以及
+`~/.nico/state` 中的本地状态。这样再次执行 `make install` 时会继续使用原密码，
+不会让已有 PostgreSQL 数据卷与新生成的配置失配。需要删除全部数据时，应先
+执行 `nico-service purge --yes`，卸载后再删除剩余的 `~/.nico`。
 
 ## 安装最新版本
 
@@ -187,7 +190,20 @@ nico doctor
 nico setup
 nico provider list
 nico agent list
-nico chat --project <project-id> --agent <agent-id>
+nico chat
+nico project new launch --goal "验证安装" --lead nico-assistant --yes
+nico project open launch
+```
+
+`nico chat` 创建独立 Session，不要求 Project。`nico project` 是另一种入口，用于
+有 Lead、成员 Session、任务同步和受审计指导的共享工作。安装版 CLI 与服务端
+使用同一个 release bundle；可用以下命令验证完整接口：
+
+```bash
+nico project status launch
+nico project timeline launch
+nico project sync launch
+nico project cycles launch
 ```
 
 `nico setup`/`nico provider add` 的本地 Key 路径只适用于 Native Runtime。安装器
@@ -214,17 +230,24 @@ curl -fsSL https://github.com/Phlosy/Nico-agent/releases/latest/download/install
 ## 移除
 
 从仓库执行的本地 Release 安装可以直接运行 `make uninstall`。它会先停止服务，
-验证安装目录标记，再移除程序文件；不会删除源码开发栈或 Docker 数据卷。
+验证安装目录标记，再移除程序文件；不会删除源码开发栈、Docker 数据卷，或
+重新连接这些数据卷所需的 `config`/`state`。该命令可以重复运行。
 
 手工移除或通过远程 Release 安装时，保留数据卷并移除程序文件：
 
 ```bash
 nico-service down
 rm -f ~/.local/bin/nico ~/.local/bin/nico-service
-rm -rf ~/.nico
+rm -f ~/.nico/current
+rm -rf ~/.nico/bin ~/.nico/releases
 ```
 
-如果连本地服务数据也不保留，应先执行 `nico-service purge --yes`，再删除文件。
+不要在保留数据卷时删除 `~/.nico/config/deployment.env`：PostgreSQL 初始化密码
+存储在数据卷中，重新生成配置会导致 API 无法认证。新版 `nico-service up` 会在
+API 启动前校验这组凭据，并无损修复由旧版卸载流程造成的历史密码失配。
+
+如果连本地服务数据也不保留，应先执行 `nico-service purge --yes`，再删除整个
+`~/.nico`。
 自定义过 `--dir` 或 `--bin-dir` 时，需要替换上面的路径。安装器不会删除
 Docker Engine、共享镜像缓存，或用户自行配置的外部 Secret。
 

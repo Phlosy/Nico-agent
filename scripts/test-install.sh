@@ -139,6 +139,16 @@ fi
 NICO_HOME="$TMP_DIR/missing-install" bash "$ROOT_DIR/scripts/nico-service.sh" --help \
   >/dev/null || fail "service help required an existing installation"
 
+SOURCE_NICO="$ROOT_DIR/.venv/bin/nico"
+[[ -x "$SOURCE_NICO" ]] || fail "backend test environment omitted the Nico CLI"
+PROJECT_HELP="$(PYTHONPATH="$ROOT_DIR/backend/src" "$SOURCE_NICO" project --help)"
+assert_contains "$PROJECT_HELP" "new" "installed CLI Project creation command"
+assert_contains "$PROJECT_HELP" "session" "installed CLI Project Session command"
+assert_contains "$PROJECT_HELP" "sync" "installed CLI Project sync command"
+assert_contains "$PROJECT_HELP" "guide" "installed CLI Project guidance command"
+CHAT_HELP="$(PYTHONPATH="$ROOT_DIR/backend/src" "$SOURCE_NICO" chat --help)"
+assert_contains "$CHAT_HELP" "单轮消息" "installed CLI bare chat contract"
+
 LOCAL_ENV_FILE="$TMP_DIR/local-deployment.env"
 LOCAL_IMAGES=true
 RESOLVED_VERSION=v0.2.0
@@ -160,11 +170,42 @@ assert_contains "$(cat "$LOCAL_ENV_FILE")" \
   "MINIO_CONSOLE_PORT=29011" "local MinIO Console port"
 assert_contains "$(cat "$LOCAL_ENV_FILE")" "API_PORT=28000" "local API port"
 assert_contains "$(cat "$LOCAL_ENV_FILE")" "WEB_PORT=28080" "local Web port"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  'NICO_MODEL_TRUSTED_PRIVATE_HOSTS=["host.docker.internal"]' \
+  "local model host gateway"
+assert_contains "$(cat "$LOCAL_ENV_FILE")" \
+  "NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS=true" "local model HTTP opt-in"
 LOCAL_MODEL_SECRETS="$(env_value "$LOCAL_ENV_FILE" NICO_MODEL_SECRETS_FILE)"
 [[ -f "$LOCAL_MODEL_SECRETS" ]] || fail "installer did not create the model secret file"
 assert_eq "$(stat -c '%a' "$LOCAL_MODEL_SECRETS" 2>/dev/null || stat -f '%Lp' "$LOCAL_MODEL_SECRETS")" \
   "600" "model secret permissions"
 LOCAL_IMAGES=false
+
+UPGRADE_ENV_FILE="$TMP_DIR/upgrade-deployment.env"
+printf '%s\n' \
+  'NICO_MODEL_TRUSTED_PRIVATE_HOSTS=[]' \
+  'NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS=false' \
+  > "$UPGRADE_ENV_FILE"
+migrate_environment "$UPGRADE_ENV_FILE"
+assert_contains "$(cat "$UPGRADE_ENV_FILE")" \
+  'NICO_MODEL_TRUSTED_PRIVATE_HOSTS=["host.docker.internal"]' \
+  "legacy local model host migration"
+assert_contains "$(cat "$UPGRADE_ENV_FILE")" \
+  "NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS=true" "legacy local model HTTP migration"
+assert_contains "$(cat "$UPGRADE_ENV_FILE")" \
+  "NICO_INSTALL_CONFIG_VERSION=2" "installer config schema migration"
+
+CUSTOM_NETWORK_ENV_FILE="$TMP_DIR/custom-network-deployment.env"
+printf '%s\n' \
+  'NICO_MODEL_TRUSTED_PRIVATE_HOSTS=["models.internal"]' \
+  'NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS=false' \
+  > "$CUSTOM_NETWORK_ENV_FILE"
+migrate_environment "$CUSTOM_NETWORK_ENV_FILE"
+assert_contains "$(cat "$CUSTOM_NETWORK_ENV_FILE")" \
+  'NICO_MODEL_TRUSTED_PRIVATE_HOSTS=["models.internal"]' \
+  "installer preserves custom model hosts"
+assert_contains "$(cat "$CUSTOM_NETWORK_ENV_FILE")" \
+  "NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS=false" "installer preserves custom HTTP policy"
 
 REMOTE_ENV_FILE="$TMP_DIR/remote-deployment.env"
 prepare_environment "$REMOTE_ENV_FILE" "$ROOT_DIR/.env.example"
@@ -266,6 +307,10 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\n" "$*" >> "$FAKE_DOCKER_LOG"' \
   'if [[ "$*" == "compose version --short" ]]; then printf "2.24.4\n"; fi' \
+  'if [[ "$*" == *"exec --no-TTY postgres"* ]]; then' \
+  '  if [[ "$*" == *"ALTER ROLE"* ]]; then : > "$FAKE_POSTGRES_REPAIRED"; exit 0; fi' \
+  '  if [[ "$*" == *"PGPASSWORD="* && "${FAKE_POSTGRES_AUTH_FAIL:-0}" == 1 && ! -f "$FAKE_POSTGRES_REPAIRED" ]]; then exit 1; fi' \
+  'fi' \
   'exit 0' \
   > "$FAKE_BIN/docker"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$FAKE_BIN/curl"
@@ -293,6 +338,21 @@ if grep -Eq '(^| )pull($| )' "$FAKE_DOCKER_LOG"; then
 fi
 grep -q ' up --detach --no-build ' "$FAKE_DOCKER_LOG" || fail \
   "local service startup did not use the installed release Compose stack"
+
+: > "$FAKE_DOCKER_LOG"
+FAKE_POSTGRES_REPAIRED="$TMP_DIR/postgres-repaired"
+rm -f "$FAKE_POSTGRES_REPAIRED"
+FAKE_POSTGRES_AUTH_FAIL=1 FAKE_POSTGRES_REPAIRED="$FAKE_POSTGRES_REPAIRED" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" NICO_HOME="$SERVICE_HOME" \
+  "$ROOT_DIR/scripts/nico-service.sh" up >/dev/null
+[[ -f "$FAKE_POSTGRES_REPAIRED" ]] || fail \
+  "service startup did not repair a retained PostgreSQL volume password"
+grep -q ' up --detach --no-build postgres' "$FAKE_DOCKER_LOG" || fail \
+  "service startup did not prepare PostgreSQL before API startup"
+grep -q 'ALTER ROLE' "$FAKE_DOCKER_LOG" || fail \
+  "service startup did not synchronize the PostgreSQL role password"
+grep -q ' rm --force --stop api' "$FAKE_DOCKER_LOG" || fail \
+  "service startup did not clear the failed API restart backoff after credential repair"
 
 : > "$FAKE_DOCKER_LOG"
 FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" NICO_HOME="$SERVICE_HOME" \
@@ -361,10 +421,16 @@ UNINSTALL_LOG="$TMP_DIR/uninstall.log"
 mkdir -p \
   "$UNINSTALL_HOME/bin" \
   "$UNINSTALL_HOME/config" \
+  "$UNINSTALL_HOME/state" \
   "$UNINSTALL_HOME/releases/v0.2.0" \
   "$UNINSTALL_BIN"
-printf 'COMPOSE_PROJECT_NAME=nico-agent-local-release\n' \
+printf '%s\n' \
+  'COMPOSE_PROJECT_NAME=nico-agent-local-release' \
+  'POSTGRES_PASSWORD=volume-bound-password' \
   > "$UNINSTALL_HOME/config/deployment.env"
+printf 'NICO_MODEL_SECRET_TEST=preserve-me\n' \
+  > "$UNINSTALL_HOME/config/model-secrets.env"
+printf '{"tenant_id":"preserve-me"}\n' > "$UNINSTALL_HOME/state/setup-state.json"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\n" "$*" > "$UNINSTALL_LOG"' \
@@ -378,7 +444,18 @@ printf 'preserve me\n' > "$UNINSTALL_BIN/operator-file"
 UNINSTALL_LOG="$UNINSTALL_LOG" make --no-print-directory -C "$ROOT_DIR" uninstall \
   NICO_HOME="$UNINSTALL_HOME" NICO_BIN_DIR="$UNINSTALL_BIN" >/dev/null
 assert_contains "$(cat "$UNINSTALL_LOG")" "down" "make uninstall stops installed services"
-[[ ! -e "$UNINSTALL_HOME" ]] || fail "make uninstall retained the installation directory"
+[[ ! -e "$UNINSTALL_HOME/current" && ! -L "$UNINSTALL_HOME/current" ]] || fail \
+  "make uninstall retained the current release link"
+[[ ! -e "$UNINSTALL_HOME/bin" ]] || fail "make uninstall retained installed service commands"
+[[ ! -e "$UNINSTALL_HOME/releases" ]] || fail "make uninstall retained release files"
+assert_contains "$(cat "$UNINSTALL_HOME/config/deployment.env")" \
+  "POSTGRES_PASSWORD=volume-bound-password" \
+  "make uninstall preserves database credentials with the data volumes"
+assert_contains "$(cat "$UNINSTALL_HOME/config/model-secrets.env")" \
+  "NICO_MODEL_SECRET_TEST=preserve-me" \
+  "make uninstall preserves model credentials"
+[[ -f "$UNINSTALL_HOME/state/setup-state.json" ]] || fail \
+  "make uninstall removed persistent setup state"
 [[ ! -e "$UNINSTALL_BIN/nico" && ! -L "$UNINSTALL_BIN/nico" ]] || fail \
   "make uninstall retained the Nico CLI link"
 [[ ! -e "$UNINSTALL_BIN/nico-service" && ! -L "$UNINSTALL_BIN/nico-service" ]] || fail \

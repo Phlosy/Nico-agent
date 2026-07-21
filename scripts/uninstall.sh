@@ -24,8 +24,10 @@ Options:
   --bin-dir PATH  Command link directory (default: ~/.local/bin)
   -h, --help      Show this help
 
-Stops installed services and removes Nico program files. Docker data volumes
-are preserved. Run `nico-service purge --yes` before uninstalling to delete data.
+Stops installed services and removes Nico program files. Docker data volumes,
+deployment credentials, Provider secrets, and local setup state are preserved
+so a later install can reconnect to the retained data. Run
+`nico-service purge --yes` before uninstalling when the data is no longer needed.
 EOF
 }
 
@@ -81,6 +83,12 @@ validate_installation() {
     "refusing to remove unrecognized directory (missing service command): $NICO_HOME"
 }
 
+is_preserved_installation() {
+  [[ -f "$NICO_HOME/.uninstalled" ]] &&
+    grep -qx 'nico-agent-preserved-data-v1' "$NICO_HOME/.uninstalled" &&
+    [[ -f "$NICO_HOME/config/deployment.env" ]]
+}
+
 remove_owned_link() {
   local link="$1"
   [[ -L "$link" ]] || {
@@ -102,23 +110,38 @@ main() {
   parse_args "$@"
   resolve_paths
 
+  local installed=false
   if [[ -e "$NICO_HOME" ]]; then
     [[ -d "$NICO_HOME" ]] || die "installation path is not a directory: $NICO_HOME"
-    validate_installation
-    log "stopping installed services"
-    NICO_HOME="$NICO_HOME" "$NICO_HOME/bin/nico-service" down
+    if [[ -L "$NICO_HOME/current" || -e "$NICO_HOME/bin/nico-service" ]]; then
+      validate_installation
+      installed=true
+      log "stopping installed services"
+      NICO_HOME="$NICO_HOME" "$NICO_HOME/bin/nico-service" down
+    elif is_preserved_installation; then
+      log "Nico program files are already uninstalled from $NICO_HOME"
+    else
+      die "refusing to remove unrecognized directory: $NICO_HOME"
+    fi
   fi
 
   remove_owned_link "$BIN_DIR/nico"
   remove_owned_link "$BIN_DIR/nico-service"
 
-  if [[ -d "$NICO_HOME" ]]; then
-    rm -rf -- "$NICO_HOME"
+  if [[ "$installed" == true ]]; then
+    rm -f -- "$NICO_HOME/current"
+    rm -rf -- "$NICO_HOME/bin" "$NICO_HOME/releases"
+    printf 'nico-agent-preserved-data-v1\n' > "$NICO_HOME/.uninstalled"
+    chmod 600 "$NICO_HOME/.uninstalled"
     log "removed Nico program files from $NICO_HOME"
-  else
+  elif [[ ! -d "$NICO_HOME" ]]; then
     log "Nico is already uninstalled from $NICO_HOME"
   fi
-  log "Docker data volumes were preserved"
+  if [[ -d "$NICO_HOME" ]]; then
+    log "preserved Docker data volumes and reinstall credentials in $NICO_HOME/config"
+  else
+    log "Docker data volumes were preserved"
+  fi
 }
 
 main "$@"

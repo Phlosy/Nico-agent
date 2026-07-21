@@ -25,6 +25,24 @@ Validate the effective Compose file:
 docker compose --project-directory . --file docker-compose.yml config --quiet
 ```
 
+## Local Release API is unhealthy after reinstall
+
+旧版 `make uninstall` 会保留 PostgreSQL 数据卷但删除其初始化密码配置，随后重装
+会让 API 在 Alembic 阶段报告 `password authentication failed for user "nico"`。
+当前 `nico-service up` 会先通过容器网络验证数据库凭据；发现这一历史失配时，
+它会在 PostgreSQL 容器内同步角色密码并重新创建失败的 API 容器，不会删除数据卷。
+
+重新生成本地 Release 资产并安装即可恢复：
+
+```bash
+make release
+make install
+```
+
+正常卸载会保留 `~/.nico/config` 和 `~/.nico/state`，后续安装可直接重用。只有明确
+不再需要任何本地数据时，才运行 `nico-service purge --yes` 并删除整个
+`~/.nico`。
+
 ## Docker Socket permission errors
 
 The local user must be able to run Docker commands, and the Docker daemon must expose `/var/run/docker.sock` for the Sandbox Runner mount.
@@ -83,6 +101,25 @@ errors distinguish authentication, unavailable model, rate limit, timeout, netwo
 endpoint policy and protocol failures without persisting the upstream response body.
 Model discovery failure is non-fatal in the interactive flow: choose a recommended
 or exact manual model ID.
+
+## Project Session is read-only or guidance is rejected
+
+`PROJECT_SESSION_READ_ONLY` 表示成员已 paused/removed，或 Project 已 archived。
+这是保留历史但阻止新工作的预期行为；使用 `nico project status <name>` 和
+`nico project members <name>` 查看状态。恢复成员需要匹配最新 Project/member
+revision，归档 Project 不可重新开启。
+
+`PROJECT_SESSION_RUN_NOT_FOUND` 表示所选成员 Session 没有活动 Run，或显式
+`--run` 不属于该 Session。空闲成员应直接在 `nico project session` 中发送普通
+消息；只有活动 Native ReAct/Plan Run 才接受 `guide`。范围或优先级变化使用：
+
+```bash
+nico project escalate <project> --agent <member> "描述需要重新规划的变化"
+```
+
+`REVISION_CONFLICT` 表示 Run 或 Intervention 已被 Worker/其他操作者更新。重新运行
+`nico project interventions` 或 `nico project timeline` 获取最新状态后再决定，不要
+通过旧 revision 强制覆盖。
 
 ## Hermes Run fails with `HERMES_NOT_INSTALLED`
 

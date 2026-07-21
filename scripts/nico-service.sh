@@ -93,6 +93,75 @@ wait_for_url() {
   die "$label did not become ready: $url"
 }
 
+wait_for_postgres() {
+  for _attempt in {1..60}; do
+    if compose exec --no-TTY postgres sh -ec \
+      'pg_isready --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  compose logs --no-color --tail=80 postgres >&2 || true
+  die "PostgreSQL did not become ready"
+}
+
+postgres_accepts_configured_password() {
+  compose exec --no-TTY postgres sh -ec '
+    host="$(hostname -i)"
+    host="${host%% *}"
+    PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      --host "$host" \
+      --username "$POSTGRES_USER" \
+      --dbname "$POSTGRES_DB" \
+      --set ON_ERROR_STOP=1 \
+      --tuples-only --no-align \
+      --command "select 1" >/dev/null
+  ' >/dev/null 2>&1
+}
+
+synchronize_postgres_password() {
+  local command
+  command="$(cat <<'SH'
+psql \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --set ON_ERROR_STOP=1 \
+  --set role_password="$POSTGRES_PASSWORD" <<'SQL'
+SELECT format('ALTER ROLE %I PASSWORD %L', current_user, :'role_password') \gexec
+SQL
+SH
+)"
+  compose exec --no-TTY postgres sh -ec "$command" >/dev/null
+}
+
+prepare_postgres() {
+  compose up --detach --no-build postgres
+  wait_for_postgres
+  if postgres_accepts_configured_password; then
+    return 0
+  fi
+  log "repairing PostgreSQL credentials for the retained data volume"
+  synchronize_postgres_password || die \
+    "could not synchronize PostgreSQL credentials with the retained data volume"
+  postgres_accepts_configured_password || die \
+    "PostgreSQL rejected the synchronized deployment credentials"
+  # A previously crashing API may be in Docker's restart backoff. Recreate it
+  # after repairing the role so the next Compose up observes the fix immediately.
+  compose rm --force --stop api >/dev/null 2>&1 || true
+}
+
+service_host() {
+  local host
+  host="$(env_value NICO_BIND_ADDRESS 127.0.0.1)"
+  case "$host" in
+    0.0.0.0) host=127.0.0.1 ;;
+    ::) host='[::1]' ;;
+    *:*) host="[$host]" ;;
+  esac
+  printf '%s\n' "$host"
+}
+
 up() {
   local selected
   selected="$(runtime)"
@@ -108,9 +177,12 @@ up() {
     never) log "using preloaded local images" ;;
     *) die "NICO_PULL_POLICY must be always or never in $ENV_FILE" ;;
   esac
+  prepare_postgres
   compose --profile "$selected" up --detach --no-build --remove-orphans
-  wait_for_url "http://localhost:$(env_value API_PORT 18000)/api/v1/health/ready" "API"
-  wait_for_url "http://localhost:$(env_value WEB_PORT 18080)/healthz" "Web"
+  local host
+  host="$(service_host)"
+  wait_for_url "http://$host:$(env_value API_PORT 18000)/api/v1/health/ready" "API"
+  wait_for_url "http://$host:$(env_value WEB_PORT 18080)/healthz" "Web"
   compose --profile "$selected" ps
 }
 

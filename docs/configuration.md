@@ -26,6 +26,7 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | `POSTGRES_USER` | `nico` | Initial database owner |
 | `POSTGRES_PASSWORD` | `nico-change-me` | Initial database password |
 | `POSTGRES_PORT` | `15432` | Published PostgreSQL port；本地 Release 演练使用 `25432` |
+| `NICO_BIND_ADDRESS` | `127.0.0.1` | Host address for published local-service ports; override explicitly for remote access |
 | `REDIS_PORT` | `16379` | Published Redis port；本地 Release 演练使用 `26379` |
 | `MINIO_ROOT_USER` | `nico-minio` | MinIO administrator name |
 | `MINIO_ROOT_PASSWORD` | `nico-minio-change-me` | MinIO administrator password |
@@ -135,10 +136,16 @@ The profile builds `backend/Dockerfile.hermes` with Hermes `0.18.2`. Model-provi
 | `NICO_MODEL_MAX_ATTEMPTS` | `3` | Bounded attempts before any text/tool output |
 | `NICO_MODEL_RETRY_BASE_SECONDS` | `0.2` | Exponential backoff base; jitter is added |
 | `NICO_MODEL_ALLOW_HTTP_LOOPBACK` | `false` | Deployment half of local-only loopback permission |
-| `NICO_MODEL_TRUSTED_PRIVATE_HOSTS` | `[]` | JSON list of deployment-approved private model hostnames |
-| `NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS` | `false` | Permit plain HTTP only for deployment-approved private hosts |
+| `NICO_MODEL_TRUSTED_PRIVATE_HOSTS` | `["host.docker.internal"]` in packaged Docker | JSON list of deployment-approved private model hostnames |
+| `NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS` | `true` in packaged Docker | Permit plain HTTP only for deployment-approved private hosts |
 
 Model credentials use references such as `env:NICO_MODEL_SECRET_OPENAI`. Put the referenced `NICO_MODEL_SECRET_*` value in the deployment secret store and never in AgentVersion, endpoint JSON, Task input, logs, or repository files. Production keeps model endpoint write APIs disabled unless the trusted control plane explicitly enables them.
+
+The packaged Docker profile trusts only `host.docker.internal`, mapped by Compose to the
+installation host. When `nico setup` receives a custom URL such as
+`http://localhost:11434/v1`, it stores the container-reachable
+`http://host.docker.internal:11434/v1` form. Add other private hosts explicitly; Nico does
+not trust the rest of the local network by default.
 
 ### HTTP and database read tools
 
