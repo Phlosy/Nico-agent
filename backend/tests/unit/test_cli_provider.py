@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -170,7 +171,7 @@ def test_local_key_failure_rolls_back_once_and_never_places_key_in_candidate() -
         client,
         bridge,
         interactive=True,
-        answers=("key", "sk-unit-canary"),
+        answers=("sk-unit-canary",),
     )
 
     with pytest.raises(CliError, match="preview changed"):
@@ -192,6 +193,172 @@ def test_local_key_failure_rolls_back_once_and_never_places_key_in_candidate() -
     assert "sk-unit-canary" not in str(client.probes)
 
 
+def test_local_key_is_requested_in_the_first_hidden_prompt() -> None:
+    client = FakeClient()
+    bridge = FakeBridge()
+    prompts: list[tuple[str, dict[str, Any]]] = []
+
+    def prompt(message: str, **kwargs: Any) -> str:
+        prompts.append((message, kwargs))
+        return "sk-unit-canary"
+
+    coordinator = ProviderOnboardingCoordinator(
+        client,
+        Output(json_mode=True, no_color=True),
+        service_bridge=bridge,
+        interactive=True,
+        prompt=prompt,
+        confirm=lambda *_args, **_kwargs: True,
+        poll_interval=0,
+    )
+    progress_messages: list[str] = []
+
+    class RecordingRenderer:
+        @contextmanager
+        def progress(self, message: str):
+            progress_messages.append(message)
+            yield
+
+    coordinator.renderer = RecordingRenderer()
+
+    result = coordinator.onboard(
+        ProviderInput(
+            provider_key="openai",
+            model="model-a",
+            project_id="project-1",
+            starter_agent_name="assistant-hidden-key",
+            starter_agent_display_name="Hidden Key Assistant",
+            confirmed=True,
+        )
+    )
+
+    assert result["status"] == "ready"
+    assert prompts == [
+        (
+            "Provider API key (input hidden; leave blank to use an existing reference)",
+            {"hide_input": True},
+        )
+    ]
+    assert bridge.begun[0][1] == "sk-unit-canary"
+    assert "sk-unit-canary" not in str(client.probes)
+    assert progress_messages == [
+        "Checking local credential state…",
+        "Securing API key and refreshing the model worker…",
+        "Verifying model model-a…",
+        "Publishing the Provider route…",
+        "Finalizing the Provider credential…",
+    ]
+
+
+def test_custom_local_provider_builds_a_unique_openai_compatible_candidate() -> None:
+    client = FakeClient()
+
+    result = _coordinator(client, FakeBridge()).onboard(
+        ProviderInput(
+            provider_key="other",
+            credential_ref="secret:providers/local-ollama",
+            model="qwen3:8b",
+            project_id="project-1",
+            starter_agent_name="assistant-local",
+            starter_agent_display_name="Local Assistant",
+            custom_provider_key="custom-local-ollama",
+            custom_provider_name="Local Ollama",
+            custom_protocol="openai_compatible",
+            custom_base_url="http://localhost:11434/v1",
+            confirmed=True,
+        )
+    )
+
+    candidate = client.probes[0]["candidate"]
+    assert result["provider"] == "custom-local-ollama"
+    assert candidate["provider_key"] == "custom-local-ollama"
+    assert candidate["protocol"] == "openai_compatible"
+    assert candidate["base_url"] == "http://host.docker.internal:11434/v1"
+    assert candidate["provider_options"] == {"nico_custom_display_name": "Local Ollama"}
+
+
+def test_custom_provider_accepts_a_single_character_generated_slug() -> None:
+    client = FakeClient()
+
+    result = _coordinator(client, FakeBridge()).onboard(
+        ProviderInput(
+            provider_key="other",
+            credential_ref="secret:providers/x",
+            model="model-a",
+            project_id="project-1",
+            starter_agent_name="assistant-x",
+            starter_agent_display_name="X Assistant",
+            custom_provider_name="X",
+            custom_protocol="openai_compatible",
+            custom_base_url="https://models.example.com/v1",
+            confirmed=True,
+        )
+    )
+
+    assert result["provider"] == "custom-x"
+    assert client.probes[0]["candidate"]["provider_key"] == "custom-x"
+
+
+def test_interactive_existing_reference_is_requested_after_a_blank_hidden_key() -> None:
+    client = FakeClient()
+    bridge = FakeBridge()
+    prompts: list[tuple[str, dict[str, Any]]] = []
+    answers = iter(("", "env:NICO_MODEL_SECRET_OPENAI"))
+
+    def prompt(message: str, **kwargs: Any) -> str:
+        prompts.append((message, kwargs))
+        return next(answers)
+
+    coordinator = ProviderOnboardingCoordinator(
+        client,
+        Output(json_mode=True, no_color=True),
+        service_bridge=bridge,
+        interactive=True,
+        prompt=prompt,
+        confirm=lambda *_args, **_kwargs: True,
+        poll_interval=0,
+    )
+    coordinator.onboard(
+        ProviderInput(
+            provider_key="openai",
+            model="model-a",
+            project_id="project-1",
+            starter_agent_name="assistant-reference",
+            starter_agent_display_name="Reference Assistant",
+            confirmed=True,
+        )
+    )
+
+    assert prompts[0][1] == {"hide_input": True}
+    assert prompts[1] == ("Credential reference (env:NICO_MODEL_SECRET_* or secret:*)", {})
+    assert bridge.begun == []
+    assert client.probes[0]["candidate"]["credential_ref"] == "env:NICO_MODEL_SECRET_OPENAI"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ("http://localhost:not-a-port/v1", "http://user:pass@localhost:11434/v1"),
+)
+def test_custom_local_provider_rejects_malformed_urls_without_a_traceback(base_url: str) -> None:
+    with pytest.raises(CliError) as captured:
+        _coordinator(FakeClient(), FakeBridge()).onboard(
+            ProviderInput(
+                provider_key="other",
+                credential_ref="secret:providers/local",
+                model="model-a",
+                project_id="project-1",
+                starter_agent_name="assistant-invalid-url",
+                starter_agent_display_name="Invalid URL Assistant",
+                custom_provider_name="Local",
+                custom_protocol="openai_compatible",
+                custom_base_url=base_url,
+                confirmed=True,
+            )
+        )
+
+    assert captured.value.code == "PROVIDER_LOCATION_INVALID"
+
+
 def test_non_interactive_flow_requires_reference_model_target_and_confirmation() -> None:
     with pytest.raises(CliError) as captured:
         _coordinator(FakeClient(), FakeBridge()).onboard(ProviderInput(provider_key="openai"))
@@ -205,7 +372,7 @@ def test_local_key_renews_maintenance_while_confirmation_is_open() -> None:
         client,
         bridge,
         interactive=True,
-        answers=("key", "sk-unit-canary"),
+        answers=("sk-unit-canary",),
         confirm=lambda *_args, **_kwargs: bridge.renew_event.wait(1),
         renew_interval_seconds=0.01,
     )
@@ -233,7 +400,7 @@ def test_lease_renewal_loss_before_activation_rolls_back() -> None:
         client,
         bridge,
         interactive=True,
-        answers=("key", "sk-unit-canary"),
+        answers=("sk-unit-canary",),
         confirm=lambda *_args, **_kwargs: bridge.renew_event.wait(1),
         renew_interval_seconds=0.01,
     )

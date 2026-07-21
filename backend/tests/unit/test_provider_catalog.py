@@ -12,6 +12,7 @@ from nico_agent.provider_onboarding.contracts import (
     ProviderPreset,
     canonical_candidate_hash,
 )
+from nico_agent.provider_onboarding.service import ProviderOnboardingService
 
 EXPECTED_PROVIDER_KEYS = {
     "openai",
@@ -44,6 +45,58 @@ def test_catalog_contains_the_versioned_safe_provider_baseline() -> None:
         assert provider.authentication == "api_key"
         assert all(location.base_url.startswith("https://") for location in provider.locations)
         assert "secret" not in provider.model_dump_json().lower()
+
+    assert {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    } <= set(next(item for item in catalog.providers if item.key == "deepseek").recommended_models)
+    assert all(len(provider.recommended_models) >= 2 for provider in catalog.providers)
+
+
+def test_custom_provider_accepts_an_approved_local_http_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NICO_MODEL_TRUSTED_PRIVATE_HOSTS", '["host.docker.internal"]')
+    monkeypatch.setenv("NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS", "true")
+    candidate = CandidateConfiguration(
+        provider_key="custom-local-ollama",
+        protocol="openai_compatible",
+        base_url="http://host.docker.internal:11434/v1",
+        credential_ref="secret:providers/local-ollama",
+        model="qwen3:8b",
+        provider_options={"nico_custom_display_name": "Local Ollama"},
+        catalog_revision="2026-07-20",
+    )
+
+    ProviderOnboardingService._validate_candidate(candidate)
+
+
+def test_custom_provider_rejects_unapproved_options() -> None:
+    candidate = CandidateConfiguration(
+        provider_key="custom-acme",
+        protocol="openai_compatible",
+        base_url="https://models.example.com/v1",
+        credential_ref="secret:providers/acme",
+        model="acme-chat",
+        provider_options={"nico_custom_display_name": "Acme", "unsafe": "value"},
+        catalog_revision="2026-07-20",
+    )
+
+    with pytest.raises(Exception, match="unsupported options"):
+        ProviderOnboardingService._validate_candidate(candidate)
+
+
+def test_custom_provider_rejects_unapproved_plain_http_host() -> None:
+    with pytest.raises(ValidationError, match="credential-free HTTPS"):
+        CandidateConfiguration(
+            provider_key="custom-lan",
+            protocol="openai_compatible",
+            base_url="http://192.168.1.25:8000/v1",
+            credential_ref="secret:providers/lan",
+            model="local-model",
+            provider_options={"nico_custom_display_name": "LAN Model"},
+            catalog_revision="2026-07-20",
+        )
 
 
 def test_catalog_can_route_supported_protocols_to_the_e2e_model(

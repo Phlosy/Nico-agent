@@ -213,6 +213,65 @@ async def test_verified_probe_activates_endpoint_and_starter_agent_atomically() 
 
 
 @pytest.mark.asyncio
+async def test_custom_provider_activates_with_its_own_identity() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    service = ProviderOnboardingService(database)
+    try:
+        suffix = uuid4().hex[:10]
+        async with database.admin_transaction() as session:
+            tenant = Tenant(name=f"Custom activation {suffix}", slug=f"custom-{suffix}")
+            session.add(tenant)
+            await session.flush()
+            project = Project(tenant_id=tenant.id, name=f"custom-project-{suffix}")
+            session.add(project)
+            await session.flush()
+            tenant_id, project_id = tenant.id, project.id
+        context = TenantContext(tenant_id, "custom-activation-test", uuid4())
+        candidate = CandidateConfiguration(
+            provider_key=f"custom-acme-{suffix}",
+            protocol="openai_compatible",
+            base_url="https://models.example.com/v1",
+            credential_ref="secret:providers/acme",
+            model="acme-chat",
+            provider_options={"nico_custom_display_name": "Acme Models"},
+            catalog_revision="2026-07-20",
+        )
+        probe = await _verified_probe(database, service, context, candidate=candidate)
+        target = ProviderActivationTarget(
+            project_id=project_id,
+            starter_agent_name=f"custom-starter-{suffix}",
+            starter_agent_display_name="Custom Assistant",
+        )
+        preview = await service.preview_activation(
+            context,
+            ProviderPreviewCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                target=target,
+            ),
+        )
+        result = await service.activate(
+            context,
+            ProviderActivationCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                target=target,
+                preview_hash=preview.preview_hash,
+            ),
+        )
+
+        connection = (await service.list_connections(context))[0]
+        assert connection.endpoint_id == result.endpoint_id
+        assert connection.provider_key == f"custom-acme-{suffix}"
+        assert connection.display_name == "Acme Models"
+        assert connection.allowed_models == ("acme-chat",)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_preview_rolls_back_without_partial_activation() -> None:
     settings = Settings(environment="test", _env_file=None)
     engine = create_async_engine(settings.resolved_database_url)

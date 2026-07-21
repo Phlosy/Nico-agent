@@ -156,7 +156,12 @@ class ProviderProbeWorker:
                 timeout_seconds=45,
             )
         )
-        if not response.text.strip():
+        reasoning_was_truncated = (
+            response.finish_reason == "length"
+            and response.usage.output_tokens is not None
+            and response.usage.output_tokens > 0
+        )
+        if not response.text.strip() and not reasoning_was_truncated:
             raise ValueError("provider returned an empty completion")
         request_id = (
             clean_external_text(response.provider_request_id, 200)

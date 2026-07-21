@@ -56,8 +56,20 @@ def normalize_https_url(value: str) -> str:
         and os.getenv("NICO_PROVIDER_E2E_ALLOW_HTTP") == "true"
         and os.getenv("NICO_ENVIRONMENT", "development") != "production"
     )
+    trusted_http = False
+    if parsed.scheme == "http" and parsed.hostname:
+        try:
+            configured_hosts = json.loads(os.getenv("NICO_MODEL_TRUSTED_PRIVATE_HOSTS", "[]"))
+        except json.JSONDecodeError:
+            configured_hosts = []
+        trusted_http = (
+            os.getenv("NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS", "false").lower() == "true"
+            and isinstance(configured_hosts, list)
+            and parsed.hostname.lower().rstrip(".")
+            in {str(host).lower().rstrip(".") for host in configured_hosts if isinstance(host, str)}
+        )
     if (
-        (parsed.scheme != "https" and not test_http)
+        (parsed.scheme != "https" and not test_http and not trusted_http)
         or not parsed.hostname
         or parsed.username
         or parsed.password
@@ -68,7 +80,7 @@ def normalize_https_url(value: str) -> str:
     hostname = parsed.hostname.lower().rstrip(".")
     port = f":{parsed.port}" if parsed.port and parsed.port != 443 else ""
     path = parsed.path.rstrip("/")
-    scheme = "http" if test_http else "https"
+    scheme = "http" if test_http or trusted_http else "https"
     return urlunsplit((scheme, f"{hostname}{port}", path, "", ""))
 
 
@@ -207,6 +219,15 @@ class CandidateConfiguration(FrozenContract):
         if value is None:
             return None
         return _safe_text(value, maximum=200, field_name="model ID")
+
+
+class CustomProviderOptions(FrozenContract):
+    nico_custom_display_name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("nico_custom_display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        return _safe_text(value, maximum=200, field_name="custom Provider display name")
 
 
 class ProviderProbeCreate(FrozenContract):

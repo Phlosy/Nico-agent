@@ -167,6 +167,10 @@ def _run_provider_onboarding(
     starter_agent_display_name: str | None,
     location: str | None,
     option: list[str],
+    custom_provider_key: str | None,
+    custom_provider_name: str | None,
+    custom_protocol: str | None,
+    custom_base_url: str | None,
     confirmed: bool,
 ) -> dict[str, Any]:
     profile = state.resolved_profile()
@@ -191,6 +195,10 @@ def _run_provider_onboarding(
                 starter_agent_display_name=starter_agent_display_name,
                 location_key=location,
                 provider_options=_provider_options(option),
+                custom_provider_key=custom_provider_key,
+                custom_provider_name=custom_provider_name,
+                custom_protocol=custom_protocol,
+                custom_base_url=custom_base_url,
                 confirmed=confirmed,
             )
         )
@@ -209,6 +217,10 @@ def setup_command(
     starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
     location: str | None = typer.Option(None, "--location"),
     option: list[str] | None = typer.Option(None, "--option", help="Provider KEY=VALUE option."),
+    custom_provider_key: str | None = typer.Option(None, "--custom-key"),
+    custom_provider_name: str | None = typer.Option(None, "--custom-name"),
+    custom_protocol: str | None = typer.Option(None, "--protocol"),
+    custom_base_url: str | None = typer.Option(None, "--base-url"),
     yes: bool = typer.Option(False, "--yes", help="确认发布服务端预览。"),
 ) -> None:
     """在尚无可用 Native 路由时引导配置第一个 Provider。"""
@@ -231,6 +243,10 @@ def setup_command(
             starter_agent_display_name=starter_agent_display_name,
             location=location,
             option=option or [],
+            custom_provider_key=custom_provider_key,
+            custom_provider_name=custom_provider_name,
+            custom_protocol=custom_protocol,
+            custom_base_url=custom_base_url,
             confirmed=yes,
         )
 
@@ -250,6 +266,10 @@ def _provider_add_command(
     starter_agent_display_name: str | None,
     location: str | None,
     option: list[str] | None,
+    custom_provider_key: str | None,
+    custom_provider_name: str | None,
+    custom_protocol: str | None,
+    custom_base_url: str | None,
     yes: bool,
 ) -> None:
     state = _state(ctx)
@@ -267,6 +287,10 @@ def _provider_add_command(
             starter_agent_display_name=starter_agent_display_name,
             location=location,
             option=option or [],
+            custom_provider_key=custom_provider_key,
+            custom_provider_name=custom_provider_name,
+            custom_protocol=custom_protocol,
+            custom_base_url=custom_base_url,
             confirmed=yes,
         ),
     )
@@ -286,6 +310,10 @@ def provider_add(
     starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
     location: str | None = typer.Option(None, "--location"),
     option: list[str] | None = typer.Option(None, "--option"),
+    custom_provider_key: str | None = typer.Option(None, "--custom-key"),
+    custom_provider_name: str | None = typer.Option(None, "--custom-name"),
+    custom_protocol: str | None = typer.Option(None, "--protocol"),
+    custom_base_url: str | None = typer.Option(None, "--base-url"),
     yes: bool = typer.Option(False, "--yes"),
 ) -> None:
     """添加并验证 Provider，然后原子发布到一个 Agent。"""
@@ -302,6 +330,10 @@ def provider_add(
         starter_agent_display_name,
         location,
         option,
+        custom_provider_key,
+        custom_provider_name,
+        custom_protocol,
+        custom_base_url,
         yes,
     )
 
@@ -319,6 +351,10 @@ def provider_configure(
     starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
     location: str | None = typer.Option(None, "--location"),
     option: list[str] | None = typer.Option(None, "--option"),
+    custom_provider_key: str | None = typer.Option(None, "--custom-key"),
+    custom_provider_name: str | None = typer.Option(None, "--custom-name"),
+    custom_protocol: str | None = typer.Option(None, "--protocol"),
+    custom_base_url: str | None = typer.Option(None, "--base-url"),
     yes: bool = typer.Option(False, "--yes"),
 ) -> None:
     """重新验证 Provider 并发布新的不可变路由版本。"""
@@ -335,6 +371,10 @@ def provider_configure(
         starter_agent_display_name,
         location,
         option,
+        custom_provider_key,
+        custom_provider_name,
+        custom_protocol,
+        custom_base_url,
         yes,
     )
 

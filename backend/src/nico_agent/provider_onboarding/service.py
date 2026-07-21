@@ -26,6 +26,7 @@ from nico_agent.domain.models import (
 from nico_agent.provider_onboarding.catalog import get_provider_catalog
 from nico_agent.provider_onboarding.contracts import (
     CandidateConfiguration,
+    CustomProviderOptions,
     ProviderActivationCreate,
     ProviderActivationPreview,
     ProviderActivationRead,
@@ -487,14 +488,22 @@ class ProviderOnboardingService:
             raise ResourceNotFound("project", str(command.target.project_id))
 
         preset = next(
-            item for item in get_provider_catalog().providers if item.key == probe.provider_key
+            (item for item in get_provider_catalog().providers if item.key == probe.provider_key),
+            None,
         )
+        if preset is None:
+            custom = CustomProviderOptions.model_validate(probe.provider_options)
+            display_name = custom.nico_custom_display_name
+            capabilities = {"streaming": True, "tools": True}
+        else:
+            display_name = preset.display_name
+            capabilities = preset.capabilities
         endpoint, endpoint_projection = await self._endpoint_projection(
             session,
             context,
             probe,
-            display_name=preset.display_name,
-            capabilities=preset.capabilities,
+            display_name=display_name,
+            capabilities=capabilities,
         )
         agent, agent_projection = await self._agent_projection(
             session,
@@ -778,6 +787,15 @@ class ProviderOnboardingService:
             None,
         )
         if provider is None:
+            if candidate.provider_key.startswith("custom-"):
+                try:
+                    CustomProviderOptions.model_validate(candidate.provider_options)
+                except ValueError as exc:
+                    raise DomainConflict(
+                        "PROVIDER_OPTIONS_INVALID",
+                        "custom provider contains unsupported options",
+                    ) from exc
+                return
             raise DomainConflict("PROVIDER_NOT_FOUND", "provider preset is not available")
         if candidate.protocol != provider.protocol:
             raise DomainConflict(

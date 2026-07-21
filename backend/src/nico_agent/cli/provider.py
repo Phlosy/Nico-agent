@@ -8,11 +8,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.output import Output
+from nico_agent.cli.renderers import ProviderSetupRenderer
 from nico_agent.cli.service_bridge import SecretAttempt, ServiceBridge
 
 _REFERENCE = re.compile(
@@ -33,6 +35,10 @@ class ProviderInput:
     starter_agent_display_name: str | None = None
     location_key: str | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
+    custom_provider_key: str | None = None
+    custom_provider_name: str | None = None
+    custom_protocol: str | None = None
+    custom_base_url: str | None = None
     confirmed: bool = False
 
 
@@ -85,7 +91,7 @@ class ProviderOnboardingCoordinator:
         interactive: bool,
         prompt: Callable[..., str],
         confirm: Callable[..., bool],
-        poll_interval: float = 1.0,
+        poll_interval: float = 0.25,
         timeout_seconds: float = 90.0,
         renew_interval_seconds: float = 30.0,
     ) -> None:
@@ -100,11 +106,15 @@ class ProviderOnboardingCoordinator:
         self.poll_interval = poll_interval
         self.timeout_seconds = timeout_seconds
         self.renew_interval_seconds = renew_interval_seconds
+        self.renderer = ProviderSetupRenderer(output)
 
     def onboard(self, values: ProviderInput) -> dict[str, Any]:
         catalog = self._catalog()
-        provider = self._provider(catalog, values.provider_key)
+        provider = self._provider(catalog, values)
         base_url = self._location(provider, values.location_key)
+        provider_options = dict(values.provider_options)
+        if provider.get("custom"):
+            provider_options["nico_custom_display_name"] = provider["display_name"]
         attempt: SecretAttempt | None = None
         keeper: _MaintenanceLeaseKeeper | None = None
         published = False
@@ -113,27 +123,29 @@ class ProviderOnboardingCoordinator:
             credential_ref = values.credential_ref
             if credential_ref is None:
                 self._require_interactive("credential reference or local API key")
-                selection = self.prompt(
-                    "Credential reference, or 'key' to enter a local API key",
-                    default="key",
-                ).strip()
-                if selection == "key":
-                    if self.service_bridge is None:
-                        raise CliError(
-                            "LOCAL_SERVICE_UNAVAILABLE",
-                            "local API-key entry requires an installed Nico service profile",
-                            exit_code=3,
-                        )
+                if self.service_bridge is None:
+                    raise CliError(
+                        "LOCAL_SERVICE_UNAVAILABLE",
+                        "local API-key entry requires an installed Nico service profile; "
+                        "use --credential-ref for an existing secret",
+                        exit_code=3,
+                    )
+                with self.renderer.progress("Checking local credential state…"):
                     self.service_bridge.recover()
-                    secret = self.prompt("Provider API key", hide_input=True).strip()
-                    if not secret:
-                        raise CliError(
-                            "PROVIDER_CREDENTIAL_REQUIRED",
-                            "Provider API key cannot be blank",
-                            exit_code=2,
-                        )
+                secret = self.prompt(
+                    "Provider API key (input hidden; leave blank to use an existing reference)",
+                    hide_input=True,
+                ).strip()
+                if not secret:
+                    credential_ref = self.prompt(
+                        "Credential reference (env:NICO_MODEL_SECRET_* or secret:*)"
+                    ).strip()
+                else:
                     env_name = self._new_env_name(provider["key"])
-                    attempt = self.service_bridge.begin(env_name, secret)
+                    with self.renderer.progress(
+                        "Securing API key and refreshing the model worker…"
+                    ):
+                        attempt = self.service_bridge.begin(env_name, secret)
                     keeper = _MaintenanceLeaseKeeper(
                         self.service_bridge,
                         attempt,
@@ -142,8 +154,6 @@ class ProviderOnboardingCoordinator:
                     keeper.start()
                     secret = ""
                     credential_ref = attempt.credential_ref
-                else:
-                    credential_ref = selection
             self._validate_reference(credential_ref)
             if keeper is not None:
                 keeper.check()
@@ -153,7 +163,7 @@ class ProviderOnboardingCoordinator:
                 catalog_revision=catalog["catalog_revision"],
                 base_url=base_url,
                 credential_ref=credential_ref,
-                provider_options=values.provider_options,
+                provider_options=provider_options,
             )
             candidate = self._candidate(
                 provider,
@@ -161,9 +171,10 @@ class ProviderOnboardingCoordinator:
                 base_url=base_url,
                 credential_ref=credential_ref,
                 model=model,
-                provider_options=values.provider_options,
+                provider_options=provider_options,
             )
-            verified = self._probe("verify_completion", candidate)
+            with self.renderer.progress(f"Verifying model {model}…"):
+                verified = self._probe("verify_completion", candidate)
             if keeper is not None:
                 keeper.check()
             if verified.get("status") != "succeeded" or not verified.get("verified_at"):
@@ -192,18 +203,20 @@ class ProviderOnboardingCoordinator:
                 )
             if keeper is not None:
                 keeper.check()
-            activated = self.client.activate_provider(
-                probe_id=str(verified["id"]),
-                candidate_hash=str(verified["candidate_hash"]),
-                target=target,
-                preview_hash=str(preview["preview_hash"]),
-                maintenance_attempt_id=attempt.attempt_id if attempt else None,
-            )
+            with self.renderer.progress("Publishing the Provider route…"):
+                activated = self.client.activate_provider(
+                    probe_id=str(verified["id"]),
+                    candidate_hash=str(verified["candidate_hash"]),
+                    target=target,
+                    preview_hash=str(preview["preview_hash"]),
+                    maintenance_attempt_id=attempt.attempt_id if attempt else None,
+                )
             published = True
             if attempt is not None:
                 if keeper is not None:
                     keeper.stop()
-                self.service_bridge.commit(attempt)
+                with self.renderer.progress("Finalizing the Provider credential…"):
+                    self.service_bridge.commit(attempt)
                 committed = True
             return {
                 "status": "ready",
@@ -219,7 +232,8 @@ class ProviderOnboardingCoordinator:
                 keeper.stop()
             if attempt is not None and not committed and not published:
                 try:
-                    self.service_bridge.rollback(attempt)
+                    with self.renderer.progress("Removing the uncommitted API key…"):
+                        self.service_bridge.rollback(attempt)
                 except CliError:
                     if not self.output.json_mode:
                         self.output.err.print(
@@ -268,25 +282,22 @@ class ProviderOnboardingCoordinator:
             )
         return catalog
 
-    def _provider(self, catalog: dict[str, Any], requested: str | None) -> dict[str, Any]:
+    def _provider(self, catalog: dict[str, Any], values: ProviderInput) -> dict[str, Any]:
         providers = catalog.get("providers") or []
-        key = requested
+        key = values.provider_key
         if key is None:
             self._require_interactive("Provider")
-            if not self.output.json_mode:
-                self.output.table(
-                    [
-                        {"number": index, "key": item["key"], "name": item["display_name"]}
-                        for index, item in enumerate(providers, start=1)
-                    ],
-                    title="Provider Presets",
-                    columns=["number", "key", "name"],
-                )
+            self.renderer.welcome()
+            self.renderer.providers(providers)
             selected = self.prompt("Provider number or key").strip()
             if selected.isdigit() and 1 <= int(selected) <= len(providers):
                 key = str(providers[int(selected) - 1]["key"])
+            elif selected.isdigit() and int(selected) == len(providers) + 1:
+                key = "other"
             else:
-                key = selected
+                key = selected.lower()
+        if key in {"other", "custom"} or str(key).startswith("custom-"):
+            return self._custom_provider(values)
         provider = next((item for item in providers if item.get("key") == key), None)
         if provider is None:
             raise CliError(
@@ -295,6 +306,68 @@ class ProviderOnboardingCoordinator:
                 exit_code=2,
             )
         return provider
+
+    def _custom_provider(self, values: ProviderInput) -> dict[str, Any]:
+        name = values.custom_provider_name
+        protocol = values.custom_protocol
+        base_url = values.custom_base_url
+        if name is None or protocol is None or base_url is None:
+            self._require_interactive("custom Provider name, protocol, and base URL")
+        name = name or self.prompt("Provider display name", default="Local Model").strip()
+        if protocol is None:
+            self.renderer.protocols()
+            selected = self.prompt("Protocol number or key", default="1").strip()
+            protocol = {
+                "1": "openai_compatible",
+                "2": "anthropic_messages",
+                "3": "google_gemini",
+            }.get(selected, selected)
+        if protocol not in {"openai_compatible", "anthropic_messages", "google_gemini"}:
+            raise CliError(
+                "PROVIDER_PROTOCOL_ERROR",
+                "protocol must be openai_compatible, anthropic_messages, or google_gemini",
+                exit_code=2,
+            )
+        base_url = (
+            base_url
+            or self.prompt(
+                "Base URL",
+                default="http://localhost:11434/v1",
+            ).strip()
+        )
+        base_url = self._container_reachable_url(base_url)
+        key = values.custom_provider_key
+        if key is None and values.provider_key and values.provider_key.startswith("custom-"):
+            key = values.provider_key
+        key = key or f"custom-{self._slug(name)}"
+        if (
+            re.fullmatch(
+                r"custom-[a-z0-9](?:[a-z0-9_-]{0,111}[a-z0-9])?",
+                key,
+            )
+            is None
+        ):
+            raise CliError(
+                "PROVIDER_KEY_INVALID",
+                "custom Provider key must start with 'custom-' and contain lowercase letters, "
+                "numbers, '-' or '_'",
+                exit_code=2,
+            )
+        discovery = {
+            "openai_compatible": "openai_models",
+            "anthropic_messages": "anthropic_models",
+            "google_gemini": "gemini_models",
+        }[protocol]
+        return {
+            "key": key,
+            "display_name": name,
+            "protocol": protocol,
+            "locations": [{"key": "custom", "base_url": base_url, "default": True}],
+            "discovery": discovery,
+            "recommended_models": [],
+            "capabilities": {"streaming": True, "tools": True},
+            "custom": True,
+        }
 
     def _location(self, provider: dict[str, Any], requested: str | None) -> str:
         locations = provider.get("locations") or []
@@ -335,7 +408,8 @@ class ProviderOnboardingCoordinator:
                 model=None,
                 provider_options=provider_options,
             )
-            discovered = self._probe("discover_models", candidate)
+            with self.renderer.progress(f"Discovering models from {provider['display_name']}…"):
+                discovered = self._probe("discover_models", candidate)
             if discovered.get("status") == "succeeded":
                 models = [
                     str(item["id"])
@@ -344,6 +418,10 @@ class ProviderOnboardingCoordinator:
                 ]
         recommendations = [str(value) for value in provider.get("recommended_models") or []]
         ordered = list(dict.fromkeys([*recommendations, *models]))
+        if not ordered and self.interactive:
+            selected = self.prompt("Exact model ID").strip()
+            if selected:
+                return selected
         if not ordered:
             raise CliError(
                 "PROVIDER_MODEL_REQUIRED",
@@ -356,15 +434,7 @@ class ProviderOnboardingCoordinator:
                 "non-interactive Provider setup requires --model",
                 exit_code=2,
             )
-        if not self.output.json_mode:
-            self.output.table(
-                [
-                    {"number": index, "model": model, "recommended": model in recommendations}
-                    for index, model in enumerate(ordered[:20], start=1)
-                ],
-                title="Models",
-                columns=["number", "model", "recommended"],
-            )
+        self.renderer.models(ordered[:20], set(recommendations))
         selected = self.prompt(
             "Model number or exact model ID",
             default=ordered[0],
@@ -507,3 +577,38 @@ class ProviderOnboardingCoordinator:
     def _new_env_name(provider_key: str) -> str:
         label = re.sub(r"[^A-Z0-9]", "_", provider_key.upper())
         return f"NICO_MODEL_SECRET_{label}_{uuid4().hex[:12].upper()}"
+
+    @staticmethod
+    def _slug(value: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+        return slug[:80] or "provider"
+
+    @staticmethod
+    def _container_reachable_url(value: str) -> str:
+        parsed = urlsplit(value.strip())
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise CliError(
+                "PROVIDER_LOCATION_INVALID",
+                "Base URL contains an invalid port",
+                exit_code=2,
+            ) from exc
+        if parsed.username or parsed.password:
+            raise CliError(
+                "PROVIDER_LOCATION_INVALID",
+                "Base URL must not contain credentials",
+                exit_code=2,
+            )
+        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            return value.strip()
+        port_suffix = f":{port}" if port else ""
+        return urlunsplit(
+            (
+                parsed.scheme,
+                f"host.docker.internal{port_suffix}",
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
