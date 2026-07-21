@@ -13,6 +13,10 @@ from nico_agent.coordination.runtime import RunCoordinationHandler
 from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database
 from nico_agent.mcp import McpGatewayHost
+from nico_agent.projects.interventions import (
+    ProjectInterventionService,
+    RunInterventionHandler,
+)
 from nico_agent.runtime.contracts import (
     AgentRuntimeProvider,
     AgentRuntimeProviderV2,
@@ -53,6 +57,7 @@ class RuntimeWorker:
         self.heartbeat_seconds = heartbeat_seconds
         self.service = RuntimeExecutionService(database)
         self.coordination_service = CoordinationService(database)
+        self.intervention_service = ProjectInterventionService(database)
         self.tool_gateway = tool_gateway
         self.artifact_service = artifact_service
 
@@ -176,6 +181,15 @@ class RuntimeWorker:
         coordination_handler: RunCoordinationHandler | None,
         artifact_handler: RunArtifactHandler | None,
     ) -> None:
+        intervention_handler = (
+            RunInterventionHandler(
+                self.intervention_service,
+                prepared.claim,
+                worker_id=self.worker_id,
+            )
+            if RuntimeCapability.INTERVENTIONS in prepared.descriptor.capabilities
+            else None
+        )
         stream_task = asyncio.create_task(
             self._forward_events(provider, prepared, external_session_id)
         )
@@ -192,6 +206,7 @@ class RuntimeWorker:
                         tool_handler=tool_handler,
                         coordination_handler=coordination_handler,
                         artifact_handler=artifact_handler,
+                        intervention_handler=intervention_handler,
                     ),
                 )
             else:
@@ -204,6 +219,7 @@ class RuntimeWorker:
                             tool_handler=tool_handler,
                             coordination_handler=coordination_handler,
                             artifact_handler=artifact_handler,
+                            intervention_handler=intervention_handler,
                         ),
                     )
             await stream_task

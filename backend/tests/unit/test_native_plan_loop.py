@@ -17,6 +17,7 @@ from nico_agent.runtime.contracts import (
     ContextSeed,
     RuntimeEventType,
     RuntimeExecutionMode,
+    RuntimeIntervention,
     RuntimeServices,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
@@ -90,6 +91,24 @@ class RecordingPlanToolHandler:
             cached=self.cached,
         )
 
+
+class OneShotInterventionHandler:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.intervention_id = uuid4()
+
+    async def freeze(self, boundary_key: str) -> tuple[RuntimeIntervention, ...]:
+        self.calls.append(boundary_key)
+        if len(self.calls) > 1:
+            return ()
+        return (
+            RuntimeIntervention(
+                intervention_id=self.intervention_id,
+                content="Add an explicit rollback step.",
+                content_hash="e" * 64,
+                boundary_key=boundary_key,
+            ),
+        )
 
 def _request(**updates) -> RuntimeSessionRequest:
     request = RuntimeSessionRequest(
@@ -179,6 +198,30 @@ async def test_plan_and_execute_persists_three_step_trace_and_summary() -> None:
         "plan:1:step:analyze:attempt:1:round:1",
         "plan:1:step:report:attempt:1:round:1",
     ]
+
+
+@pytest.mark.asyncio
+async def test_plan_injects_guidance_at_the_next_model_boundary() -> None:
+    model = SequencedStructuredProvider(
+        [_plan(["report"]), {"output": {"content": "verified report"}}]
+    )
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    request = _request()
+    session = await provider.create_session(request)
+    handler = OneShotInterventionHandler()
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(intervention_handler=handler),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert handler.calls[0] == "planner:1"
+    assert "Add an explicit rollback step" in (
+        model.requests[0].messages[-1].content or ""
+    )
+    assert "UNTRUSTED DATA" in (model.requests[0].messages[-1].content or "")
 
 
 @pytest.mark.asyncio

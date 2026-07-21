@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,7 @@ from nico_agent.models.gateway import ModelGateway
 from nico_agent.runtime.contracts import (
     RuntimeEventType,
     RuntimeExecutionMode,
+    RuntimeInterventionHandler,
     RuntimeOutcome,
     RuntimeServices,
     RuntimeSessionRequest,
@@ -53,6 +55,7 @@ from nico_agent.runtime.native.context import (
     build_direct_context,
     build_native_context,
     build_phase_context,
+    inject_interventions,
 )
 from nico_agent.runtime.native.planner import (
     PlanDraft,
@@ -69,6 +72,9 @@ from nico_agent.runtime.native.reflection import (
 from nico_agent.tools.errors import ToolApprovalRequired
 
 Emit = Callable[[RuntimeEventType, str | None, dict[str, Any]], Awaitable[None]]
+_intervention_handler: ContextVar[RuntimeInterventionHandler | None] = ContextVar(
+    "native_intervention_handler", default=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,27 +99,37 @@ class NativeAgentLoop:
         emit: Emit,
         cancelled: Callable[[], bool],
     ) -> RuntimeOutcome:
-        if request.execution_mode is RuntimeExecutionMode.DIRECT:
-            return await self._execute_direct(request, emit=emit, cancelled=cancelled)
-        if request.execution_mode is RuntimeExecutionMode.REACT:
-            return await self._execute_react(
-                request,
-                services=services,
-                emit=emit,
-                cancelled=cancelled,
-            )
-        if request.execution_mode is RuntimeExecutionMode.PLAN_AND_EXECUTE:
-            return await self._execute_plan_and_execute(
-                request,
-                services=services,
-                emit=emit,
-                cancelled=cancelled,
-            )
-        return await self._fail(
-            emit,
-            "EXECUTION_MODE_NOT_IMPLEMENTED",
-            "this runtime build does not yet support plan_and_execute mode",
+        handler = (
+            services.intervention_handler
+            if request.execution_mode
+            in {RuntimeExecutionMode.REACT, RuntimeExecutionMode.PLAN_AND_EXECUTE}
+            else None
         )
+        token = _intervention_handler.set(handler)
+        try:
+            if request.execution_mode is RuntimeExecutionMode.DIRECT:
+                return await self._execute_direct(request, emit=emit, cancelled=cancelled)
+            if request.execution_mode is RuntimeExecutionMode.REACT:
+                return await self._execute_react(
+                    request,
+                    services=services,
+                    emit=emit,
+                    cancelled=cancelled,
+                )
+            if request.execution_mode is RuntimeExecutionMode.PLAN_AND_EXECUTE:
+                return await self._execute_plan_and_execute(
+                    request,
+                    services=services,
+                    emit=emit,
+                    cancelled=cancelled,
+                )
+            return await self._fail(
+                emit,
+                "EXECUTION_MODE_NOT_IMPLEMENTED",
+                "this runtime build does not yet support the selected execution mode",
+            )
+        finally:
+            _intervention_handler.reset(token)
 
     async def _execute_plan_and_execute(
         self,
@@ -1715,6 +1731,13 @@ class NativeAgentLoop:
         response_format: dict[str, Any] | None = None,
         context_reason: str | None = None,
     ) -> _ModelRound:
+        handler = _intervention_handler.get()
+        if handler is not None:
+            boundary_key = _replay_base(call_key) or call_key
+            context = inject_interventions(
+                context,
+                await handler.freeze(boundary_key[:200]),
+            )
         rendered = [
             message.model_dump(mode="json", exclude_none=True) for message in context.messages
         ]

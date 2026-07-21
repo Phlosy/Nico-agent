@@ -21,6 +21,7 @@ from nico_agent.runtime.contracts import (
     ContextSeed,
     RuntimeEventType,
     RuntimeExecutionMode,
+    RuntimeIntervention,
     RuntimeServices,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
@@ -113,6 +114,23 @@ class RecordingArtifactHandler:
             sha256="a" * 64,
             size_bytes=len(intent.content_bytes()),
             shared_with_run_ids=(uuid4(),),
+        )
+
+
+class RecordingInterventionHandler:
+    def __init__(self) -> None:
+        self.boundaries: list[str] = []
+        self.intervention_id = uuid4()
+
+    async def freeze(self, boundary_key: str) -> tuple[RuntimeIntervention, ...]:
+        self.boundaries.append(boundary_key)
+        return (
+            RuntimeIntervention(
+                intervention_id=self.intervention_id,
+                content="Prioritize the regression test before finalizing.",
+                content_hash="f" * 64,
+                boundary_key=boundary_key,
+            ),
         )
 
 
@@ -290,6 +308,43 @@ async def test_react_executes_exact_tool_and_continues_with_observation() -> Non
     assert event_types.count(RuntimeEventType.MODEL_CALL_COMPLETED) == 2
     assert RuntimeEventType.TOOL_CALL_STARTED in event_types
     assert RuntimeEventType.TOOL_CALL_COMPLETED in event_types
+
+
+@pytest.mark.asyncio
+async def test_react_injects_frozen_guidance_as_untrusted_context() -> None:
+    model = SequencedModelProvider([_final_response()])
+    provider = _native(model)
+    intervention_handler = RecordingInterventionHandler()
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(
+            tool_handler=RecordingToolHandler(),
+            intervention_handler=intervention_handler,
+        ),
+    )
+    events = [event async for event in provider.stream_events(session.external_session_id)]
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert len(intervention_handler.boundaries) == 1
+    assert "UNTRUSTED DATA" in (model.requests[0].messages[-1].content or "")
+    assert "Prioritize the regression test" in (
+        model.requests[0].messages[-1].content or ""
+    )
+    context_event = next(
+        event for event in events if event.type is RuntimeEventType.CONTEXT_SNAPSHOT_CREATED
+    )
+    refs = context_event.payload["effect_metadata"]["interventions"]
+    assert refs == [
+        {
+            "intervention_id": str(intervention_handler.intervention_id),
+            "content_hash": "f" * 64,
+            "boundary_key": intervention_handler.boundaries[0],
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import DomainError
 from nico_agent.domain_api import get_tenant_context
 from nico_agent.projects.contracts import (
+    ProjectChangeCreate,
     ProjectCollaborationCreate,
     ProjectCollaborationRead,
     ProjectLeadPreflightRead,
@@ -32,7 +33,11 @@ from nico_agent.projects.contracts import (
     ProjectSupervisionCadenceCommand,
     ProjectSupervisionCycleRead,
     ProjectTimelinePage,
+    RunInterventionCreate,
+    RunInterventionRead,
+    RunInterventionWithdraw,
 )
+from nico_agent.projects.interventions import ProjectInterventionService
 from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.projects.read_service import ProjectSessionReadService
 from nico_agent.projects.service import ProjectCollaborationService
@@ -61,9 +66,17 @@ def get_orchestration_service(request: Request) -> ProjectOrchestrationService:
     return ProjectOrchestrationService(database)
 
 
+def get_intervention_service(request: Request) -> ProjectInterventionService:
+    database: Database | None = request.app.state.database
+    if database is None:
+        raise DomainError("DATABASE_UNAVAILABLE", "the Project database is unavailable")
+    return ProjectInterventionService(database)
+
+
 Service = Annotated[ProjectCollaborationService, Depends(get_service)]
 ReadService = Annotated[ProjectSessionReadService, Depends(get_read_service)]
 OrchestrationService = Annotated[ProjectOrchestrationService, Depends(get_orchestration_service)]
+InterventionService = Annotated[ProjectInterventionService, Depends(get_intervention_service)]
 Context = Annotated[TenantContext, Depends(get_tenant_context)]
 IdempotencyKey = Annotated[
     str,
@@ -290,3 +303,89 @@ async def get_project_supervision_cycle(
     context: Context,
 ):
     return await service.get_cycle(context, project_id, cycle_id)
+
+
+@router.post(
+    "/{project_id}/sessions/{session_id}/runs/{run_id}/interventions",
+    response_model=RunInterventionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_run_intervention(
+    project_id: UUID,
+    session_id: UUID,
+    run_id: UUID,
+    command: RunInterventionCreate,
+    service: InterventionService,
+    context: Context,
+    idempotency_key: IdempotencyKey,
+):
+    return await service.create_local_guidance(
+        context,
+        project_id,
+        session_id,
+        run_id,
+        command,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.get(
+    "/{project_id}/sessions/{session_id}/runs/{run_id}/interventions",
+    response_model=list[RunInterventionRead],
+)
+async def list_run_interventions(
+    project_id: UUID,
+    session_id: UUID,
+    run_id: UUID,
+    service: InterventionService,
+    context: Context,
+):
+    return await service.list_interventions(
+        context, project_id, session_id, run_id
+    )
+
+
+@router.post(
+    "/{project_id}/sessions/{session_id}/runs/{run_id}/interventions/"
+    "{intervention_id}/withdraw",
+    response_model=RunInterventionRead,
+)
+async def withdraw_run_intervention(
+    project_id: UUID,
+    session_id: UUID,
+    run_id: UUID,
+    intervention_id: UUID,
+    command: RunInterventionWithdraw,
+    service: InterventionService,
+    context: Context,
+):
+    return await service.withdraw(
+        context,
+        project_id,
+        session_id,
+        run_id,
+        intervention_id,
+        command,
+    )
+
+
+@router.post(
+    "/{project_id}/sessions/{session_id}/project-changes",
+    response_model=ConversationTurnAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def escalate_project_change(
+    project_id: UUID,
+    session_id: UUID,
+    command: ProjectChangeCreate,
+    service: InterventionService,
+    context: Context,
+    idempotency_key: IdempotencyKey,
+):
+    return await service.escalate_project_change(
+        context,
+        project_id,
+        session_id,
+        command,
+        idempotency_key=idempotency_key,
+    )

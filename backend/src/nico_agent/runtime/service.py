@@ -47,6 +47,7 @@ from nico_agent.domain.models import (
     ToolApprovalRequest,
 )
 from nico_agent.domain.states import ModelCallStatus, RunStatus, RunStepStatus, TaskStatus
+from nico_agent.projects.interventions import ProjectInterventionService
 from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.runtime.contracts import (
     RuntimeCapability,
@@ -611,7 +612,9 @@ class RuntimeExecutionService:
 
             runtime_session.last_event_sequence = event.sequence
             runtime_session.revision += 1
-            public_payload = await self._project_native_event(session, run, runtime_session, event)
+            public_payload = await self._project_native_event(
+                session, context, run, runtime_session, event
+            )
             external_session_id = event.payload.get("external_session_id")
             if isinstance(external_session_id, str) and external_session_id:
                 runtime_session.external_session_id = external_session_id[:500]
@@ -1720,6 +1723,7 @@ class RuntimeExecutionService:
     async def _project_native_event(
         cls,
         session: AsyncSession,
+        context: TenantContext,
         run: Run,
         runtime_session: RuntimeSession,
         event: RuntimeEvent,
@@ -1731,6 +1735,12 @@ class RuntimeExecutionService:
             memory_refs = payload.get("memory_refs", [])
             skill_refs = payload.get("skill_refs", [])
             effect_metadata = payload.get("effect_metadata", {})
+            await ProjectInterventionService.consume_context_in_session(
+                session,
+                context,
+                run,
+                effect_metadata,
+            )
             conversation_context = (
                 effect_metadata.get("conversation_context", {})
                 if isinstance(effect_metadata, dict)

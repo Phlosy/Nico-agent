@@ -31,6 +31,7 @@ class RuntimeCapability(StrEnum):
     REFLECTION = "reflection"
     COORDINATION = "coordination"
     ARTIFACTS = "artifacts"
+    INTERVENTIONS = "interventions"
 
 
 class RuntimeSessionStatus(StrEnum):
@@ -231,6 +232,20 @@ class RuntimeArtifactHandler(Protocol):
     async def store_artifact(self, intent: RuntimeArtifactIntent) -> RuntimeArtifactOutcome: ...
 
 
+class RuntimeIntervention(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    intervention_id: UUID
+    content: str = Field(min_length=1, max_length=16_000)
+    content_hash: str = Field(min_length=64, max_length=64)
+    boundary_key: str = Field(min_length=1, max_length=200)
+
+
+@runtime_checkable
+class RuntimeInterventionHandler(Protocol):
+    async def freeze(self, boundary_key: str) -> tuple[RuntimeIntervention, ...]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeServices:
     """Narrow capabilities exposed to a provider; never contains persistence sessions."""
@@ -238,6 +253,7 @@ class RuntimeServices:
     tool_handler: RuntimeToolHandler | None = None
     coordination_handler: RuntimeCoordinationHandler | None = None
     artifact_handler: RuntimeArtifactHandler | None = None
+    intervention_handler: RuntimeInterventionHandler | None = None
 
 
 class RuntimeSessionHandle(BaseModel):

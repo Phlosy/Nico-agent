@@ -57,6 +57,7 @@ class NicoNativeRuntimeProvider:
                 RuntimeCapability.REFLECTION,
                 RuntimeCapability.COORDINATION,
                 RuntimeCapability.ARTIFACTS,
+                RuntimeCapability.INTERVENTIONS,
             }
         ),
         compatibility={

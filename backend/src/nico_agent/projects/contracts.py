@@ -65,6 +65,23 @@ class ProjectSupervisionCadenceCommand(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class RunInterventionCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=16_000)
+    expected_run_revision: int = Field(ge=1)
+
+
+class RunInterventionWithdraw(BaseModel):
+    expected_intervention_revision: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectChangeCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=16_000)
+    max_steps: int = Field(default=64, ge=1, le=10_000)
+    token_budget: int | None = Field(default=None, ge=1)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=604_800)
+
+
 class ProjectMemberRead(FromAttributesModel):
     id: UUID
     project_id: UUID
@@ -159,6 +176,26 @@ class ProjectSupervisionCycleRead(FromAttributesModel):
     error: dict | None
     started_at: datetime | None
     ended_at: datetime | None
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class RunInterventionRead(FromAttributesModel):
+    id: UUID
+    project_id: UUID
+    project_session_id: UUID
+    task_id: UUID
+    run_id: UUID
+    kind: Literal["local_guidance", "project_change"]
+    content: str
+    content_hash: str
+    expected_run_revision: int
+    status: Literal["pending", "consumed", "rejected", "withdrawn"]
+    idempotency_key: str
+    created_by: str
+    consumed_at: datetime | None
+    rejection_reason: str | None
     revision: int
     created_at: datetime
     updated_at: datetime
