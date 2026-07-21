@@ -407,6 +407,120 @@ class ProjectCollaborationService:
                 raise ResourceNotFound("project_session", str(session_id))
             return value
 
+    async def resolve_session_conversation(
+        self,
+        context: TenantContext,
+        project_id: UUID,
+        session_id: UUID,
+    ) -> Conversation:
+        """Return the writable frozen Conversation, rotating on published version changes."""
+
+        async with self.database.tenant_transaction(context) as session:
+            project = await self._managed_project(
+                session,
+                context,
+                project_id,
+                for_update=True,
+            )
+            project_session = await session.scalar(
+                select(ProjectSession)
+                .where(
+                    ProjectSession.tenant_id == context.tenant_id,
+                    ProjectSession.project_id == project.id,
+                    ProjectSession.id == session_id,
+                )
+                .with_for_update()
+            )
+            if project_session is None:
+                raise ResourceNotFound("project_session", str(session_id))
+            member = await session.scalar(
+                select(ProjectMember)
+                .where(
+                    ProjectMember.tenant_id == context.tenant_id,
+                    ProjectMember.id == project_session.project_member_id,
+                )
+                .with_for_update()
+            )
+            if member is None:
+                raise ResourceNotFound("project_member", str(project_session.project_member_id))
+            if (
+                ProjectMemberStatus(member.status) is not ProjectMemberStatus.ACTIVE
+                or ProjectSessionStatus(project_session.status) is not ProjectSessionStatus.ACTIVE
+            ):
+                raise DomainConflict(
+                    "PROJECT_MEMBER_INACTIVE",
+                    "only an active Project member Session accepts messages",
+                )
+            agent, version = await self._ready_version(session, context, member.agent_id)
+            current = None
+            if project_session.current_conversation_id is not None:
+                current = await session.scalar(
+                    select(Conversation).where(
+                        Conversation.tenant_id == context.tenant_id,
+                        Conversation.project_id == project.id,
+                        Conversation.project_session_id == project_session.id,
+                        Conversation.id == project_session.current_conversation_id,
+                    )
+                )
+            if current is not None and current.agent_version_id == version.id:
+                current._conversation_mode = "project"
+                return current
+
+            conversation_key = f"project-session:{project_session.id}:version:{version.id}"
+            replacement = await session.scalar(
+                select(Conversation).where(
+                    Conversation.tenant_id == context.tenant_id,
+                    Conversation.idempotency_key == conversation_key,
+                )
+            )
+            if replacement is None:
+                replacement = Conversation(
+                    tenant_id=context.tenant_id,
+                    project_id=project.id,
+                    project_session_id=project_session.id,
+                    agent_id=agent.id,
+                    agent_version_id=version.id,
+                    title=f"{project.name} — {agent.display_name}",
+                    created_by=context.actor_id,
+                    idempotency_key=conversation_key,
+                )
+                session.add(replacement)
+                await session.flush([replacement])
+                self._record(
+                    session,
+                    context,
+                    event_type="ConversationCreated",
+                    aggregate_type="conversation",
+                    aggregate_id=replacement.id,
+                    action="conversation.create",
+                    payload={
+                        "project_id": str(project.id),
+                        "project_session_id": str(project_session.id),
+                        "agent_id": str(agent.id),
+                        "agent_version_id": str(version.id),
+                    },
+                )
+            previous_id = project_session.current_conversation_id
+            project_session.current_conversation_id = replacement.id
+            project_session.revision += 1
+            self._record(
+                session,
+                context,
+                event_type="ProjectSessionConversationRotated",
+                aggregate_type="project_session",
+                aggregate_id=project_session.id,
+                action="project_session.rotate_conversation",
+                payload={
+                    "previous_conversation_id": str(previous_id) if previous_id else None,
+                    "conversation_id": str(replacement.id),
+                    "agent_version_id": str(version.id),
+                    "revision": project_session.revision,
+                },
+            )
+            await session.flush()
+            replacement._conversation_mode = "project"
+            return replacement
+
     async def _preflight(
         self,
         session: AsyncSession,

@@ -84,6 +84,34 @@ class ProjectSessionRead(FromAttributesModel):
     updated_at: datetime
 
 
+class ProjectTimelineEntryRead(BaseModel):
+    sequence: int
+    occurred_at: datetime
+    kind: Literal[
+        "artifact",
+        "conversation",
+        "delegation",
+        "plan",
+        "run",
+        "state",
+        "task",
+        "tool",
+    ]
+    event_type: str
+    resource_type: str
+    resource_id: UUID
+    run_id: UUID | None
+    actor_id: str
+    facts: dict
+    links: dict[str, str]
+
+
+class ProjectTimelinePage(BaseModel):
+    entries: list[ProjectTimelineEntryRead]
+    next_cursor: int | None
+    has_more: bool
+
+
 class ProjectLeadPreflightRead(BaseModel):
     compatible: bool
     lead_agent_id: UUID

@@ -188,6 +188,7 @@ def create_app(
             "PROJECT_MEMBER_INACTIVE",
             "PROJECT_MEMBER_REQUIRED",
             "PROJECT_NOT_MANAGED",
+            "PROJECT_SESSION_CONVERSATION_STALE",
             "TOOL_APPROVAL_ALREADY_DECIDED",
         }:
             status_code = 409

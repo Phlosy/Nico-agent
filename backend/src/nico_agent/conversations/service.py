@@ -33,6 +33,8 @@ from nico_agent.domain.models import (
     ConversationTurn,
     Event,
     Project,
+    ProjectMember,
+    ProjectSession,
     Run,
     Task,
 )
@@ -263,6 +265,8 @@ class ConversationService:
                 raise DomainConflict(
                     "CONVERSATION_ARCHIVED", "cannot add a turn to an archived conversation"
                 )
+            if conversation.project_session_id is not None:
+                await self._require_writable_project_session(session, context, conversation)
             existing = await session.scalar(
                 select(ConversationTurn).where(
                     ConversationTurn.tenant_id == context.tenant_id,
@@ -320,6 +324,7 @@ class ConversationService:
                 id=task_id,
                 tenant_id=context.tenant_id,
                 project_id=conversation.project_id,
+                project_session_id=conversation.project_session_id,
                 assignee_agent_id=conversation.agent_id,
                 title=f"{conversation.title} · turn {sequence}"[:300],
                 input={
@@ -912,6 +917,52 @@ class ConversationService:
         if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
             raise DomainConflict(
                 "CONVERSATION_RUN_ACTIVE", "cannot archive a conversation with an active Run"
+            )
+
+    @staticmethod
+    async def _require_writable_project_session(
+        session: AsyncSession,
+        context: TenantContext,
+        conversation: Conversation,
+    ) -> None:
+        project = await session.scalar(
+            select(Project).where(
+                Project.tenant_id == context.tenant_id,
+                Project.id == conversation.project_id,
+            )
+        )
+        if project is None:
+            raise ResourceNotFound("project", str(conversation.project_id))
+        if project.status != "active":
+            raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
+        project_session = await session.scalar(
+            select(ProjectSession).where(
+                ProjectSession.tenant_id == context.tenant_id,
+                ProjectSession.project_id == conversation.project_id,
+                ProjectSession.id == conversation.project_session_id,
+            )
+        )
+        if project_session is None:
+            raise ResourceNotFound("project_session", str(conversation.project_session_id))
+        member = await session.scalar(
+            select(ProjectMember).where(
+                ProjectMember.tenant_id == context.tenant_id,
+                ProjectMember.id == project_session.project_member_id,
+            )
+        )
+        if (
+            member is None
+            or member.status != "active"
+            or project_session.status != "active"
+        ):
+            raise DomainConflict(
+                "PROJECT_MEMBER_INACTIVE",
+                "only an active Project member Session accepts messages",
+            )
+        if project_session.current_conversation_id != conversation.id:
+            raise DomainConflict(
+                "PROJECT_SESSION_CONVERSATION_STALE",
+                "this historical Conversation is read-only; open the current Project Session",
             )
 
     @staticmethod
