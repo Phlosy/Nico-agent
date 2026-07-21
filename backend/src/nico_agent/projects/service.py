@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import case, select
@@ -49,8 +49,12 @@ from nico_agent.projects.contracts import (
     ProjectPreflightRequest,
     ProjectSessionRead,
 )
-
-_MANAGED_KEY = "_nico_collaboration"
+from nico_agent.projects.metadata import (
+    MANAGED_PROJECT_METADATA_KEY,
+    is_managed_project,
+    managed_project_metadata,
+)
+from nico_agent.projects.orchestration import next_cadence_slot
 
 
 class ProjectCollaborationService:
@@ -100,13 +104,11 @@ class ProjectCollaborationService:
                 description=command.description,
                 kind="shared",
                 supervision_cadence_seconds=command.supervision_cadence_seconds,
-                next_supervision_at=(
-                    datetime.now(UTC) + timedelta(seconds=command.supervision_cadence_seconds)
-                    if command.supervision_cadence_seconds is not None
-                    else None
+                next_supervision_at=next_cadence_slot(
+                    datetime.now(UTC), command.supervision_cadence_seconds
                 ),
                 metadata_json={
-                    _MANAGED_KEY: {
+                    MANAGED_PROJECT_METADATA_KEY: {
                         "managed": True,
                         "goal": command.goal,
                         "acceptance": command.acceptance,
@@ -814,12 +816,11 @@ class ProjectCollaborationService:
 
     @staticmethod
     def _managed_metadata(project: Project) -> dict:
-        value = project.metadata_json.get(_MANAGED_KEY, {})
-        return value if isinstance(value, dict) else {}
+        return managed_project_metadata(project)
 
     @classmethod
     def is_managed(cls, project: Project) -> bool:
-        return cls._managed_metadata(project).get("managed") is True
+        return is_managed_project(project)
 
     @staticmethod
     def _fingerprint(command: ProjectCollaborationCreate) -> str:

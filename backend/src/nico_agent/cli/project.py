@@ -8,9 +8,8 @@ from uuid import uuid4
 
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
+from nico_agent.cli.execution import TERMINAL_RUN_STATES
 from nico_agent.cli.output import Output
-
-_TERMINAL_RUN_STATES = {"completed", "failed", "cancelled", "timed_out"}
 
 
 class ProjectCli:
@@ -553,11 +552,13 @@ class ProjectCli:
             after_sequence=0,
             limit=500,
         )
-        run_ids: list[str] = []
-        for entry in reversed(page.get("entries") or []):
-            run_id = entry.get("run_id")
-            if run_id is not None and str(run_id) not in run_ids:
-                run_ids.append(str(run_id))
+        run_ids = list(
+            dict.fromkeys(
+                str(entry["run_id"])
+                for entry in reversed(page.get("entries") or [])
+                if entry.get("run_id") is not None
+            )
+        )
         if run_reference is not None and run_reference not in run_ids:
             raise CliError(
                 "PROJECT_SESSION_RUN_NOT_FOUND",
@@ -567,7 +568,7 @@ class ProjectCli:
         candidates = [run_reference] if run_reference is not None else run_ids
         for run_id in candidates:
             run = self.client.get_run(str(run_id))
-            if not active_only or run.get("status") not in _TERMINAL_RUN_STATES:
+            if not active_only or run.get("status") not in TERMINAL_RUN_STATES:
                 return run
         qualifier = "active " if active_only else ""
         raise CliError(

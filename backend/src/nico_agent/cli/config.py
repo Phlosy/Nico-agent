@@ -248,19 +248,12 @@ class ConfigStore:
         return {"exists": True, "secure": mode & 0o077 == 0, "mode": f"{mode:04o}"}
 
     def remember_personal_agent(self, profile_name: str, agent_id: UUID) -> None:
-        config = self.load()
-        profile = config.profiles.get(profile_name)
-        if profile is None:
-            raise CliError(
-                "PROFILE_NOT_FOUND",
-                f"profile '{profile_name}' does not exist",
-                exit_code=2,
-            )
-        profiles = dict(config.profiles)
-        profiles[profile_name] = profile.model_copy(update={"recent_personal_agent_id": agent_id})
-        self.save(config.model_copy(update={"profiles": profiles}))
+        self._remember(profile_name, {"recent_personal_agent_id": agent_id})
 
     def remember_project(self, profile_name: str, project_id: UUID) -> None:
+        self._remember(profile_name, {"recent_project_id": project_id})
+
+    def _remember(self, profile_name: str, update: Mapping[str, Any]) -> None:
         config = self.load()
         profile = config.profiles.get(profile_name)
         if profile is None:
@@ -270,7 +263,7 @@ class ConfigStore:
                 exit_code=2,
             )
         profiles = dict(config.profiles)
-        profiles[profile_name] = profile.model_copy(update={"recent_project_id": project_id})
+        profiles[profile_name] = profile.model_copy(update=update)
         self.save(config.model_copy(update={"profiles": profiles}))
 
 

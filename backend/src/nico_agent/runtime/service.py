@@ -48,6 +48,7 @@ from nico_agent.domain.models import (
 )
 from nico_agent.domain.states import ModelCallStatus, RunStatus, RunStepStatus, TaskStatus
 from nico_agent.projects.interventions import ProjectInterventionService
+from nico_agent.projects.metadata import is_managed_project
 from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.runtime.contracts import (
     RuntimeCapability,
@@ -1291,8 +1292,7 @@ class RuntimeExecutionService:
         )
         if project is None:
             raise ValueError("Project-scoped Run references an unavailable Project")
-        managed = project.metadata_json.get("_nico_collaboration", {})
-        if not isinstance(managed, dict) or managed.get("managed") is not True:
+        if not is_managed_project(project):
             return None
         if project.status != "active":
             raise ValueError("archived Projects cannot initialize a RuntimeSession")

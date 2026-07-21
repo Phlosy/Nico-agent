@@ -29,6 +29,7 @@ from nico_agent.domain.models import (
     Tenant,
 )
 from nico_agent.domain.states import ProjectSupervisionStatus, RunStatus, TaskStatus
+from nico_agent.projects.metadata import is_managed_project
 
 _TERMINAL_CYCLES = {"completed", "failed", "cancelled"}
 
@@ -499,8 +500,7 @@ class ProjectOrchestrationService:
         cycle.error = run.error if cycle.status == ProjectSupervisionStatus.FAILED.value else None
         cycle.ended_at = run.ended_at or datetime.now(UTC)
         cycle.revision += 1
-        service = cls.__new__(cls)
-        service._record(
+        cls._record(
             session,
             context,
             cycle,
@@ -526,10 +526,9 @@ class ProjectOrchestrationService:
         project = await session.scalar(project_query)
         if project is None:
             raise ResourceNotFound("project", str(project_id))
-        managed = project.metadata_json.get("_nico_collaboration", {})
         if project.status != "active":
             raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
-        if not isinstance(managed, dict) or managed.get("managed") is not True:
+        if not is_managed_project(project):
             raise DomainConflict("PROJECT_NOT_MANAGED", "supervision requires a managed Project")
         lead = await session.scalar(
             select(ProjectMember).where(

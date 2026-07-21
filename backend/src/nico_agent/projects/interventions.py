@@ -31,6 +31,7 @@ from nico_agent.projects.contracts import (
     RunInterventionCreate,
     RunInterventionWithdraw,
 )
+from nico_agent.projects.metadata import is_managed_project
 from nico_agent.projects.service import ProjectCollaborationService
 from nico_agent.runtime.contracts import RuntimeIntervention
 
@@ -369,7 +370,7 @@ class ProjectInterventionService:
         refs = effect_metadata.get("interventions", [])
         if not isinstance(refs, list):
             raise ValueError("intervention context metadata must be a list")
-        service = cls.__new__(cls)
+        parsed_refs: list[tuple[UUID, str, str]] = []
         for ref in refs:
             if not isinstance(ref, dict):
                 raise ValueError("intervention context reference must be an object")
@@ -379,15 +380,23 @@ class ProjectInterventionService:
                 raise ValueError("intervention context reference has an invalid id") from exc
             boundary_key = str(ref.get("boundary_key") or "")
             content_hash = str(ref.get("content_hash") or "")
-            intervention = await session.scalar(
+            parsed_refs.append((intervention_id, boundary_key, content_hash))
+        intervention_ids = [item[0] for item in parsed_refs]
+        interventions = {
+            intervention.id: intervention
+            for intervention in await session.scalars(
                 select(RunIntervention)
                 .where(
                     RunIntervention.tenant_id == context.tenant_id,
                     RunIntervention.run_id == run.id,
-                    RunIntervention.id == intervention_id,
+                    RunIntervention.id.in_(intervention_ids),
                 )
+                .order_by(RunIntervention.id)
                 .with_for_update()
             )
+        }
+        for intervention_id, boundary_key, content_hash in parsed_refs:
+            intervention = interventions.get(intervention_id)
             if intervention is None:
                 raise ValueError("context references an unavailable intervention")
             if (
@@ -402,7 +411,7 @@ class ProjectInterventionService:
             intervention.status = "consumed"
             intervention.consumed_at = datetime.now(UTC)
             intervention.revision += 1
-            service._record(
+            cls._record(
                 session,
                 context,
                 intervention,
@@ -420,16 +429,21 @@ class ProjectInterventionService:
         boundary_key: str,
         frozen: dict[str, Any],
     ) -> tuple[RuntimeIntervention, ...]:
-        values: list[RuntimeIntervention] = []
-        for ref in frozen.get("interventions", []):
-            intervention_id = UUID(str(ref["intervention_id"]))
-            intervention = await session.scalar(
+        refs = frozen.get("interventions", [])
+        intervention_ids = [UUID(str(ref["intervention_id"])) for ref in refs]
+        interventions = {
+            intervention.id: intervention
+            for intervention in await session.scalars(
                 select(RunIntervention).where(
                     RunIntervention.tenant_id == context.tenant_id,
                     RunIntervention.run_id == run_id,
-                    RunIntervention.id == intervention_id,
+                    RunIntervention.id.in_(intervention_ids),
                 )
             )
+        }
+        values: list[RuntimeIntervention] = []
+        for ref, intervention_id in zip(refs, intervention_ids, strict=True):
+            intervention = interventions.get(intervention_id)
             if (
                 intervention is None
                 or intervention.content_hash != ref.get("content_hash")
@@ -522,8 +536,7 @@ class ProjectInterventionService:
         )
         if project is None:
             raise ResourceNotFound("project", str(project_id))
-        managed = project.metadata_json.get("_nico_collaboration", {})
-        if not isinstance(managed, dict) or managed.get("managed") is not True:
+        if not is_managed_project(project):
             raise DomainConflict(
                 "PROJECT_NOT_MANAGED", "runtime guidance requires a managed Project"
             )

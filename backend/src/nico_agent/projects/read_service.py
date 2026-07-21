@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from itertools import islice
 from typing import Any
 from uuid import UUID
 
@@ -218,7 +219,7 @@ class ProjectSessionReadService:
         if isinstance(value, dict):
             return {
                 str(key): cls._sanitize_value(item, depth=depth + 1)
-                for key, item in list(value.items())[:_MAX_ITEMS]
+                for key, item in islice(value.items(), _MAX_ITEMS)
                 if str(key).lower() not in _PRIVATE_KEYS
             }
         if isinstance(value, list):

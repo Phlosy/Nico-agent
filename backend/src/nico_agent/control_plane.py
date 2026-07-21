@@ -62,6 +62,7 @@ from nico_agent.domain.states import (
     require_revision,
     transition_state,
 )
+from nico_agent.projects.metadata import is_managed_project
 from nico_agent.runtime.contracts import RuntimeTrajectory
 
 
@@ -1106,8 +1107,7 @@ class ControlPlaneService:
 
     @staticmethod
     def _is_managed_project(project: Project) -> bool:
-        value = project.metadata_json.get("_nico_collaboration", {})
-        return isinstance(value, dict) and value.get("managed") is True
+        return is_managed_project(project)
 
     async def _managed_member_session_id(
         self,

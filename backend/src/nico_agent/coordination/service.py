@@ -48,6 +48,7 @@ from nico_agent.domain.states import (
     ToolCallStatus,
     require_revision,
 )
+from nico_agent.projects.metadata import is_managed_project
 from nico_agent.runtime.preparation import narrow_knowledge_policy
 
 _DELEGATABLE_RUN_STATUSES = {
@@ -615,8 +616,7 @@ class CoordinationService:
             raise ResourceNotFound("project", str(parent_task.project_id))
         if project.status != "active":
             raise DomainConflict("PROJECT_ARCHIVED", "archived Projects cannot delegate work")
-        managed = project.metadata_json.get("_nico_collaboration", {})
-        if not isinstance(managed, dict) or managed.get("managed") is not True:
+        if not is_managed_project(project):
             raise DomainConflict(
                 "PROJECT_NOT_MANAGED",
                 "project_members coordination requires a managed Project",
