@@ -41,9 +41,13 @@ from nico_agent.domain.states import (
     ModelEndpointStatus,
     PlanStatus,
     PlanStepStatus,
+    ProjectMemberStatus,
+    ProjectSessionStatus,
     ProjectStatus,
+    ProjectSupervisionStatus,
     ProviderProbeKind,
     ProviderProbeStatus,
+    RunInterventionStatus,
     RunStatus,
     RunStepStatus,
     RuntimeEvaluationStatus,
@@ -94,8 +98,27 @@ class Project(Base, TimestampMixin):
     __tablename__ = "projects"
     __table_args__ = (
         CheckConstraint("status IN ('active', 'archived')", name="ck_projects_status"),
+        CheckConstraint("kind IN ('shared', 'personal')", name="ck_projects_kind"),
+        CheckConstraint(
+            "(kind = 'personal' AND owner_actor_id IS NOT NULL "
+            "AND supervision_cadence_seconds IS NULL) OR "
+            "(kind = 'shared' AND owner_actor_id IS NULL)",
+            name="ck_projects_kind_owner",
+        ),
+        CheckConstraint(
+            "supervision_cadence_seconds IS NULL OR "
+            "supervision_cadence_seconds BETWEEN 300 AND 604800",
+            name="ck_projects_supervision_cadence",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_projects_tenant_id_id"),
         UniqueConstraint("tenant_id", "name", name="uq_projects_tenant_name"),
+        Index(
+            "uq_projects_personal_owner",
+            "tenant_id",
+            "owner_actor_id",
+            unique=True,
+            postgresql_where=text("kind = 'personal'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -105,6 +128,10 @@ class Project(Base, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, server_default="shared")
+    owner_actor_id: Mapped[str | None] = mapped_column(String(200))
+    supervision_cadence_seconds: Mapped[int | None] = mapped_column(Integer)
+    next_supervision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     description: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
@@ -216,6 +243,72 @@ class AgentVersion(Base, TimestampMixin):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class ProjectMember(Base, TimestampMixin):
+    __tablename__ = "project_members"
+    __table_args__ = (
+        CheckConstraint("role IN ('lead', 'member')", name="ck_project_members_role"),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'removed')",
+            name="ck_project_members_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_project_members_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agents.tenant_id", "agents.id"],
+            ondelete="RESTRICT",
+            name="fk_project_members_agent",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_project_members_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id", "project_id", "id", name="uq_project_members_project_id"
+        ),
+        UniqueConstraint(
+            "tenant_id", "project_id", "agent_id", name="uq_project_members_project_agent"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "agent_id",
+            "id",
+            name="uq_project_members_scope_id",
+        ),
+        Index(
+            "uq_project_members_active_lead",
+            "tenant_id",
+            "project_id",
+            unique=True,
+            postgresql_where=text("role = 'lead' AND status = 'active'"),
+        ),
+        Index(
+            "ix_project_members_active",
+            "tenant_id",
+            "project_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, server_default="member")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ProjectMemberStatus.ACTIVE.value
+    )
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    removal_reason: Mapped[str | None] = mapped_column(Text)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class Conversation(Base, TimestampMixin):
     """A durable user-facing dialogue spanning independent Tasks and Runs."""
 
@@ -269,8 +362,26 @@ class Conversation(Base, TimestampMixin):
             use_alter=True,
             name="fk_conversations_summary_model_call",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "project_session_id"],
+            [
+                "project_sessions.tenant_id",
+                "project_sessions.project_id",
+                "project_sessions.id",
+            ],
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_conversations_project_session",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_conversations_tenant_id_id"),
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_conversations_idempotency"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "agent_id",
+            "id",
+            name="uq_conversations_project_agent_id",
+        ),
         Index(
             "ix_conversations_recent",
             "tenant_id",
@@ -286,6 +397,7 @@ class Conversation(Base, TimestampMixin):
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     agent_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_session_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=ConversationStatus.ACTIVE.value
@@ -299,6 +411,82 @@ class Conversation(Base, TimestampMixin):
     last_turn_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class ProjectSession(Base, TimestampMixin):
+    __tablename__ = "project_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'paused', 'archived')",
+            name="ck_project_sessions_status",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_project_sessions_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "agent_id", "project_member_id"],
+            [
+                "project_members.tenant_id",
+                "project_members.project_id",
+                "project_members.agent_id",
+                "project_members.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_project_sessions_member",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "agent_id", "current_conversation_id"],
+            [
+                "conversations.tenant_id",
+                "conversations.project_id",
+                "conversations.agent_id",
+                "conversations.id",
+            ],
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_project_sessions_current_conversation",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_project_sessions_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id", "project_id", "id", name="uq_project_sessions_project_id"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "project_member_id",
+            "id",
+            name="uq_project_sessions_member_id",
+        ),
+        UniqueConstraint(
+            "tenant_id", "project_id", "agent_id", name="uq_project_sessions_project_agent"
+        ),
+        UniqueConstraint(
+            "tenant_id", "project_member_id", name="uq_project_sessions_member"
+        ),
+        Index(
+            "ix_project_sessions_status",
+            "tenant_id",
+            "project_id",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_member_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    current_conversation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ProjectSessionStatus.ACTIVE.value
+    )
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
@@ -478,7 +666,24 @@ class Task(Base, TimestampMixin):
             ondelete="RESTRICT",
             name="fk_tasks_tenant_parent",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "project_session_id"],
+            [
+                "project_sessions.tenant_id",
+                "project_sessions.project_id",
+                "project_sessions.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_tasks_project_session",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_tasks_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "project_session_id",
+            "id",
+            name="uq_tasks_project_session_id",
+        ),
         Index("ix_tasks_tenant_status_created", "tenant_id", "status", "created_at"),
     )
 
@@ -489,6 +694,7 @@ class Task(Base, TimestampMixin):
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     assignee_agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     parent_task_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    project_session_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     input: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     acceptance: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
@@ -577,6 +783,190 @@ class Run(Base, TimestampMixin):
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class ProjectSupervisionCycle(Base, TimestampMixin):
+    __tablename__ = "project_supervision_cycles"
+    __table_args__ = (
+        CheckConstraint("trigger IN ('manual', 'scheduled')", name="ck_supervision_trigger"),
+        CheckConstraint(
+            "status IN ('pending', 'claimed', 'running', 'completed', 'failed', 'cancelled')",
+            name="ck_supervision_status",
+        ),
+        CheckConstraint(
+            "run_id IS NULL OR task_id IS NOT NULL",
+            name="ck_supervision_run_requires_task",
+        ),
+        CheckConstraint("revision > 0", name="ck_supervision_revision"),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_supervision_project",
+        ),
+        ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "project_id",
+                "lead_project_member_id",
+                "lead_project_session_id",
+            ],
+            [
+                "project_sessions.tenant_id",
+                "project_sessions.project_id",
+                "project_sessions.project_member_id",
+                "project_sessions.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_supervision_lead_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "lead_project_session_id", "task_id"],
+            [
+                "tasks.tenant_id",
+                "tasks.project_id",
+                "tasks.project_session_id",
+                "tasks.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_supervision_task",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "run_id"],
+            ["runs.tenant_id", "runs.task_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_supervision_run",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_supervision_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "project_id",
+            "trigger",
+            "cadence_slot",
+            name="uq_supervision_project_slot",
+        ),
+        UniqueConstraint(
+            "tenant_id", "project_id", "idempotency_key", name="uq_supervision_idempotency"
+        ),
+        Index(
+            "ix_supervision_due",
+            "status",
+            "scheduled_for",
+            "lease_expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    lead_project_member_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    lead_project_session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    cadence_slot: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ProjectSupervisionStatus.PENDING.value
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(200))
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    narrative_summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class RunIntervention(Base, TimestampMixin):
+    __tablename__ = "run_interventions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('local_guidance', 'project_change')",
+            name="ck_run_interventions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'consumed', 'rejected', 'withdrawn')",
+            name="ck_run_interventions_status",
+        ),
+        CheckConstraint(
+            "length(content) BETWEEN 1 AND 16000",
+            name="ck_run_interventions_content",
+        ),
+        CheckConstraint("length(content_hash) = 64", name="ck_run_interventions_hash"),
+        CheckConstraint("expected_run_revision > 0", name="ck_run_interventions_run_revision"),
+        CheckConstraint("revision > 0", name="ck_run_interventions_revision"),
+        CheckConstraint(
+            "status <> 'consumed' OR consumed_at IS NOT NULL",
+            name="ck_run_interventions_consumed",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "project_session_id"],
+            [
+                "project_sessions.tenant_id",
+                "project_sessions.project_id",
+                "project_sessions.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_run_interventions_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id", "project_session_id", "task_id"],
+            [
+                "tasks.tenant_id",
+                "tasks.project_id",
+                "tasks.project_session_id",
+                "tasks.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_run_interventions_task",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "run_id"],
+            ["runs.tenant_id", "runs.task_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_run_interventions_run",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_run_interventions_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id", "run_id", "idempotency_key", name="uq_run_interventions_idempotency"
+        ),
+        Index(
+            "ix_run_interventions_pending",
+            "tenant_id",
+            "run_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_run_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=RunInterventionStatus.PENDING.value
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    consumed_by: Mapped[str | None] = mapped_column(String(200))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 

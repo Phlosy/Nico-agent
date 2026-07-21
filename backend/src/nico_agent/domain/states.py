@@ -28,6 +28,34 @@ class ProjectStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class ProjectMemberStatus(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    REMOVED = "removed"
+
+
+class ProjectSessionStatus(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ARCHIVED = "archived"
+
+
+class ProjectSupervisionStatus(StrEnum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RunInterventionStatus(StrEnum):
+    PENDING = "pending"
+    CONSUMED = "consumed"
+    REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"
+
+
 class ConversationStatus(StrEnum):
     ACTIVE = "active"
     ARCHIVED = "archived"
@@ -229,6 +257,55 @@ AGENT_VERSION_TRANSITIONS = {
 PROJECT_TRANSITIONS = {
     ProjectStatus.ACTIVE: {ProjectStatus.ARCHIVED},
     ProjectStatus.ARCHIVED: {ProjectStatus.ACTIVE},
+}
+
+PROJECT_MEMBER_TRANSITIONS = {
+    ProjectMemberStatus.ACTIVE: {ProjectMemberStatus.PAUSED, ProjectMemberStatus.REMOVED},
+    ProjectMemberStatus.PAUSED: {ProjectMemberStatus.ACTIVE, ProjectMemberStatus.REMOVED},
+    ProjectMemberStatus.REMOVED: {ProjectMemberStatus.ACTIVE},
+}
+
+PROJECT_SESSION_TRANSITIONS = {
+    ProjectSessionStatus.ACTIVE: {
+        ProjectSessionStatus.PAUSED,
+        ProjectSessionStatus.ARCHIVED,
+    },
+    ProjectSessionStatus.PAUSED: {
+        ProjectSessionStatus.ACTIVE,
+        ProjectSessionStatus.ARCHIVED,
+    },
+    ProjectSessionStatus.ARCHIVED: set(),
+}
+
+PROJECT_SUPERVISION_TRANSITIONS = {
+    ProjectSupervisionStatus.PENDING: {
+        ProjectSupervisionStatus.CLAIMED,
+        ProjectSupervisionStatus.CANCELLED,
+    },
+    ProjectSupervisionStatus.CLAIMED: {
+        ProjectSupervisionStatus.RUNNING,
+        ProjectSupervisionStatus.FAILED,
+        ProjectSupervisionStatus.CANCELLED,
+    },
+    ProjectSupervisionStatus.RUNNING: {
+        ProjectSupervisionStatus.COMPLETED,
+        ProjectSupervisionStatus.FAILED,
+        ProjectSupervisionStatus.CANCELLED,
+    },
+    ProjectSupervisionStatus.COMPLETED: set(),
+    ProjectSupervisionStatus.FAILED: set(),
+    ProjectSupervisionStatus.CANCELLED: set(),
+}
+
+RUN_INTERVENTION_TRANSITIONS = {
+    RunInterventionStatus.PENDING: {
+        RunInterventionStatus.CONSUMED,
+        RunInterventionStatus.REJECTED,
+        RunInterventionStatus.WITHDRAWN,
+    },
+    RunInterventionStatus.CONSUMED: set(),
+    RunInterventionStatus.REJECTED: set(),
+    RunInterventionStatus.WITHDRAWN: set(),
 }
 
 TASK_TRANSITIONS = {
