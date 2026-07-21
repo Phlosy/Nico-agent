@@ -37,6 +37,7 @@ from nico_agent.domain.models import (
     Project,
     ProjectMember,
     ProjectSession,
+    ProjectSupervisionCycle,
     Run,
     RunStep,
     RuntimeSession,
@@ -191,6 +192,70 @@ class ControlPlaneService:
         async with self.database.tenant_transaction(context) as session:
             project = await self._project(session, context, project_id, for_update=True)
             require_revision("project", expected=expected_revision, actual=project.revision)
+            active_cycles = list(
+                await session.scalars(
+                    select(ProjectSupervisionCycle)
+                    .where(
+                        ProjectSupervisionCycle.tenant_id == context.tenant_id,
+                        ProjectSupervisionCycle.project_id == project.id,
+                        ProjectSupervisionCycle.status.in_(
+                            ["pending", "claimed", "running"]
+                        ),
+                    )
+                )
+            )
+            coordination = CoordinationService(self.database)
+            now = datetime.now(UTC)
+            for cycle in active_cycles:
+                if cycle.run_id is not None:
+                    cycle_run = await session.scalar(
+                        select(Run).where(
+                            Run.tenant_id == context.tenant_id,
+                            Run.id == cycle.run_id,
+                        )
+                    )
+                    if cycle_run is not None and RunStatus(cycle_run.status) not in {
+                        RunStatus.COMPLETED,
+                        RunStatus.FAILED,
+                        RunStatus.CANCELLED,
+                        RunStatus.TIMED_OUT,
+                    }:
+                        await coordination.cancel_tree(
+                            context,
+                            cycle_run.id,
+                            expected_revision=cycle_run.revision,
+                        )
+            active_cycles = list(
+                await session.scalars(
+                    select(ProjectSupervisionCycle)
+                    .where(
+                        ProjectSupervisionCycle.tenant_id == context.tenant_id,
+                        ProjectSupervisionCycle.project_id == project.id,
+                        ProjectSupervisionCycle.status.in_(
+                            ["pending", "claimed", "running"]
+                        ),
+                    )
+                    .with_for_update()
+                )
+            )
+            for cycle in active_cycles:
+                cycle.status = "cancelled"
+                cycle.error = {
+                    "code": "PROJECT_ARCHIVED",
+                    "message": "Project archive cancelled the active supervision cycle",
+                }
+                cycle.ended_at = now
+                cycle.lease_owner = None
+                cycle.lease_token = None
+                cycle.lease_expires_at = None
+                cycle.revision += 1
+                self._record_change(
+                    session,
+                    context,
+                    cycle,
+                    "ProjectSupervisionCancelled",
+                    "project.supervision.cancel",
+                )
             project.status = transition_state(
                 "project",
                 ProjectStatus(project.status),

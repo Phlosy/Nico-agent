@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     provider_probe_concurrency: int = Field(default=1, ge=1, le=8)
     provider_probe_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     provider_probe_lease_seconds: int = Field(default=90, ge=30, le=3600)
+    project_supervision_concurrency: int = Field(default=1, ge=1, le=8)
+    project_supervision_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    project_supervision_lease_seconds: int = Field(default=90, ge=30, le=3600)
     worker_health_marker: str = Field(
         default="/tmp/nico-worker-ready", min_length=1, max_length=2000
     )

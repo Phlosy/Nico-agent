@@ -59,6 +59,12 @@ class ProjectLeadReplace(BaseModel):
     expected_project_revision: int = Field(ge=1)
 
 
+class ProjectSupervisionCadenceCommand(BaseModel):
+    cadence_seconds: int | None = Field(default=None, ge=300, le=604_800)
+    expected_project_revision: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class ProjectMemberRead(FromAttributesModel):
     id: UUID
     project_id: UUID
@@ -135,3 +141,24 @@ class ProjectMemberMutationRead(BaseModel):
 
 class ProjectLeadReplaceRead(ProjectCollaborationRead):
     pass
+
+
+class ProjectSupervisionCycleRead(FromAttributesModel):
+    id: UUID
+    project_id: UUID
+    lead_project_member_id: UUID
+    lead_project_session_id: UUID
+    task_id: UUID | None
+    run_id: UUID | None
+    trigger: Literal["manual", "scheduled"]
+    cadence_slot: datetime
+    scheduled_for: datetime
+    status: Literal["pending", "claimed", "running", "completed", "failed", "cancelled"]
+    metrics: dict
+    narrative_summary: str | None
+    error: dict | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    revision: int
+    created_at: datetime
+    updated_at: datetime

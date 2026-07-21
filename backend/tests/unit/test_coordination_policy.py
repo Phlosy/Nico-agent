@@ -48,6 +48,43 @@ def test_coordination_policy_is_fail_closed_and_only_restricts_parent() -> None:
     assert build_coordination_policy_snapshot({}, {})["enabled"] is False
 
 
+def test_project_member_scope_freezes_concrete_versions_without_wildcards() -> None:
+    tenant = {
+        "coordination_policy": {
+            "enabled": True,
+            "allowed_target_scopes": ["project_members"],
+            "max_depth": 3,
+            "max_children": 8,
+            "max_parallelism": 4,
+        }
+    }
+    agent = {
+        "enabled": True,
+        "allowed_target_scopes": ["project_members"],
+        "max_depth": 2,
+        "max_children": 4,
+        "max_parallelism": 2,
+    }
+
+    snapshot = build_coordination_policy_snapshot(
+        tenant,
+        agent,
+        project_member_version_ids=["member-b", "member-a", "member-a"],
+    )
+
+    assert snapshot["enabled"] is True
+    assert snapshot["target_scope"] == "project_members"
+    assert snapshot["allowed_agent_version_ids"] == ["member-a", "member-b"]
+    assert "*" not in snapshot["allowed_agent_version_ids"]
+    denied = build_coordination_policy_snapshot(
+        tenant,
+        {**agent, "allowed_target_scopes": []},
+        project_member_version_ids=["member-a"],
+    )
+    assert denied["enabled"] is False
+    assert denied["allowed_agent_version_ids"] == []
+
+
 def test_child_permissions_are_exact_intersection_and_never_contain_secret_values() -> None:
     narrowed = narrow_child_permissions(
         parent={

@@ -28,6 +28,9 @@ from nico_agent.domain.models import (
     AuditRecord,
     Delegation,
     Event,
+    Project,
+    ProjectMember,
+    ProjectSession,
     Run,
     RunBudgetLedger,
     RunStep,
@@ -158,6 +161,14 @@ class CoordinationService:
             )
             if parent_task is None:
                 raise ResourceNotFound("task", str(parent.task_id))
+            target_project_session_id = await self._project_member_session_id(
+                session,
+                context,
+                parent,
+                parent_task,
+                target,
+                policy,
+            )
             ledger = await self._locked_ledger(session, parent)
             self._reserve(ledger, intent, policy)
             permission_snapshot = self._permission_snapshot(runtime_session, target, intent, policy)
@@ -168,6 +179,7 @@ class CoordinationService:
                 id=child_task_id,
                 tenant_id=context.tenant_id,
                 project_id=parent_task.project_id,
+                project_session_id=target_project_session_id,
                 assignee_agent_id=target.agent_id,
                 parent_task_id=parent_task.id,
                 title=intent.objective[:300],
@@ -581,6 +593,77 @@ class CoordinationService:
             self._record_tree_cancel(session, context, root, ordered_ids)
             await session.flush()
             return root
+
+    @staticmethod
+    async def _project_member_session_id(
+        session: AsyncSession,
+        context: TenantContext,
+        parent: Run,
+        parent_task: Task,
+        target: AgentVersion,
+        policy: dict[str, Any],
+    ) -> UUID | None:
+        if policy.get("target_scope") != "project_members":
+            return None
+        project = await session.scalar(
+            select(Project).where(
+                Project.tenant_id == context.tenant_id,
+                Project.id == parent_task.project_id,
+            )
+        )
+        if project is None:
+            raise ResourceNotFound("project", str(parent_task.project_id))
+        if project.status != "active":
+            raise DomainConflict("PROJECT_ARCHIVED", "archived Projects cannot delegate work")
+        managed = project.metadata_json.get("_nico_collaboration", {})
+        if not isinstance(managed, dict) or managed.get("managed") is not True:
+            raise DomainConflict(
+                "PROJECT_NOT_MANAGED",
+                "project_members coordination requires a managed Project",
+            )
+        parent_membership = await session.scalar(
+            select(ProjectMember.id)
+            .join(
+                ProjectSession,
+                (ProjectSession.tenant_id == ProjectMember.tenant_id)
+                & (ProjectSession.project_member_id == ProjectMember.id),
+            )
+            .where(
+                ProjectMember.tenant_id == context.tenant_id,
+                ProjectMember.project_id == project.id,
+                ProjectMember.agent_id == parent.agent_id,
+                ProjectMember.role == "lead",
+                ProjectMember.status == "active",
+                ProjectSession.id == parent_task.project_session_id,
+                ProjectSession.status == "active",
+            )
+        )
+        if parent_membership is None:
+            raise DomainConflict(
+                "PROJECT_LEAD_REQUIRED",
+                "only the active Project Lead Session may delegate to Project members",
+            )
+        target_session_id = await session.scalar(
+            select(ProjectSession.id)
+            .join(
+                ProjectMember,
+                (ProjectMember.tenant_id == ProjectSession.tenant_id)
+                & (ProjectMember.id == ProjectSession.project_member_id),
+            )
+            .where(
+                ProjectSession.tenant_id == context.tenant_id,
+                ProjectSession.project_id == project.id,
+                ProjectSession.agent_id == target.agent_id,
+                ProjectSession.status == "active",
+                ProjectMember.status == "active",
+            )
+        )
+        if target_session_id is None:
+            raise DomainConflict(
+                "PROJECT_MEMBER_INACTIVE",
+                "delegation target must be an active member of the Project",
+            )
+        return target_session_id
 
     @staticmethod
     def _require_enabled_policy(policy: dict[str, Any], intent: DelegationIntent) -> None:

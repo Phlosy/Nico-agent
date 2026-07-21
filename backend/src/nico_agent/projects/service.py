@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import case, select
@@ -101,7 +101,10 @@ class ProjectCollaborationService:
                 kind="shared",
                 supervision_cadence_seconds=command.supervision_cadence_seconds,
                 next_supervision_at=(
-                    datetime.now(UTC) if command.supervision_cadence_seconds is not None else None
+                    datetime.now(UTC)
+                    + timedelta(seconds=command.supervision_cadence_seconds)
+                    if command.supervision_cadence_seconds is not None
+                    else None
                 ),
                 metadata_json={
                     _MANAGED_KEY: {

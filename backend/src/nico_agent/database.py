@@ -44,6 +44,14 @@ class ProviderProbeClaim:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectSupervisionClaim:
+    cycle_id: UUID
+    tenant_id: UUID
+    lease_token: UUID
+    previous_status: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeMaintenanceLease:
     acquired: bool
     active_run_count: int
@@ -148,6 +156,39 @@ class Database:
                 return None
             return ProviderProbeClaim(
                 probe_id=row["probe_id"],
+                tenant_id=row["tenant_id"],
+                lease_token=row["lease_token"],
+                previous_status=row["previous_status"],
+            )
+
+    async def claim_next_project_supervision(
+        self, worker_id: str, lease_seconds: int
+    ) -> ProjectSupervisionClaim | None:
+        """Enqueue due slots and claim one supervision cycle across tenants."""
+
+        if not worker_id or len(worker_id) > 200:
+            raise ValueError("worker_id must contain between 1 and 200 characters")
+        if lease_seconds < 30 or lease_seconds > 3600:
+            raise ValueError("supervision lease_seconds must be between 30 and 3600")
+        async with self.sessions() as session, session.begin():
+            await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT cycle_id, tenant_id, lease_token, previous_status "
+                            "FROM claim_next_project_supervision(:worker_id, :lease_seconds)"
+                        ),
+                        {"worker_id": worker_id, "lease_seconds": lease_seconds},
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            return ProjectSupervisionClaim(
+                cycle_id=row["cycle_id"],
                 tenant_id=row["tenant_id"],
                 lease_token=row["lease_token"],
                 previous_status=row["previous_status"],

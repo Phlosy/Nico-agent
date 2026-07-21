@@ -435,8 +435,18 @@ def upgrade() -> None:
         op.execute(f"GRANT SELECT, INSERT, UPDATE ON {table} TO nico_runtime")
         _enable_rls(table)
 
+    op.execute(_CLAIM_SUPERVISION_FUNCTION)
+    op.execute(
+        "REVOKE ALL ON FUNCTION claim_next_project_supervision(text, integer) FROM PUBLIC"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION claim_next_project_supervision(text, integer) "
+        "TO nico_worker_claimer"
+    )
+
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION IF EXISTS claim_next_project_supervision(text, integer)")
     op.execute("DROP TRIGGER guard_intervention_terminal ON run_interventions")
     op.execute("DROP FUNCTION guard_intervention_terminal()")
     op.execute("DROP TRIGGER guard_supervision_terminal ON project_supervision_cycles")
@@ -488,4 +498,118 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+"""
+
+
+_CLAIM_SUPERVISION_FUNCTION = r"""
+CREATE FUNCTION claim_next_project_supervision(p_worker_id text, p_lease_seconds integer)
+RETURNS TABLE(cycle_id uuid, tenant_id uuid, lease_token uuid, previous_status text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $function$
+#variable_conflict use_column
+DECLARE
+    claimed_at timestamptz := clock_timestamp();
+    due_project record;
+    inserted_cycle_id uuid;
+    correlation uuid;
+BEGIN
+    IF p_worker_id IS NULL OR length(p_worker_id) < 1 OR length(p_worker_id) > 200 THEN
+        RAISE EXCEPTION 'worker_id must contain between 1 and 200 characters';
+    END IF;
+    IF p_lease_seconds < 30 OR p_lease_seconds > 3600 THEN
+        RAISE EXCEPTION 'lease_seconds must be between 30 and 3600';
+    END IF;
+
+    FOR due_project IN
+        SELECT p.id AS project_id, p.tenant_id, p.next_supervision_at,
+               p.supervision_cadence_seconds,
+               pm.id AS lead_member_id, ps.id AS lead_session_id
+        FROM public.projects AS p
+        JOIN public.project_members AS pm
+          ON pm.tenant_id = p.tenant_id AND pm.project_id = p.id
+         AND pm.role = 'lead' AND pm.status = 'active'
+        JOIN public.project_sessions AS ps
+          ON ps.tenant_id = pm.tenant_id AND ps.project_id = pm.project_id
+         AND ps.project_member_id = pm.id AND ps.status = 'active'
+        WHERE p.status = 'active' AND p.kind = 'shared'
+          AND p.supervision_cadence_seconds IS NOT NULL
+          AND p.next_supervision_at IS NOT NULL
+          AND p.next_supervision_at <= claimed_at
+          AND p.metadata -> '_nico_collaboration' ->> 'managed' = 'true'
+        ORDER BY p.next_supervision_at, p.id
+        FOR UPDATE OF p SKIP LOCKED
+        LIMIT 100
+    LOOP
+        inserted_cycle_id := NULL;
+        INSERT INTO public.project_supervision_cycles (
+            tenant_id, project_id, lead_project_member_id, lead_project_session_id,
+            trigger, cadence_slot, scheduled_for, idempotency_key
+        ) VALUES (
+            due_project.tenant_id, due_project.project_id,
+            due_project.lead_member_id, due_project.lead_session_id,
+            'scheduled', due_project.next_supervision_at, due_project.next_supervision_at,
+            'scheduled:' || extract(epoch FROM due_project.next_supervision_at)::bigint::text
+        ) ON CONFLICT ON CONSTRAINT uq_supervision_project_slot DO NOTHING
+        RETURNING id INTO inserted_cycle_id;
+
+        UPDATE public.projects
+        SET next_supervision_at = claimed_at
+                + make_interval(secs => due_project.supervision_cadence_seconds),
+            updated_at = claimed_at
+        WHERE id = due_project.project_id AND tenant_id = due_project.tenant_id;
+
+        IF inserted_cycle_id IS NOT NULL THEN
+            correlation := gen_random_uuid();
+            INSERT INTO public.events (
+                tenant_id, event_type, aggregate_type, aggregate_id,
+                actor_id, payload, correlation_id
+            ) VALUES (
+                due_project.tenant_id, 'ProjectSupervisionScheduled',
+                'project_supervision_cycle', inserted_cycle_id,
+                p_worker_id,
+                jsonb_build_object(
+                    'project_id', due_project.project_id,
+                    'cycle_id', inserted_cycle_id,
+                    'scheduled_for', due_project.next_supervision_at
+                ), correlation
+            );
+            INSERT INTO public.audit_records (
+                tenant_id, action, resource_type, resource_id,
+                actor_id, details, correlation_id
+            ) VALUES (
+                due_project.tenant_id, 'project.supervision.schedule',
+                'project_supervision_cycle', inserted_cycle_id,
+                p_worker_id,
+                jsonb_build_object(
+                    'project_id', due_project.project_id,
+                    'cycle_id', inserted_cycle_id,
+                    'scheduled_for', due_project.next_supervision_at
+                ), correlation
+            );
+        END IF;
+    END LOOP;
+
+    RETURN QUERY
+    WITH candidate AS (
+        SELECT c.id, c.status::text AS previous_status
+        FROM public.project_supervision_cycles AS c
+        WHERE (c.status = 'pending' AND c.scheduled_for <= claimed_at)
+           OR (c.status = 'claimed' AND c.lease_expires_at <= claimed_at)
+        ORDER BY c.scheduled_for, c.created_at, c.id
+        FOR UPDATE OF c SKIP LOCKED
+        LIMIT 1
+    ), claimed AS (
+        UPDATE public.project_supervision_cycles AS c
+        SET status = 'claimed', lease_owner = p_worker_id,
+            lease_token = gen_random_uuid(),
+            lease_expires_at = claimed_at + make_interval(secs => p_lease_seconds),
+            heartbeat_at = claimed_at, revision = c.revision + 1,
+            updated_at = claimed_at
+        FROM candidate AS candidate_row
+        WHERE c.id = candidate_row.id
+        RETURNING c.id, c.tenant_id, c.lease_token, candidate_row.previous_status
+    )
+    SELECT c.id, c.tenant_id, c.lease_token, c.previous_status FROM claimed AS c;
+END;
+$function$;
 """

@@ -12,6 +12,8 @@ from nico_agent.coordination.contracts import DelegationIntent
 def build_coordination_policy_snapshot(
     tenant_settings: dict[str, Any],
     agent_policy: dict[str, Any],
+    *,
+    project_member_version_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Freeze the exact tenant/Agent intersection used for one RuntimeSession."""
 
@@ -30,7 +32,24 @@ def build_coordination_policy_snapshot(
         enabled = False
         errors.append("wildcard secret grants are unsupported")
 
-    return {
+    allowed_versions = tenant_versions & agent_versions
+    target_scope: str | None = None
+    if project_member_version_ids is not None:
+        target_scope = "project_members"
+        tenant_scopes = _string_set(tenant.get("allowed_target_scopes"))
+        agent_scopes = _string_set(agent.get("allowed_target_scopes"))
+        if target_scope not in tenant_scopes or target_scope not in agent_scopes:
+            enabled = False
+            errors.append("project_members target scope is not enabled by both policies")
+            allowed_versions = set()
+        else:
+            allowed_versions = set(project_member_version_ids)
+        if any("*" in item for item in allowed_versions):
+            enabled = False
+            allowed_versions = set()
+            errors.append("wildcard Project member grants are unsupported")
+
+    snapshot = {
         "version": 1,
         "enabled": enabled,
         "max_depth": _restrict_positive_int(tenant.get("max_depth"), agent.get("max_depth")),
@@ -40,10 +59,13 @@ def build_coordination_policy_snapshot(
         "max_parallelism": _restrict_positive_int(
             tenant.get("max_parallelism"), agent.get("max_parallelism")
         ),
-        "allowed_agent_version_ids": sorted(tenant_versions & agent_versions),
+        "allowed_agent_version_ids": sorted(allowed_versions),
         "allowed_secret_refs": sorted(tenant_secrets & agent_secrets),
         "errors": errors,
     }
+    if target_scope is not None:
+        snapshot["target_scope"] = target_scope
+    return snapshot
 
 
 def narrow_child_permissions(

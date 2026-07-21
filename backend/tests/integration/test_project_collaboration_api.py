@@ -6,9 +6,14 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from nico_agent.api import create_app
 from nico_agent.config import Settings
+from nico_agent.database import Database
+from nico_agent.domain.models import ProjectSupervisionCycle, Run
+from nico_agent.projects.worker import ProjectSupervisionWorker
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -324,3 +329,81 @@ async def test_lead_preflight_rejects_hermes_without_writing_project(client: Asy
     rejected = await _create_project(client, headers, hermes, [], key="hermes-project")
     assert rejected.status_code == 409
     assert rejected.json()["code"] == "PROJECT_LEAD_INCOMPATIBLE"
+
+
+@pytest.mark.asyncio
+async def test_supervision_api_replays_updates_cadence_and_archive_cancels_run_tree(
+    client: AsyncClient,
+) -> None:
+    headers = await _bootstrap(client, "CollaborationSupervision")
+    lead = await _ready_agent(client, headers, "lead", lead_capable=True)
+    member = await _ready_agent(client, headers, "member")
+    created = (
+        await _create_project(client, headers, lead, [member], key="supervision-project")
+    ).json()
+    project = created["project"]
+
+    sync_headers = {**headers, "Idempotency-Key": "manual-sync"}
+    first = await client.post(
+        f"/api/v1/projects/{project['id']}/supervision/sync",
+        headers=sync_headers,
+    )
+    assert first.status_code == 202, first.text
+    replay = await client.post(
+        f"/api/v1/projects/{project['id']}/supervision/sync",
+        headers=sync_headers,
+    )
+    assert replay.status_code == 202, replay.text
+    assert replay.json()["id"] == first.json()["id"]
+
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    try:
+        assert await ProjectSupervisionWorker(
+            database, worker_id="api-supervision-worker"
+        ).execute_once()
+        cycle_id = first.json()["id"]
+        cycle = await client.get(
+            f"/api/v1/projects/{project['id']}/supervision/cycles/{cycle_id}",
+            headers=headers,
+        )
+        assert cycle.status_code == 200, cycle.text
+        assert cycle.json()["status"] == "running"
+
+        cadence = await client.patch(
+            f"/api/v1/projects/{project['id']}/supervision/cadence",
+            json={
+                "cadence_seconds": None,
+                "expected_project_revision": project["revision"],
+                "reason": "manual-only test",
+            },
+            headers=headers,
+        )
+        assert cadence.status_code == 200, cadence.text
+        assert cadence.json()["supervision_cadence_seconds"] is None
+        assert cadence.json()["next_supervision_at"] is None
+
+        archived = await client.post(
+            f"/api/v1/projects/{project['id']}/archive",
+            json={"expected_revision": cadence.json()["revision"]},
+            headers=headers,
+        )
+        assert archived.status_code == 200, archived.text
+        after = await client.get(
+            f"/api/v1/projects/{project['id']}/supervision/cycles/{cycle_id}",
+            headers=headers,
+        )
+        assert after.status_code == 200, after.text
+        assert after.json()["status"] == "cancelled"
+        async with database.admin_transaction() as session:
+            stored_cycle = await session.scalar(
+                select(ProjectSupervisionCycle).where(
+                    ProjectSupervisionCycle.id == cycle_id
+                )
+            )
+            assert stored_cycle is not None and stored_cycle.run_id is not None
+            run = await session.get(Run, stored_cycle.run_id)
+            assert run is not None and run.status == "cancelled"
+    finally:
+        await engine.dispose()

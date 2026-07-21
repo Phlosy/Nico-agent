@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 
+from nico_agent.api_schemas import ProjectRead
 from nico_agent.conversations.contracts import (
     ConversationRead,
     ConversationTurnAccepted,
@@ -28,8 +29,11 @@ from nico_agent.projects.contracts import (
     ProjectMemberStateCommand,
     ProjectPreflightRequest,
     ProjectSessionRead,
+    ProjectSupervisionCadenceCommand,
+    ProjectSupervisionCycleRead,
     ProjectTimelinePage,
 )
+from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.projects.read_service import ProjectSessionReadService
 from nico_agent.projects.service import ProjectCollaborationService
 
@@ -50,8 +54,16 @@ def get_read_service(request: Request) -> ProjectSessionReadService:
     return ProjectSessionReadService(database)
 
 
+def get_orchestration_service(request: Request) -> ProjectOrchestrationService:
+    database: Database | None = request.app.state.database
+    if database is None:
+        raise DomainError("DATABASE_UNAVAILABLE", "the Project database is unavailable")
+    return ProjectOrchestrationService(database)
+
+
 Service = Annotated[ProjectCollaborationService, Depends(get_service)]
 ReadService = Annotated[ProjectSessionReadService, Depends(get_read_service)]
+OrchestrationService = Annotated[ProjectOrchestrationService, Depends(get_orchestration_service)]
 Context = Annotated[TenantContext, Depends(get_tenant_context)]
 IdempotencyKey = Annotated[
     str,
@@ -221,3 +233,60 @@ async def get_session_timeline(
         after_sequence=after_sequence,
         limit=limit,
     )
+
+
+@router.post(
+    "/{project_id}/supervision/sync",
+    response_model=ProjectSupervisionCycleRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def request_project_sync(
+    project_id: UUID,
+    service: OrchestrationService,
+    context: Context,
+    idempotency_key: IdempotencyKey,
+):
+    return await service.create_manual(
+        context, project_id, idempotency_key=idempotency_key
+    )
+
+
+@router.patch("/{project_id}/supervision/cadence", response_model=ProjectRead)
+async def update_project_cadence(
+    project_id: UUID,
+    command: ProjectSupervisionCadenceCommand,
+    service: OrchestrationService,
+    context: Context,
+):
+    return await service.update_cadence(
+        context,
+        project_id,
+        cadence_seconds=command.cadence_seconds,
+        expected_revision=command.expected_project_revision,
+        reason=command.reason,
+    )
+
+
+@router.get(
+    "/{project_id}/supervision/cycles",
+    response_model=list[ProjectSupervisionCycleRead],
+)
+async def list_project_supervision_cycles(
+    project_id: UUID,
+    service: OrchestrationService,
+    context: Context,
+):
+    return await service.list_cycles(context, project_id)
+
+
+@router.get(
+    "/{project_id}/supervision/cycles/{cycle_id}",
+    response_model=ProjectSupervisionCycleRead,
+)
+async def get_project_supervision_cycle(
+    project_id: UUID,
+    cycle_id: UUID,
+    service: OrchestrationService,
+    context: Context,
+):
+    return await service.get_cycle(context, project_id, cycle_id)

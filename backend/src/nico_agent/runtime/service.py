@@ -19,6 +19,7 @@ from nico_agent.coordination.policy import (
 )
 from nico_agent.database import Database, RunClaim, TenantContext
 from nico_agent.domain.models import (
+    Agent,
     AgentMessage,
     AgentVersion,
     Artifact,
@@ -32,6 +33,9 @@ from nico_agent.domain.models import (
     ModelEndpoint,
     Plan,
     PlanStep,
+    Project,
+    ProjectMember,
+    ProjectSession,
     Run,
     RunBudgetLedger,
     RunStep,
@@ -43,6 +47,7 @@ from nico_agent.domain.models import (
     ToolApprovalRequest,
 )
 from nico_agent.domain.states import ModelCallStatus, RunStatus, RunStepStatus, TaskStatus
+from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.runtime.contracts import (
     RuntimeCapability,
     RuntimeEvent,
@@ -235,8 +240,15 @@ class RuntimeExecutionService:
                     )
 
             if runtime_session is None:
+                project_member_versions = await self._project_member_version_ids(
+                    session,
+                    task,
+                    run,
+                )
                 coordination_snapshot = build_coordination_policy_snapshot(
-                    tenant.settings, version.coordination_policy
+                    tenant.settings,
+                    version.coordination_policy,
+                    project_member_version_ids=project_member_versions,
                 )
                 tool_snapshot = build_tool_policy_snapshot(
                     tenant.settings,
@@ -306,8 +318,15 @@ class RuntimeExecutionService:
                 )
                 runtime_session.revision += 1
             if not runtime_session.coordination_policy_snapshot:
+                project_member_versions = await self._project_member_version_ids(
+                    session,
+                    task,
+                    run,
+                )
                 runtime_session.coordination_policy_snapshot = build_coordination_policy_snapshot(
-                    tenant.settings, version.coordination_policy
+                    tenant.settings,
+                    version.coordination_policy,
+                    project_member_version_ids=project_member_versions,
                 )
                 runtime_session.revision += 1
             if not runtime_session.knowledge_policy_snapshot:
@@ -814,6 +833,12 @@ class RuntimeExecutionService:
                         }.get(target, TaskStatus.FAILED).value
                     )
                 task.revision += 1
+            await ProjectOrchestrationService.finalize_in_session(
+                session,
+                context,
+                run,
+                narrative_output=(result.output if target is RunStatus.COMPLETED else None),
+            )
             self._record(
                 session,
                 context,
@@ -1228,6 +1253,12 @@ class RuntimeExecutionService:
             if task is not None and TaskStatus(task.status) is TaskStatus.RUNNING:
                 task.status = TaskStatus.FAILED.value
                 task.revision += 1
+            await ProjectOrchestrationService.finalize_in_session(
+                session,
+                context,
+                run,
+                narrative_output=None,
+            )
             self._record(
                 session,
                 context,
@@ -1240,6 +1271,76 @@ class RuntimeExecutionService:
             )
             await session.flush()
             return True
+
+    @staticmethod
+    async def _project_member_version_ids(
+        session: AsyncSession,
+        task: Task,
+        run: Run,
+    ) -> list[str] | None:
+        if task.project_session_id is None:
+            return None
+        project = await session.scalar(
+            select(Project).where(
+                Project.tenant_id == task.tenant_id,
+                Project.id == task.project_id,
+            )
+        )
+        if project is None:
+            raise ValueError("Project-scoped Run references an unavailable Project")
+        managed = project.metadata_json.get("_nico_collaboration", {})
+        if not isinstance(managed, dict) or managed.get("managed") is not True:
+            return None
+        if project.status != "active":
+            raise ValueError("archived Projects cannot initialize a RuntimeSession")
+        lead = await session.scalar(
+            select(ProjectMember)
+            .join(
+                ProjectSession,
+                (ProjectSession.tenant_id == ProjectMember.tenant_id)
+                & (ProjectSession.project_member_id == ProjectMember.id),
+            )
+            .where(
+                ProjectMember.tenant_id == task.tenant_id,
+                ProjectMember.project_id == task.project_id,
+                ProjectMember.agent_id == run.agent_id,
+                ProjectMember.role == "lead",
+                ProjectMember.status == "active",
+                ProjectSession.id == task.project_session_id,
+                ProjectSession.status == "active",
+            )
+        )
+        if lead is None:
+            return None
+        values = await session.scalars(
+            select(AgentVersion.id)
+            .join(
+                Agent,
+                (Agent.tenant_id == AgentVersion.tenant_id)
+                & (Agent.id == AgentVersion.agent_id)
+                & (Agent.current_version_id == AgentVersion.id),
+            )
+            .join(
+                ProjectMember,
+                (ProjectMember.tenant_id == Agent.tenant_id)
+                & (ProjectMember.agent_id == Agent.id),
+            )
+            .join(
+                ProjectSession,
+                (ProjectSession.tenant_id == ProjectMember.tenant_id)
+                & (ProjectSession.project_member_id == ProjectMember.id),
+            )
+            .where(
+                ProjectMember.tenant_id == task.tenant_id,
+                ProjectMember.project_id == task.project_id,
+                ProjectMember.status == "active",
+                ProjectSession.status == "active",
+                Agent.status == "ready",
+                AgentVersion.status == "published",
+            )
+            .order_by(AgentVersion.id)
+        )
+        return [str(value) for value in values]
 
     @staticmethod
     async def _ensure_knowledge_usages(

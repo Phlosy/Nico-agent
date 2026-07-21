@@ -27,6 +27,7 @@ from nico_agent.models.providers import (
     GoogleGeminiProvider,
     OpenAICompatibleProvider,
 )
+from nico_agent.projects.worker import ProjectSupervisionWorker
 from nico_agent.provider_onboarding.worker import ProviderProbeWorker
 from nico_agent.runtime import (
     HermesRuntimeProvider,
@@ -236,6 +237,9 @@ async def worker_main(settings: Settings | None = None) -> None:
             "poll_interval_seconds": runtime_settings.worker_poll_interval_seconds,
             "concurrency": runtime_settings.worker_concurrency,
             "provider_probe_concurrency": runtime_settings.provider_probe_concurrency,
+            "project_supervision_concurrency": (
+                runtime_settings.project_supervision_concurrency
+            ),
             "providers": registry.names,
         },
     )
@@ -274,6 +278,25 @@ async def worker_main(settings: Settings | None = None) -> None:
         )
         for index in range(runtime_settings.provider_probe_concurrency)
     ]
+    supervision_tasks = [
+        asyncio.create_task(
+            execute_loop(
+                ProjectSupervisionWorker(
+                    database,
+                    worker_id=(
+                        f"{runtime_settings.worker_id}-project-supervision-{index + 1}"
+                    ),
+                    lease_seconds=runtime_settings.project_supervision_lease_seconds,
+                ),
+                stopping,
+                poll_interval_seconds=(
+                    runtime_settings.project_supervision_poll_interval_seconds
+                ),
+            ),
+            name=f"project-supervision-executor-{index + 1}",
+        )
+        for index in range(runtime_settings.project_supervision_concurrency)
+    ]
     health_task = asyncio.create_task(
         health_loop(
             service,
@@ -282,7 +305,7 @@ async def worker_main(settings: Settings | None = None) -> None:
         ),
         name="infrastructure-health",
     )
-    supervised_tasks = [*execution_tasks, *probe_tasks, health_task]
+    supervised_tasks = [*execution_tasks, *probe_tasks, *supervision_tasks, health_task]
     health_marker = Path(runtime_settings.worker_health_marker)
     try:
         await health_marker.write_text(f"{runtime_settings.worker_id}\n", encoding="utf-8")

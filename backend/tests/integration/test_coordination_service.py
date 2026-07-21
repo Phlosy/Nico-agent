@@ -29,6 +29,8 @@ from nico_agent.domain.models import (
     Artifact,
     Delegation,
     Project,
+    ProjectMember,
+    ProjectSession,
     Run,
     RunBudgetLedger,
     RuntimeSession,
@@ -192,6 +194,57 @@ def _intent(target: UUID, key: str, *, tokens: int, objective: str | None = None
     )
 
 
+async def _enable_managed_scope(
+    database: Database, seeded: SeededTree
+) -> dict[UUID, UUID]:
+    async with database.admin_transaction() as session:
+        parent_run = await session.get(Run, seeded.parent_run_id)
+        assert parent_run is not None
+        parent_task = await session.get(Task, parent_run.task_id)
+        assert parent_task is not None
+        project = await session.get(Project, parent_task.project_id)
+        assert project is not None
+        project.metadata_json = {"_nico_collaboration": {"managed": True}}
+        agent_ids = [parent_run.agent_id]
+        for version_id in seeded.target_version_ids:
+            version = await session.get(AgentVersion, version_id)
+            assert version is not None
+            agent_ids.append(version.agent_id)
+        sessions: dict[UUID, UUID] = {}
+        for index, agent_id in enumerate(agent_ids):
+            member = ProjectMember(
+                tenant_id=seeded.context.tenant_id,
+                project_id=project.id,
+                agent_id=agent_id,
+                role="lead" if index == 0 else "member",
+                status="active",
+                created_by="coordination-test",
+            )
+            session.add(member)
+            await session.flush()
+            project_session = ProjectSession(
+                tenant_id=seeded.context.tenant_id,
+                project_id=project.id,
+                project_member_id=member.id,
+                agent_id=agent_id,
+                status="active",
+            )
+            session.add(project_session)
+            await session.flush()
+            sessions[agent_id] = project_session.id
+        parent_task.project_session_id = sessions[parent_run.agent_id]
+        runtime = await session.scalar(
+            select(RuntimeSession).where(RuntimeSession.run_id == parent_run.id)
+        )
+        assert runtime is not None
+        runtime.coordination_policy_snapshot = {
+            **runtime.coordination_policy_snapshot,
+            "target_scope": "project_members",
+            "allowed_agent_version_ids": [str(item) for item in seeded.target_version_ids],
+        }
+        return sessions
+
+
 @pytest.mark.asyncio
 async def test_delegate_atomically_creates_child_closure_assignment_and_idempotent_replay() -> None:
     settings = Settings(environment="test", _env_file=None)
@@ -251,6 +304,98 @@ async def test_delegate_atomically_creates_child_closure_assignment_and_idempote
                 worker_id=seeded.worker_id,
                 lease_token=seeded.lease_token,
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_project_member_delegation_links_session_and_checks_live_state_before_budget(
+) -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    try:
+        seeded = await _seed(database)
+        sessions = await _enable_managed_scope(database, seeded)
+        service = CoordinationService(database)
+        first_target = await service.delegate(
+            seeded.context,
+            seeded.parent_run_id,
+            _intent(seeded.target_version_ids[0], "managed-member", tokens=200),
+            worker_id=seeded.worker_id,
+            lease_token=seeded.lease_token,
+        )
+        async with database.admin_transaction() as session:
+            child_task = await session.get(Task, first_target.child_task_id)
+            first_version = await session.get(AgentVersion, seeded.target_version_ids[0])
+            second_version = await session.get(AgentVersion, seeded.target_version_ids[1])
+            assert child_task is not None and first_version is not None
+            assert second_version is not None
+            assert child_task.project_session_id == sessions[first_version.agent_id]
+            second_member = await session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.tenant_id == seeded.context.tenant_id,
+                    ProjectMember.agent_id == second_version.agent_id,
+                    ProjectMember.status == "active",
+                )
+            )
+            second_session = await session.scalar(
+                select(ProjectSession).where(
+                    ProjectSession.tenant_id == seeded.context.tenant_id,
+                    ProjectSession.agent_id == second_version.agent_id,
+                )
+            )
+            assert second_member is not None and second_session is not None
+            second_member.status = "paused"
+            second_session.status = "paused"
+            ledger = await session.scalar(
+                select(RunBudgetLedger).where(
+                    RunBudgetLedger.run_id == seeded.parent_run_id
+                )
+            )
+            assert ledger is not None
+            reserved_before = ledger.token_child_reserved
+
+        with pytest.raises(DomainConflict) as inactive:
+            await service.delegate(
+                seeded.context,
+                seeded.parent_run_id,
+                _intent(seeded.target_version_ids[1], "inactive-member", tokens=100),
+                worker_id=seeded.worker_id,
+                lease_token=seeded.lease_token,
+            )
+        assert inactive.value.code == "PROJECT_MEMBER_INACTIVE"
+        async with database.admin_transaction() as session:
+            ledger = await session.scalar(
+                select(RunBudgetLedger).where(
+                    RunBudgetLedger.run_id == seeded.parent_run_id
+                )
+            )
+            assert ledger is not None and ledger.token_child_reserved == reserved_before
+            parent = await session.get(Run, seeded.parent_run_id)
+            assert parent is not None
+            task = await session.get(Task, parent.task_id)
+            assert task is not None
+            project = await session.get(Project, task.project_id)
+            assert project is not None
+            project.status = "archived"
+
+        with pytest.raises(DomainConflict) as archived:
+            await service.delegate(
+                seeded.context,
+                seeded.parent_run_id,
+                _intent(seeded.target_version_ids[1], "archived-project", tokens=100),
+                worker_id=seeded.worker_id,
+                lease_token=seeded.lease_token,
+            )
+        assert archived.value.code == "PROJECT_ARCHIVED"
+        async with database.admin_transaction() as session:
+            ledger = await session.scalar(
+                select(RunBudgetLedger).where(
+                    RunBudgetLedger.run_id == seeded.parent_run_id
+                )
+            )
+            assert ledger is not None and ledger.token_child_reserved == reserved_before
     finally:
         await engine.dispose()
 
