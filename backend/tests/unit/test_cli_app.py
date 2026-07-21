@@ -30,11 +30,77 @@ class FakeClient:
     def readiness(self) -> dict[str, Any]:
         return {"status": "ready", "components": {}}
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        return []
+    def list_projects(self, *, include_system: bool = False) -> list[dict[str, Any]]:
+        del include_system
+        return [
+            {
+                "id": "22222222-2222-4222-8222-222222222222",
+                "name": "Research",
+                "kind": "shared",
+                "status": "active",
+                "revision": 1,
+            }
+        ]
 
     def get_project(self, project_id: str) -> dict[str, Any]:
-        return {"id": project_id, "name": "Research", "status": "active"}
+        return {
+            "id": project_id,
+            "name": "Research",
+            "kind": "shared",
+            "status": "active",
+            "revision": 1,
+        }
+
+    def list_project_members(self, _project_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "77777777-7777-4777-8777-777777777777",
+                "agent_id": "33333333-3333-4333-8333-333333333333",
+                "role": "lead",
+                "status": "active",
+                "revision": 1,
+            }
+        ]
+
+    def list_project_sessions(self, _project_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "88888888-8888-4888-8888-888888888888",
+                "project_member_id": "77777777-7777-4777-8777-777777777777",
+                "current_conversation_id": "33333333-3333-4333-8333-333333333333",
+                "status": "active",
+            }
+        ]
+
+    def open_project_session(self, project_id: str, session_id: str) -> dict[str, Any]:
+        return {
+            **self.create_conversation(title="Research — Researcher"),
+            "project_id": project_id,
+            "project_session_id": session_id,
+        }
+
+    def project_timeline(
+        self,
+        _project_id: str,
+        _session_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        del limit
+        return {
+            "entries": [
+                {
+                    "sequence": after_sequence + 1,
+                    "kind": "run",
+                    "event_type": "RunCompleted",
+                    "facts": {"status": "completed"},
+                    "links": {},
+                }
+            ],
+            "next_cursor": None,
+            "has_more": False,
+        }
 
     def list_agents(self) -> list[dict[str, Any]]:
         return [
@@ -312,10 +378,9 @@ def test_bare_chat_uses_ready_agent_and_remembers_it_per_profile(
     assert payload["conversation"]["project_id"] == "22222222-2222-4222-8222-222222222222"
     assert payload["conversation"]["mode"] == "personal"
     assert "_cli_mode" not in payload["conversation"]
-    assert (
-        cli_module.ConfigStore(config_path).load().profiles["default"].recent_personal_agent_id
-        == UUID("33333333-3333-4333-8333-333333333333")
-    )
+    assert cli_module.ConfigStore(config_path).load().profiles[
+        "default"
+    ].recent_personal_agent_id == UUID("33333333-3333-4333-8333-333333333333")
 
 
 def test_json_interactive_chat_is_rejected(monkeypatch, tmp_path: Path) -> None:
@@ -429,3 +494,54 @@ def test_run_watch_supports_resume_cursor_and_local_json(monkeypatch, tmp_path: 
     payload = json.loads(result.stdout)
     assert payload["events"][0]["sequence"] == 8
     assert payload["run"]["status"] == "completed"
+
+
+def test_project_status_and_timeline_resolve_exact_name(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    prefix = [
+        "--config-file",
+        str(tmp_path / "config.toml"),
+        "--tenant-id",
+        str(TENANT_ID),
+        "--json",
+        "project",
+    ]
+
+    status = runner.invoke(cli_module.app, [*prefix, "status", "Research"])
+    timeline = runner.invoke(
+        cli_module.app,
+        [*prefix, "timeline", "Research", "--agent", "researcher"],
+    )
+
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.stdout)["project"]["name"] == "Research"
+    assert timeline.exit_code == 0, timeline.output
+    assert json.loads(timeline.stdout)["timeline"]["entries"][0]["kind"] == "run"
+
+
+def test_project_open_one_shot_remembers_workspace(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    config_path = tmp_path / "config.toml"
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(config_path),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "project",
+            "open",
+            "Research",
+            "--message",
+            "summarize progress",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["workspace"]["project"]["name"] == "Research"
+    assert payload["turn"]["assistant_output"] == {"answer": "hello"}
+    assert cli_module.ConfigStore(config_path).load().profiles["default"].recent_project_id == UUID(
+        "22222222-2222-4222-8222-222222222222"
+    )

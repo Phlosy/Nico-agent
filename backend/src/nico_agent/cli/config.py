@@ -260,6 +260,19 @@ class ConfigStore:
         profiles[profile_name] = profile.model_copy(update={"recent_personal_agent_id": agent_id})
         self.save(config.model_copy(update={"profiles": profiles}))
 
+    def remember_project(self, profile_name: str, project_id: UUID) -> None:
+        config = self.load()
+        profile = config.profiles.get(profile_name)
+        if profile is None:
+            raise CliError(
+                "PROFILE_NOT_FOUND",
+                f"profile '{profile_name}' does not exist",
+                exit_code=2,
+            )
+        profiles = dict(config.profiles)
+        profiles[profile_name] = profile.model_copy(update={"recent_project_id": project_id})
+        self.save(config.model_copy(update={"profiles": profiles}))
+
 
 def _serialize(config: CliConfig) -> str:
     lines = [f"current_profile = {json.dumps(config.current_profile)}", ""]

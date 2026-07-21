@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -19,6 +20,7 @@ from nico_agent.cli.config import CliConfig, ConfigStore, Profile, validate_prof
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.execution import ExecRunner, RunWatcher, load_exec_input, write_result
 from nico_agent.cli.output import Output
+from nico_agent.cli.project import ProjectCli
 from nico_agent.cli.provider import ProviderInput, ProviderOnboardingCoordinator
 from nico_agent.cli.service_bridge import ServiceBridge
 
@@ -31,7 +33,7 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 config_app = typer.Typer(help="管理本地连接 profile。", no_args_is_help=True)
-project_app = typer.Typer(help="查询 Project。", no_args_is_help=True)
+project_app = typer.Typer(help="创建、进入并管理 Project。", no_args_is_help=True)
 agent_app = typer.Typer(help="查询 Agent 与不可变版本。", no_args_is_help=True)
 task_app = typer.Typer(help="查询 Task。", no_args_is_help=True)
 run_app = typer.Typer(help="查询 Run、Runtime 和持久化事件。", no_args_is_help=True)
@@ -794,9 +796,7 @@ def project_list(
     rows = _api(
         state,
         lambda client: (
-            client.list_projects(include_system=True)
-            if include_system
-            else client.list_projects()
+            client.list_projects(include_system=True) if include_system else client.list_projects()
         ),
     )
     state.output().table(
@@ -807,11 +807,266 @@ def project_list(
 
 
 @project_app.command("get")
-def project_get(ctx: typer.Context, project_id: UUID) -> None:
+def project_get(ctx: typer.Context, project_id: str) -> None:
     state = _state(ctx)
-    state.output().emit(
-        _api(state, lambda client: client.get_project(str(project_id))), title="Project"
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).resolve_project(project_id),
     )
+    state.output().emit(value, title="Project")
+
+
+@project_app.command("new")
+def project_new(
+    ctx: typer.Context,
+    name: str | None = typer.Argument(None),
+    goal: str | None = typer.Option(None, "--goal"),
+    lead: str | None = typer.Option(None, "--lead"),
+    member: list[str] = typer.Option([], "--member"),
+    description: str | None = typer.Option(None, "--description"),
+    acceptance: str = typer.Option("{}", "--acceptance", help="JSON acceptance object."),
+    cadence_seconds: int = typer.Option(3600, "--cadence-seconds", min=300, max=604800),
+    no_supervision: bool = typer.Option(False, "--no-supervision"),
+    confirmed: bool = typer.Option(False, "--yes"),
+) -> None:
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        interactive = not state.json_mode and sys.stdin.isatty()
+        resolved_name = name or (typer.prompt("Project name") if interactive else None)
+        resolved_goal = goal or (typer.prompt("Project goal") if interactive else None)
+        if not resolved_name or not resolved_goal:
+            raise CliError(
+                "PROJECT_INPUT_REQUIRED",
+                "project new requires NAME and --goal outside an interactive terminal",
+                exit_code=2,
+            )
+        try:
+            acceptance_value = json.loads(acceptance)
+        except json.JSONDecodeError as exc:
+            raise CliError(
+                "PROJECT_ACCEPTANCE_INVALID", "--acceptance must be valid JSON", exit_code=2
+            ) from exc
+        if not isinstance(acceptance_value, dict):
+            raise CliError(
+                "PROJECT_ACCEPTANCE_INVALID", "--acceptance must be a JSON object", exit_code=2
+            )
+        if interactive and not confirmed and not typer.confirm("Create this Project?"):
+            raise CliError(
+                "PROJECT_CREATION_CANCELLED", "Project creation was cancelled", exit_code=2
+            )
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            value = ProjectCli(
+                client,
+                state.output(),
+                interactive=interactive,
+                prompt=typer.prompt,
+            ).create(
+                name=resolved_name,
+                goal=resolved_goal,
+                lead=lead,
+                members=member,
+                description=description,
+                acceptance=acceptance_value,
+                cadence_seconds=None if no_supervision else cadence_seconds,
+            )
+        state.store().remember_project(profile.name, UUID(str(value["project"]["id"])))
+        return value
+
+    value = _guard(state, operation)
+    state.output().emit(value, title="Project Created")
+
+
+@project_app.command("status")
+def project_status(ctx: typer.Context, project: str) -> None:
+    state = _state(ctx)
+    value = _api(state, lambda client: ProjectCli(client, state.output()).status(project))
+    state.output().emit(value, title="Project Status")
+
+
+@project_app.command("members")
+def project_members(ctx: typer.Context, project: str) -> None:
+    state = _state(ctx)
+    value = _api(state, lambda client: ProjectCli(client, state.output()).status(project))
+    state.output().table(
+        value["members"],
+        title="Project Members",
+        columns=["agent_id", "role", "status", "revision", "created_at"],
+    )
+
+
+def _run_project_chat(
+    state: AppState,
+    *,
+    project: str,
+    agent: str | None,
+    message: str | None,
+    read_only: bool,
+) -> None:
+    if state.json_mode and message is None and not read_only:
+        raise CliError(
+            "JSON_INTERACTIVE_UNSUPPORTED",
+            "--json project chat requires --message or --read-only",
+            exit_code=2,
+        )
+    profile = state.resolved_profile()
+    with NicoApiClient(profile) as client:
+        project_cli = ProjectCli(client, state.output())
+        workspace = project_cli.workspace(project, agent_reference=agent)
+        conversation = {**workspace["conversation"], "_cli_mode": "project"}
+        runner = ChatRunner(
+            client,
+            state.output(),
+            history_path=state.store().path.with_name("history"),
+        )
+        state.store().remember_project(profile.name, UUID(str(workspace["project"]["id"])))
+        effective_read_only = read_only or bool(workspace["read_only"])
+        if effective_read_only:
+            turns = runner.history(conversation["id"])
+            if state.json_mode:
+                state.output().emit({"workspace": workspace, "turns": turns})
+            else:
+                runner.run_interactive(conversation, read_only=True)
+            return
+        if message is not None:
+            result = runner.submit(conversation, message)
+            if state.json_mode:
+                state.output().emit({"workspace": workspace, **result})
+            return
+        runner.run_interactive(conversation, read_only=False)
+
+
+@project_app.command("open")
+def project_open(
+    ctx: typer.Context,
+    project: str,
+    message: str | None = typer.Option(None, "--message"),
+    read_only: bool = typer.Option(False, "--read-only"),
+) -> None:
+    state = _state(ctx)
+    _guard(
+        state,
+        lambda: _run_project_chat(
+            state,
+            project=project,
+            agent=None,
+            message=message,
+            read_only=read_only,
+        ),
+    )
+
+
+@project_app.command("session")
+def project_session(
+    ctx: typer.Context,
+    project: str,
+    agent: str = typer.Option(..., "--agent"),
+    message: str | None = typer.Option(None, "--message"),
+    read_only: bool = typer.Option(False, "--read-only"),
+) -> None:
+    state = _state(ctx)
+    _guard(
+        state,
+        lambda: _run_project_chat(
+            state,
+            project=project,
+            agent=agent,
+            message=message,
+            read_only=read_only,
+        ),
+    )
+
+
+@project_app.command("timeline")
+def project_timeline(
+    ctx: typer.Context,
+    project: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    after_sequence: int = typer.Option(0, "--after", min=0),
+    limit: int = typer.Option(100, "--limit", min=1, max=500),
+) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).timeline(
+            project,
+            agent_reference=agent,
+            after_sequence=after_sequence,
+            limit=limit,
+        ),
+    )
+    if state.json_mode:
+        state.output().emit(value)
+    else:
+        state.output().table(
+            value["timeline"]["entries"],
+            title="Project Work Timeline",
+            columns=["sequence", "kind", "event_type", "actor_id", "facts", "links"],
+        )
+
+
+@project_app.command("member-add")
+def project_member_add(
+    ctx: typer.Context,
+    project: str,
+    agent: str,
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=1),
+) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).add_member(
+            project, agent, expected_project_revision=expected_revision
+        ),
+    )
+    state.output().emit(value, title="Project Member Added")
+
+
+@project_app.command("member-state")
+def project_member_state(
+    ctx: typer.Context,
+    project: str,
+    agent: str,
+    target: str = typer.Option(..., "--state", help="active, paused, or removed"),
+    reason: str | None = typer.Option(None, "--reason"),
+    expected_project_revision: int | None = typer.Option(
+        None, "--expected-project-revision", min=1
+    ),
+    expected_member_revision: int | None = typer.Option(None, "--expected-member-revision", min=1),
+) -> None:
+    state = _state(ctx)
+    if target not in {"active", "paused", "removed"}:
+        raise typer.BadParameter("--state must be active, paused, or removed")
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).set_member_state(
+            project,
+            agent,
+            target=target,
+            reason=reason,
+            expected_project_revision=expected_project_revision,
+            expected_member_revision=expected_member_revision,
+        ),
+    )
+    state.output().emit(value, title="Project Member Updated")
+
+
+@project_app.command("lead")
+def project_lead(
+    ctx: typer.Context,
+    project: str,
+    agent: str,
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=1),
+) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).replace_lead(
+            project, agent, expected_project_revision=expected_revision
+        ),
+    )
+    state.output().emit(value, title="Project Lead Replaced")
 
 
 @agent_app.command("list")

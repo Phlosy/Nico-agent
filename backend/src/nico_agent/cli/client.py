@@ -99,6 +99,127 @@ class NicoApiClient:
     def get_project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/projects/{project_id}")
 
+    def preflight_project(
+        self, *, lead_agent_id: str, member_agent_ids: list[str]
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/projects/collaboration/preflight",
+            json_body={
+                "lead_agent_id": lead_agent_id,
+                "member_agent_ids": member_agent_ids,
+            },
+        )
+
+    def create_collaboration_project(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        goal: str,
+        acceptance: dict[str, Any],
+        lead_agent_id: str,
+        member_agent_ids: list[str],
+        supervision_cadence_seconds: int | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/projects/collaboration",
+            json_body={
+                "name": name,
+                "description": description,
+                "goal": goal,
+                "acceptance": acceptance,
+                "lead_agent_id": lead_agent_id,
+                "member_agent_ids": member_agent_ids,
+                "supervision_cadence_seconds": supervision_cadence_seconds,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def list_project_members(self, project_id: str) -> list[dict[str, Any]]:
+        return self.request("GET", f"/api/v1/projects/{project_id}/members")
+
+    def list_project_sessions(self, project_id: str) -> list[dict[str, Any]]:
+        return self.request("GET", f"/api/v1/projects/{project_id}/sessions")
+
+    def open_project_session(self, project_id: str, session_id: str) -> dict[str, Any]:
+        return self.request("POST", f"/api/v1/projects/{project_id}/sessions/{session_id}/open")
+
+    def project_timeline(
+        self,
+        project_id: str,
+        session_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return self.request(
+            "GET",
+            f"/api/v1/projects/{project_id}/sessions/{session_id}/timeline",
+            params={"after_sequence": after_sequence, "limit": limit},
+        )
+
+    def add_project_member(
+        self,
+        project_id: str,
+        *,
+        agent_id: str,
+        expected_project_revision: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/members",
+            json_body={
+                "agent_id": agent_id,
+                "expected_project_revision": expected_project_revision,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def set_project_member_state(
+        self,
+        project_id: str,
+        agent_id: str,
+        *,
+        target: str,
+        expected_project_revision: int,
+        expected_member_revision: int,
+        reason: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/members/{agent_id}/state",
+            json_body={
+                "target": target,
+                "expected_project_revision": expected_project_revision,
+                "expected_member_revision": expected_member_revision,
+                "reason": reason,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def replace_project_lead(
+        self,
+        project_id: str,
+        *,
+        new_lead_agent_id: str,
+        expected_project_revision: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/lead",
+            json_body={
+                "new_lead_agent_id": new_lead_agent_id,
+                "expected_project_revision": expected_project_revision,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
     def list_agents(self) -> list[dict[str, Any]]:
         return self.request("GET", "/api/v1/agents")
 

@@ -123,6 +123,33 @@ def test_conversation_writes_send_idempotency_key() -> None:
     )
 
 
+def test_project_workflow_requests_preserve_revision_and_idempotency() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(201, json={"member": {"status": "paused"}})
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        result = client.set_project_member_state(
+            "project-1",
+            "agent-1",
+            target="paused",
+            expected_project_revision=4,
+            expected_member_revision=2,
+            reason="waiting",
+            idempotency_key="member-state-1",
+        )
+
+    assert result["member"]["status"] == "paused"
+    assert seen[0].url.path == "/api/v1/projects/project-1/members/agent-1/state"
+    assert seen[0].headers["idempotency-key"] == "member-state-1"
+    assert seen[0].read() == (
+        b'{"target":"paused","expected_project_revision":4,'
+        b'"expected_member_revision":2,"reason":"waiting"}'
+    )
+
+
 def test_tool_approval_decision_is_versioned_and_idempotent() -> None:
     seen: list[httpx.Request] = []
 
