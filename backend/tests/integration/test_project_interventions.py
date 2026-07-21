@@ -14,6 +14,7 @@ from nico_agent.domain.errors import DomainConflict
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
+    Conversation,
     Project,
     ProjectMember,
     ProjectSession,
@@ -102,6 +103,19 @@ async def _seed(database: Database) -> dict[str, object]:
             )
             session.add(project_session)
             await session.flush()
+            conversation = Conversation(
+                tenant_id=tenant.id,
+                project_id=project.id,
+                project_session_id=project_session.id,
+                agent_id=agent.id,
+                agent_version_id=versions[index].id,
+                title=f"Intervention session {index}",
+                created_by="intervention-test",
+                idempotency_key=f"intervention-session-{index}-{suffix}",
+            )
+            session.add(conversation)
+            await session.flush()
+            project_session.current_conversation_id = conversation.id
             memberships.append(membership)
             project_sessions.append(project_session)
         task = Task(
@@ -293,6 +307,14 @@ async def test_project_change_targets_lead_and_unsupported_runtime_fails_closed(
             idempotency_key="project-change-one",
         )
         assert accepted.status.value == "queued"
+        replay = await service.escalate_project_change(
+            seeded["context"],
+            seeded["project_id"],
+            seeded["member_session_id"],
+            ProjectChangeCreate(content="Re-scope delivery around the new API constraint."),
+            idempotency_key="project-change-one",
+        )
+        assert replay.id == accepted.id
         async with database.admin_transaction() as session:
             lead_task = await session.get(Task, accepted.task_id)
             assert lead_task is not None
@@ -302,6 +324,41 @@ async def test_project_change_targets_lead_and_unsupported_runtime_fails_closed(
             )
             assert runtime is not None
             runtime.execution_mode = "direct"
+            old_lead = await session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == seeded["project_id"],
+                    ProjectMember.role == "lead",
+                )
+            )
+            assert old_lead is not None
+            new_lead = await session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == seeded["project_id"],
+                    ProjectMember.agent_id != old_lead.agent_id,
+                )
+            )
+            assert new_lead is not None
+            old_lead.role = "member"
+            await session.flush()
+            new_lead.role = "lead"
+
+        replay_after_rotation = await service.escalate_project_change(
+            seeded["context"],
+            seeded["project_id"],
+            seeded["member_session_id"],
+            ProjectChangeCreate(content="Re-scope delivery around the new API constraint."),
+            idempotency_key="project-change-one",
+        )
+        assert replay_after_rotation.id == accepted.id
+        with pytest.raises(DomainConflict) as changed_replay:
+            await service.escalate_project_change(
+                seeded["context"],
+                seeded["project_id"],
+                seeded["member_session_id"],
+                ProjectChangeCreate(content="A different Project change."),
+                idempotency_key="project-change-one",
+            )
+        assert changed_replay.value.code == "IDEMPOTENCY_CONFLICT"
         with pytest.raises(DomainConflict) as unsupported:
             await service.create_local_guidance(
                 seeded["context"],

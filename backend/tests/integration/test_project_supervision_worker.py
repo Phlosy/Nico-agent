@@ -213,6 +213,34 @@ async def test_supervision_claim_is_exactly_once_recovers_and_uses_current_lead(
 
 
 @pytest.mark.asyncio
+async def test_stale_supervision_claim_fails_cleanly_after_project_archive() -> None:
+    engine = create_async_engine(Settings(environment="test", _env_file=None).resolved_database_url)
+    database = Database(engine)
+    try:
+        context, seeded = await _seed(database)
+        service = ProjectOrchestrationService(database)
+        cycle = await service.create_manual(
+            context,
+            seeded["project_id"],
+            idempotency_key="archive-before-materialize",
+        )
+        claim = await database.claim_next_project_supervision("stale-claim-worker", 30)
+        assert claim is not None and claim.cycle_id == cycle.id
+        async with database.admin_transaction() as session:
+            project = await session.get(Project, seeded["project_id"])
+            assert project is not None
+            project.status = "archived"
+
+        materialized = await service.materialize_claim(claim, worker_id="stale-claim-worker")
+        assert materialized.status == "failed"
+        assert materialized.error["code"] == "PROJECT_ARCHIVED"
+        assert materialized.task_id is None
+        assert materialized.run_id is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_due_cadence_creates_one_slot_and_advances_without_backlog() -> None:
     engine = create_async_engine(Settings(environment="test", _env_file=None).resolved_database_url)
     database = Database(engine)

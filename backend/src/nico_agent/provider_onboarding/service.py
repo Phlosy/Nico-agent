@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -22,6 +23,7 @@ from nico_agent.domain.models import (
     ModelEndpoint,
     Project,
     ProviderProbe,
+    Tenant,
 )
 from nico_agent.provider_onboarding.catalog import get_provider_catalog
 from nico_agent.provider_onboarding.contracts import (
@@ -38,6 +40,15 @@ from nico_agent.provider_onboarding.contracts import (
 )
 
 _PREVIEW_TTL = timedelta(minutes=15)
+_PROJECT_COORDINATION_POLICY = {
+    "enabled": True,
+    "allowed_target_scopes": ["project_members"],
+    "allowed_agent_version_ids": [],
+    "allowed_secret_refs": [],
+    "max_depth": 4,
+    "max_children": 16,
+    "max_parallelism": 4,
+}
 
 
 class ProviderOnboardingService:
@@ -52,6 +63,7 @@ class ProviderOnboardingService:
         self._validate_candidate(command.candidate)
         candidate_hash = canonical_candidate_hash(command.candidate)
         async with self.database.tenant_transaction(context) as session:
+            await self._validate_custom_binding(session, context, command.candidate)
             existing = await session.scalar(
                 select(ProviderProbe).where(
                     ProviderProbe.tenant_id == context.tenant_id,
@@ -201,6 +213,30 @@ class ProviderOnboardingService:
                     )
 
             projection = preview.projection
+            tenant_projection = projection.get("tenant")
+            if isinstance(tenant_projection, dict):
+                tenant = await session.scalar(
+                    select(Tenant).where(Tenant.id == context.tenant_id).with_for_update()
+                )
+                if tenant is None:
+                    raise ResourceNotFound("tenant", str(context.tenant_id))
+                tenant.settings = dict(tenant_projection["settings"])
+                tenant.revision += 1
+                session.add(
+                    AuditRecord(
+                        tenant_id=context.tenant_id,
+                        action="tenant.coordination.enable",
+                        resource_type="tenant",
+                        resource_id=tenant.id,
+                        actor_id=context.actor_id,
+                        details={
+                            "source": "provider_onboarding",
+                            "allowed_target_scopes": ["project_members"],
+                            "revision": tenant.revision,
+                        },
+                        correlation_id=context.correlation_id,
+                    )
+                )
             endpoint_projection = projection["endpoint"]
             endpoint = await session.scalar(
                 select(ModelEndpoint).where(
@@ -525,9 +561,10 @@ class ProviderOnboardingService:
                 role="assistant",
                 mandate="Help the user safely and accurately.",
                 runtime_provider="nico_native",
-                execution_mode="direct",
+                execution_mode="react",
                 model_endpoint_id=UUID(endpoint_projection["id"]),
                 model_name=str(probe.model_name),
+                coordination_policy=dict(_PROJECT_COORDINATION_POLICY),
             )
         latest_version = await session.scalar(
             select(func.max(AgentVersion.version)).where(
@@ -557,6 +594,34 @@ class ProviderOnboardingService:
             "agent_version": version_projection,
         }
         changed_fields = ["agent.current_version_id", "agent.status", "agent.revision"]
+        if agent is None:
+            tenant_statement = select(Tenant).where(Tenant.id == context.tenant_id)
+            if lock_target:
+                tenant_statement = tenant_statement.with_for_update()
+            tenant = await session.scalar(tenant_statement)
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            settings = dict(tenant.settings or {})
+            current_policy = settings.get("coordination_policy", {})
+            merged_policy = dict(current_policy) if isinstance(current_policy, dict) else {}
+            scopes = {
+                str(item)
+                for item in merged_policy.get("allowed_target_scopes", [])
+                if isinstance(item, str)
+            }
+            scopes.add("project_members")
+            merged_policy.update(
+                {
+                    "enabled": True,
+                    "allowed_target_scopes": sorted(scopes),
+                    "max_depth": merged_policy.get("max_depth") or 4,
+                    "max_children": merged_policy.get("max_children") or 16,
+                    "max_parallelism": merged_policy.get("max_parallelism") or 4,
+                }
+            )
+            settings["coordination_policy"] = merged_policy
+            projection["tenant"] = {"id": str(tenant.id), "settings": settings}
+            changed_fields.extend(["tenant.settings.coordination_policy", "tenant.revision"])
         if endpoint is None:
             changed_fields.insert(0, "model_endpoint")
         changed_fields.extend(["agent_version", "provider_probe.status"])
@@ -795,6 +860,7 @@ class ProviderOnboardingService:
                         "PROVIDER_OPTIONS_INVALID",
                         "custom provider contains unsupported options",
                     ) from exc
+                ProviderOnboardingService._validate_custom_credential_scope(candidate)
                 return
             raise DomainConflict("PROVIDER_NOT_FOUND", "provider preset is not available")
         if candidate.protocol != provider.protocol:
@@ -814,4 +880,46 @@ class ProviderOnboardingService:
                 "PROVIDER_OPTIONS_INVALID",
                 "provider candidate contains unsupported options",
                 details={"option_keys": unknown_options},
+            )
+
+    @staticmethod
+    def _validate_custom_credential_scope(candidate: CandidateConfiguration) -> None:
+        label = re.sub(r"[^A-Z0-9]", "_", candidate.provider_key.upper())
+        env_prefix = f"env:NICO_MODEL_SECRET_{label}_"
+        secret_scope = f"secret:providers/{candidate.provider_key}"
+        if not (
+            candidate.credential_ref.startswith(env_prefix)
+            or candidate.credential_ref == secret_scope
+            or candidate.credential_ref.startswith(f"{secret_scope}/")
+        ):
+            raise DomainConflict(
+                "PROVIDER_CREDENTIAL_SCOPE_INVALID",
+                "custom Providers require a dedicated local credential created for their key",
+            )
+
+    @staticmethod
+    async def _validate_custom_binding(
+        session: AsyncSession,
+        context: TenantContext,
+        candidate: CandidateConfiguration,
+    ) -> None:
+        if not candidate.provider_key.startswith("custom-"):
+            return
+        bound = await session.scalar(
+            select(ModelEndpoint)
+            .where(
+                ModelEndpoint.tenant_id == context.tenant_id,
+                ModelEndpoint.stable_key == candidate.provider_key,
+            )
+            .order_by(ModelEndpoint.revision.desc())
+            .limit(1)
+        )
+        if bound is not None and (
+            bound.protocol != candidate.protocol
+            or bound.base_url != candidate.base_url
+            or bound.credential_ref != candidate.credential_ref
+        ):
+            raise DomainConflict(
+                "PROVIDER_CUSTOM_BINDING_CONFLICT",
+                "custom Provider keys are permanently bound to one endpoint and credential",
             )

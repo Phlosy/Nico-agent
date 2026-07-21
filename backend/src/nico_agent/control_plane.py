@@ -1166,9 +1166,20 @@ class ControlPlaneService:
         *,
         for_update: bool = False,
     ) -> Task:
-        statement = select(Task).where(Task.tenant_id == context.tenant_id, Task.id == task_id)
+        statement = (
+            select(Task)
+            .join(
+                Project,
+                (Project.tenant_id == Task.tenant_id) & (Project.id == Task.project_id),
+            )
+            .where(
+                Task.tenant_id == context.tenant_id,
+                Task.id == task_id,
+                self._project_visible_to_actor(context),
+            )
+        )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=Task)
         return await self._one(session, statement, "task", task_id)
 
     async def _run(
@@ -1179,9 +1190,21 @@ class ControlPlaneService:
         *,
         for_update: bool = False,
     ) -> Run:
-        statement = select(Run).where(Run.tenant_id == context.tenant_id, Run.id == run_id)
+        statement = (
+            select(Run)
+            .join(Task, (Task.tenant_id == Run.tenant_id) & (Task.id == Run.task_id))
+            .join(
+                Project,
+                (Project.tenant_id == Task.tenant_id) & (Project.id == Task.project_id),
+            )
+            .where(
+                Run.tenant_id == context.tenant_id,
+                Run.id == run_id,
+                self._project_visible_to_actor(context),
+            )
+        )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=Run)
         return await self._one(session, statement, "run", run_id)
 
     async def _run_step(
@@ -1193,11 +1216,28 @@ class ControlPlaneService:
         *,
         for_update: bool = False,
     ) -> RunStep:
-        statement = select(RunStep).where(
-            RunStep.tenant_id == context.tenant_id,
-            RunStep.run_id == run_id,
-            RunStep.id == step_id,
+        statement = (
+            select(RunStep)
+            .join(
+                Run,
+                (Run.tenant_id == RunStep.tenant_id) & (Run.id == RunStep.run_id),
+            )
+            .join(Task, (Task.tenant_id == Run.tenant_id) & (Task.id == Run.task_id))
+            .join(
+                Project,
+                (Project.tenant_id == Task.tenant_id) & (Project.id == Task.project_id),
+            )
+            .where(
+                RunStep.tenant_id == context.tenant_id,
+                RunStep.run_id == run_id,
+                RunStep.id == step_id,
+                self._project_visible_to_actor(context),
+            )
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=RunStep)
         return await self._one(session, statement, "run_step", step_id)
+
+    @staticmethod
+    def _project_visible_to_actor(context: TenantContext):
+        return or_(Project.kind == "shared", Project.owner_actor_id == context.actor_id)

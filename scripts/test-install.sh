@@ -240,6 +240,11 @@ printf 'preserve immutable release\n' > "$RELEASE_DIR/operator-sentinel"
 install_release_files "$INSTALL_INPUT"
 [[ -f "$RELEASE_DIR/operator-sentinel" ]] || fail \
   "same-version reinstall replaced the immutable release directory"
+LOCAL_IMAGES=true
+install_release_files "$INSTALL_INPUT"
+[[ ! -f "$RELEASE_DIR/operator-sentinel" ]] || fail \
+  "local same-version reinstall reused stale release files"
+LOCAL_IMAGES=false
 printf 'v9.9.9\n' > "$RELEASE_DIR/version.txt"
 if (validate_release_directory "$RELEASE_DIR") >/dev/null 2>&1; then
   fail "release validation accepted mismatched internal version metadata"

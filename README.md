@@ -294,6 +294,12 @@ nico provider list --models openai --limit 20
 `--credential-ref` 明确传入。自动化模式必须显式提供引用、模型、Project、
 Agent/Starter 以及 `--yes`，不存在接受明文 Key 的命令行选项。
 
+新建 Starter Agent 默认使用 Native ReAct，并带有受限的 `project_members` 协作策略，
+因此可直接被选择为 Project Lead。发布预览会同时列出 Tenant 协作策略的变化，确认
+后才原子生效。自定义 Provider 的现有凭据引用必须位于其完整路由键对应的专属命名
+空间，例如 `custom-local-ollama` 使用 `secret:providers/custom-local-ollama`，不能把
+其他 Provider 的凭据转发到自定义端点。
+
 列表最后的 **Other Provider** 可接入任意 OpenAI-compatible、Anthropic Messages
 或 Google Gemini 兼容端点。宿主机上的 Ollama、vLLM、LM Studio 可直接填写例如
 `http://localhost:11434/v1`；安装版会将它转换成 Worker 容器可访问的地址。发现
@@ -307,7 +313,7 @@ nico provider add other \
   --custom-key custom-local-ollama \
   --protocol openai_compatible \
   --base-url http://localhost:11434/v1 \
-  --credential-ref secret:providers/local-ollama \
+  --credential-ref secret:providers/custom-local-ollama \
   --model qwen3:8b \
   --project "$PROJECT_ID" \
   --starter-name local-assistant \

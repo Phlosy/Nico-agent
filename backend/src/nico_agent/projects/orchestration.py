@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.agent_versions import AgentVersionLifecycle
@@ -61,18 +62,18 @@ def bounded_narrative(output: dict[str, Any] | None) -> str | None:
 def supervision_facts(
     *,
     project_id: str,
-    member_statuses: list[str],
-    task_statuses: list[str],
-    run_statuses: list[str],
-    delegation_statuses: list[str],
+    member_statuses: Iterable[str] | Mapping[str, int],
+    task_statuses: Iterable[str] | Mapping[str, int],
+    run_statuses: Iterable[str] | Mapping[str, int],
+    delegation_statuses: Iterable[str] | Mapping[str, int],
     artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build a deterministic, safe projection without model-derived authority."""
 
-    members = Counter(member_statuses)
-    tasks = Counter(task_statuses)
-    runs = Counter(run_statuses)
-    delegations = Counter(delegation_statuses)
+    members = _status_counts(member_statuses)
+    tasks = _status_counts(task_statuses)
+    runs = _status_counts(run_statuses)
+    delegations = _status_counts(delegation_statuses)
     total_tasks = sum(tasks.values())
     completed_tasks = tasks["completed"]
     blockers = [
@@ -268,17 +269,6 @@ class ProjectOrchestrationService:
     ) -> ProjectSupervisionCycle:
         context = TenantContext(claim.tenant_id, worker_id, claim.lease_token)
         async with self.database.tenant_transaction(context) as session:
-            cycle_ref = await session.scalar(
-                select(ProjectSupervisionCycle).where(
-                    ProjectSupervisionCycle.tenant_id == claim.tenant_id,
-                    ProjectSupervisionCycle.id == claim.cycle_id,
-                )
-            )
-            if cycle_ref is None:
-                raise ResourceNotFound("project_supervision_cycle", str(claim.cycle_id))
-            project, lead, lead_session = await self._active_lead(
-                session, context, cycle_ref.project_id, for_update=True
-            )
             cycle = await session.scalar(
                 select(ProjectSupervisionCycle)
                 .where(
@@ -291,15 +281,31 @@ class ProjectOrchestrationService:
                 raise ResourceNotFound("project_supervision_cycle", str(claim.cycle_id))
             if cycle.status == ProjectSupervisionStatus.RUNNING.value:
                 return cycle
+            if cycle.status in {
+                ProjectSupervisionStatus.COMPLETED.value,
+                ProjectSupervisionStatus.FAILED.value,
+                ProjectSupervisionStatus.CANCELLED.value,
+            }:
+                return cycle
             if (
                 cycle.status != ProjectSupervisionStatus.CLAIMED.value
                 or cycle.lease_owner != worker_id
                 or cycle.lease_token != claim.lease_token
             ):
-                raise DomainConflict(
-                    "SUPERVISION_LEASE_LOST",
-                    "supervision claim is no longer owned",
+                return cycle
+            try:
+                project, lead, lead_session = await self._active_lead(
+                    session, context, cycle.project_id, for_update=True
                 )
+            except DomainConflict as exc:
+                if exc.code not in {
+                    "PROJECT_ARCHIVED",
+                    "PROJECT_LEAD_REQUIRED",
+                    "PROJECT_NOT_MANAGED",
+                }:
+                    raise
+                self._fail_cycle(session, context, cycle, exc.code, exc.message)
+                return cycle
             if cycle.task_id is not None and cycle.run_id is not None:
                 cycle.status = ProjectSupervisionStatus.RUNNING.value
                 cycle.started_at = cycle.started_at or datetime.now(UTC)
@@ -431,41 +437,59 @@ class ProjectOrchestrationService:
             if cycle_task.status != terminal_task_status:
                 cycle_task.status = terminal_task_status
                 cycle_task.revision += 1
-        task_statuses = list(
-            await session.scalars(
-                select(Task.status).where(
-                    Task.tenant_id == context.tenant_id, Task.project_id == cycle.project_id
+        task_statuses = dict(
+            (
+                await session.execute(
+                    select(Task.status, func.count())
+                    .where(
+                        Task.tenant_id == context.tenant_id,
+                        Task.project_id == cycle.project_id,
+                    )
+                    .group_by(Task.status)
                 )
-            )
+            ).all()
         )
-        run_statuses = list(
-            await session.scalars(
-                select(Run.status)
-                .join(Task, (Task.tenant_id == Run.tenant_id) & (Task.id == Run.task_id))
-                .where(Run.tenant_id == context.tenant_id, Task.project_id == cycle.project_id)
-            )
+        run_statuses = dict(
+            (
+                await session.execute(
+                    select(Run.status, func.count())
+                    .join(Task, (Task.tenant_id == Run.tenant_id) & (Task.id == Run.task_id))
+                    .where(
+                        Run.tenant_id == context.tenant_id,
+                        Task.project_id == cycle.project_id,
+                    )
+                    .group_by(Run.status)
+                )
+            ).all()
         )
-        member_statuses = list(
-            await session.scalars(
-                select(ProjectMember.status).where(
-                    ProjectMember.tenant_id == context.tenant_id,
-                    ProjectMember.project_id == cycle.project_id,
+        member_statuses = dict(
+            (
+                await session.execute(
+                    select(ProjectMember.status, func.count())
+                    .where(
+                        ProjectMember.tenant_id == context.tenant_id,
+                        ProjectMember.project_id == cycle.project_id,
+                    )
+                    .group_by(ProjectMember.status)
                 )
-            )
+            ).all()
         )
-        delegation_statuses = list(
-            await session.scalars(
-                select(Delegation.status)
-                .join(
-                    Task,
-                    (Task.tenant_id == Delegation.tenant_id)
-                    & (Task.id == Delegation.child_task_id),
+        delegation_statuses = dict(
+            (
+                await session.execute(
+                    select(Delegation.status, func.count())
+                    .join(
+                        Task,
+                        (Task.tenant_id == Delegation.tenant_id)
+                        & (Task.id == Delegation.child_task_id),
+                    )
+                    .where(
+                        Delegation.tenant_id == context.tenant_id,
+                        Task.project_id == cycle.project_id,
+                    )
+                    .group_by(Delegation.status)
                 )
-                .where(
-                    Delegation.tenant_id == context.tenant_id,
-                    Task.project_id == cycle.project_id,
-                )
-            )
+            ).all()
         )
         artifacts = list(
             (
@@ -528,7 +552,7 @@ class ProjectOrchestrationService:
             raise ResourceNotFound("project", str(project_id))
         if project.status != "active":
             raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
-        if not is_managed_project(project):
+        if project.kind != "shared" or not is_managed_project(project):
             raise DomainConflict("PROJECT_NOT_MANAGED", "supervision requires a managed Project")
         lead = await session.scalar(
             select(ProjectMember).where(
@@ -607,3 +631,9 @@ class ProjectOrchestrationService:
                 correlation_id=context.correlation_id,
             )
         )
+
+
+def _status_counts(values: Iterable[str] | Mapping[str, int]) -> Counter[str]:
+    if isinstance(values, Mapping):
+        return Counter({str(key): int(value) for key, value in values.items()})
+    return Counter(values)

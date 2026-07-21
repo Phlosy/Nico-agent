@@ -949,6 +949,23 @@ class CoordinationService:
             )
         )
         session.add(
+            Event(
+                tenant_id=context.tenant_id,
+                event_type="TaskDelegated",
+                aggregate_type="task",
+                aggregate_id=delegation.child_task_id,
+                run_id=delegation.child_run_id,
+                actor_id=context.actor_id,
+                payload={
+                    "parent_run_id": str(delegation.parent_run_id),
+                    "delegation_id": str(delegation.id),
+                    "target_agent_version_id": str(delegation.target_agent_version_id),
+                    "status": delegation.status,
+                },
+                correlation_id=context.correlation_id,
+            )
+        )
+        session.add(
             AuditRecord(
                 tenant_id=context.tenant_id,
                 action="coordination.delegate",

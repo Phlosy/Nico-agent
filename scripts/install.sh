@@ -510,6 +510,7 @@ install_release_files() {
   local releases_dir="$NICO_HOME/releases"
   local release_dir="$releases_dir/$RESOLVED_VERSION"
   local staged="$releases_dir/.${RESOLVED_VERSION}.tmp.$$"
+  local previous="$releases_dir/.${RESOLVED_VERSION}.previous.$$"
   install -d -m 700 "$NICO_HOME" "$releases_dir"
   extract_release_bundle "$temporary/nico-agent-bundle.tar.gz" "$temporary"
   local source="$temporary/nico-agent"
@@ -519,15 +520,25 @@ install_release_files() {
     [[ -d "$release_dir" && ! -L "$release_dir" ]] || die \
       "existing release path is not a directory: $release_dir"
     validate_release_directory "$release_dir"
-    RELEASE_DIR="$release_dir"
-    log "reusing installed immutable release $RESOLVED_VERSION"
-    return 0
+    if [[ "$LOCAL_IMAGES" != true ]]; then
+      RELEASE_DIR="$release_dir"
+      log "reusing installed immutable release $RESOLVED_VERSION"
+      return 0
+    fi
+    log "replacing local same-version release $RESOLVED_VERSION"
   fi
 
-  rm -rf "$staged"
+  rm -rf "$staged" "$previous"
   install -d -m 700 "$staged"
   cp -R "$source/." "$staged/"
-  mv "$staged" "$release_dir"
+  if [[ -d "$release_dir" ]]; then
+    mv "$release_dir" "$previous"
+  fi
+  if ! mv "$staged" "$release_dir"; then
+    [[ ! -d "$previous" ]] || mv "$previous" "$release_dir"
+    die "failed to replace local release $RESOLVED_VERSION"
+  fi
+  rm -rf "$previous"
   RELEASE_DIR="$release_dir"
 }
 

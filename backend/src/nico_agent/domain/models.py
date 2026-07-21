@@ -1425,6 +1425,14 @@ class Artifact(Base, TimestampMixin):
         ),
         Index("ix_artifacts_owner_created", "tenant_id", "owner_run_id", "created_at"),
         Index("ix_artifacts_hash", "tenant_id", "sha256"),
+        Index(
+            "ix_artifacts_project_available",
+            "tenant_id",
+            "project_id",
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("status = 'available'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -3109,6 +3117,7 @@ class Event(Base):
         ),
         UniqueConstraint("tenant_id", "sequence", name="uq_events_tenant_sequence"),
         Index("ix_events_tenant_aggregate", "tenant_id", "aggregate_type", "aggregate_id"),
+        Index("ix_events_tenant_run_sequence", "tenant_id", "run_id", "sequence"),
     )
 
     id: Mapped[UUID] = mapped_column(

@@ -19,6 +19,8 @@ from nico_agent.domain.models import (
     Project,
     Tenant,
 )
+from nico_agent.projects.contracts import ProjectPreflightRequest
+from nico_agent.projects.service import ProjectCollaborationService
 from nico_agent.provider_onboarding.contracts import (
     CandidateConfiguration,
     ProviderActivationCreate,
@@ -147,7 +149,14 @@ async def test_verified_probe_activates_endpoint_and_starter_agent_atomically() 
             assert version is not None and version.status == "published"
             assert version.model_endpoint_id == endpoint.id
             assert version.model_name == "gpt-5.6-terra"
-
+            assert version.execution_mode == "react"
+            assert version.coordination_policy["enabled"] is True
+            assert version.coordination_policy["allowed_target_scopes"] == ["project_members"]
+            tenant = await session.get(Tenant, tenant_id)
+            assert tenant is not None
+            tenant_policy = tenant.settings["coordination_policy"]
+            assert tenant_policy["enabled"] is True
+            assert "project_members" in tenant_policy["allowed_target_scopes"]
             conversation = Conversation(
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -160,6 +169,12 @@ async def test_verified_probe_activates_endpoint_and_starter_agent_atomically() 
             session.add(conversation)
             await session.flush()
             conversation_id, first_version_id = conversation.id, version.id
+
+        preflight = await ProjectCollaborationService(database).preflight(
+            context,
+            ProjectPreflightRequest(lead_agent_id=result.agent_id, member_agent_ids=[]),
+        )
+        assert preflight.compatible is True
 
         rotated_probe = await _verified_probe(database, service, context)
         rotation_target = ProviderActivationTarget(
@@ -233,7 +248,7 @@ async def test_custom_provider_activates_with_its_own_identity() -> None:
             provider_key=f"custom-acme-{suffix}",
             protocol="openai_compatible",
             base_url="https://models.example.com/v1",
-            credential_ref="secret:providers/acme",
+            credential_ref=f"secret:providers/custom-acme-{suffix}",
             model="acme-chat",
             provider_options={"nico_custom_display_name": "Acme Models"},
             catalog_revision="2026-07-20",
@@ -267,6 +282,18 @@ async def test_custom_provider_activates_with_its_own_identity() -> None:
         assert connection.provider_key == f"custom-acme-{suffix}"
         assert connection.display_name == "Acme Models"
         assert connection.allowed_models == ("acme-chat",)
+
+        rebound = candidate.model_copy(update={"base_url": "https://other.example.com/v1"})
+        with pytest.raises(DomainConflict) as conflict:
+            await service.create_probe(
+                context,
+                ProviderProbeCreate(
+                    kind="verify_completion",
+                    candidate=rebound,
+                    idempotency_key=f"custom-rebind-{suffix}",
+                ),
+            )
+        assert conflict.value.code == "PROVIDER_CUSTOM_BINDING_CONFLICT"
     finally:
         await engine.dispose()
 

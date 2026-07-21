@@ -7,7 +7,7 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.agent_versions import AgentVersionLifecycle
@@ -76,6 +76,7 @@ class ProjectCollaborationService:
     ) -> ProjectCollaborationRead:
         fingerprint = self._fingerprint(command)
         async with self.database.tenant_transaction(context) as session:
+            await self._lock_idempotency(session, context, f"project.create:{idempotency_key}")
             replay = await session.scalar(
                 select(Project).where(
                     Project.tenant_id == context.tenant_id,
@@ -153,7 +154,7 @@ class ProjectCollaborationService:
 
     async def list_members(self, context: TenantContext, project_id: UUID) -> list[ProjectMember]:
         async with self.database.tenant_transaction(context) as session:
-            await self._project(session, context, project_id)
+            await self._collaboration_project(session, context, project_id)
             return await self._members(session, context, project_id)
 
     async def add_member(
@@ -166,6 +167,21 @@ class ProjectCollaborationService:
     ) -> ProjectMemberMutationRead:
         async with self.database.tenant_transaction(context) as session:
             project = await self._managed_project(session, context, project_id, for_update=True)
+            replay = await session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.tenant_id == context.tenant_id,
+                    ProjectMember.project_id == project.id,
+                    ProjectMember.idempotency_key == f"{idempotency_key}:membership",
+                )
+            )
+            if replay is not None:
+                if replay.agent_id != command.agent_id:
+                    raise DomainConflict(
+                        "IDEMPOTENCY_CONFLICT",
+                        "the member idempotency key was already used for another Agent",
+                    )
+                replay_session = await self._member_session(session, context, replay)
+                return self._mutation(project, replay, replay_session)
             require_revision(
                 "project", expected=command.expected_project_revision, actual=project.revision
             )
@@ -210,13 +226,16 @@ class ProjectCollaborationService:
         *,
         idempotency_key: str,
     ) -> ProjectMemberMutationRead:
+        fingerprint = self._command_fingerprint(command)
         async with self.database.tenant_transaction(context) as session:
             project = await self._managed_project(session, context, project_id, for_update=True)
             member = await self._member(session, context, project.id, agent_id, for_update=True)
             session_value = await self._member_session(session, context, member, for_update=True)
-            if await self._is_replay(
+            replay = await self._replay_details(
                 session, context, "project.member.state", member.id, idempotency_key
-            ):
+            )
+            if replay is not None:
+                self._require_replay_fingerprint(replay, fingerprint)
                 return self._mutation(project, member, session_value)
             require_revision(
                 "project", expected=command.expected_project_revision, actual=project.revision
@@ -262,6 +281,7 @@ class ProjectCollaborationService:
                 "reason": command.reason,
                 "revision": member.revision,
                 "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
             }
             self._record(
                 session,
@@ -295,11 +315,14 @@ class ProjectCollaborationService:
         *,
         idempotency_key: str,
     ) -> ProjectLeadReplaceRead:
+        fingerprint = self._command_fingerprint(command)
         async with self.database.tenant_transaction(context) as session:
             project = await self._managed_project(session, context, project_id, for_update=True)
-            if await self._is_replay(
+            replay = await self._replay_details(
                 session, context, "project.lead.replace", project.id, idempotency_key
-            ):
+            )
+            if replay is not None:
+                self._require_replay_fingerprint(replay, fingerprint)
                 value = await self._collaboration(session, context, project)
                 return ProjectLeadReplaceRead(**value.model_dump())
             require_revision(
@@ -343,6 +366,22 @@ class ProjectCollaborationService:
                     "PROJECT_MEMBER_INACTIVE", "the replacement Lead must be an active member"
                 )
             if new_lead.id == old_lead.id:
+                self._record(
+                    session,
+                    context,
+                    event_type="ProjectLeadUnchanged",
+                    aggregate_type="project",
+                    aggregate_id=project.id,
+                    action="project.lead.replace",
+                    payload={
+                        "old_lead_agent_id": str(old_lead.agent_id),
+                        "new_lead_agent_id": str(new_lead.agent_id),
+                        "idempotency_key": idempotency_key,
+                        "request_fingerprint": fingerprint,
+                        "revision": project.revision,
+                    },
+                )
+                await session.flush()
                 value = await self._collaboration(session, context, project)
                 return ProjectLeadReplaceRead(**value.model_dump())
             old_lead.role = "member"
@@ -362,6 +401,7 @@ class ProjectCollaborationService:
                     "old_lead_agent_id": str(old_lead.agent_id),
                     "new_lead_agent_id": str(new_lead.agent_id),
                     "idempotency_key": idempotency_key,
+                    "request_fingerprint": fingerprint,
                     "revision": project.revision,
                 },
             )
@@ -371,7 +411,7 @@ class ProjectCollaborationService:
 
     async def list_sessions(self, context: TenantContext, project_id: UUID) -> list[ProjectSession]:
         async with self.database.tenant_transaction(context) as session:
-            await self._project(session, context, project_id)
+            await self._collaboration_project(session, context, project_id)
             return list(
                 await session.scalars(
                     select(ProjectSession)
@@ -387,7 +427,7 @@ class ProjectCollaborationService:
         self, context: TenantContext, project_id: UUID, session_id: UUID
     ) -> ProjectSession:
         async with self.database.tenant_transaction(context) as session:
-            await self._project(session, context, project_id)
+            await self._collaboration_project(session, context, project_id)
             value = await session.scalar(
                 select(ProjectSession).where(
                     ProjectSession.tenant_id == context.tenant_id,
@@ -414,104 +454,117 @@ class ProjectCollaborationService:
                 project_id,
                 for_update=True,
             )
-            project_session = await session.scalar(
-                select(ProjectSession)
-                .where(
-                    ProjectSession.tenant_id == context.tenant_id,
-                    ProjectSession.project_id == project.id,
-                    ProjectSession.id == session_id,
-                )
-                .with_for_update()
+            return await self.resolve_session_conversation_in_session(
+                session, context, project, session_id
             )
-            if project_session is None:
-                raise ResourceNotFound("project_session", str(session_id))
-            member = await session.scalar(
-                select(ProjectMember)
-                .where(
-                    ProjectMember.tenant_id == context.tenant_id,
-                    ProjectMember.id == project_session.project_member_id,
-                )
-                .with_for_update()
-            )
-            if member is None:
-                raise ResourceNotFound("project_member", str(project_session.project_member_id))
-            if (
-                ProjectMemberStatus(member.status) is not ProjectMemberStatus.ACTIVE
-                or ProjectSessionStatus(project_session.status) is not ProjectSessionStatus.ACTIVE
-            ):
-                raise DomainConflict(
-                    "PROJECT_MEMBER_INACTIVE",
-                    "only an active Project member Session accepts messages",
-                )
-            agent, version = await self._ready_version(session, context, member.agent_id)
-            current = None
-            if project_session.current_conversation_id is not None:
-                current = await session.scalar(
-                    select(Conversation).where(
-                        Conversation.tenant_id == context.tenant_id,
-                        Conversation.project_id == project.id,
-                        Conversation.project_session_id == project_session.id,
-                        Conversation.id == project_session.current_conversation_id,
-                    )
-                )
-            if current is not None and current.agent_version_id == version.id:
-                current._conversation_mode = "project"
-                return current
 
-            conversation_key = f"project-session:{project_session.id}:version:{version.id}"
-            replacement = await session.scalar(
+    async def resolve_session_conversation_in_session(
+        self,
+        session: AsyncSession,
+        context: TenantContext,
+        project: Project,
+        session_id: UUID,
+    ) -> Conversation:
+        """Resolve a stable ProjectSession while its Project mutation lock is held."""
+
+        project_session = await session.scalar(
+            select(ProjectSession)
+            .where(
+                ProjectSession.tenant_id == context.tenant_id,
+                ProjectSession.project_id == project.id,
+                ProjectSession.id == session_id,
+            )
+            .with_for_update()
+        )
+        if project_session is None:
+            raise ResourceNotFound("project_session", str(session_id))
+        member = await session.scalar(
+            select(ProjectMember)
+            .where(
+                ProjectMember.tenant_id == context.tenant_id,
+                ProjectMember.id == project_session.project_member_id,
+            )
+            .with_for_update()
+        )
+        if member is None:
+            raise ResourceNotFound("project_member", str(project_session.project_member_id))
+        if (
+            ProjectMemberStatus(member.status) is not ProjectMemberStatus.ACTIVE
+            or ProjectSessionStatus(project_session.status) is not ProjectSessionStatus.ACTIVE
+        ):
+            raise DomainConflict(
+                "PROJECT_MEMBER_INACTIVE",
+                "only an active Project member Session accepts messages",
+            )
+        agent, version = await self._ready_version(session, context, member.agent_id)
+        current = None
+        if project_session.current_conversation_id is not None:
+            current = await session.scalar(
                 select(Conversation).where(
                     Conversation.tenant_id == context.tenant_id,
-                    Conversation.idempotency_key == conversation_key,
+                    Conversation.project_id == project.id,
+                    Conversation.project_session_id == project_session.id,
+                    Conversation.id == project_session.current_conversation_id,
                 )
             )
-            if replacement is None:
-                replacement = Conversation(
-                    tenant_id=context.tenant_id,
-                    project_id=project.id,
-                    project_session_id=project_session.id,
-                    agent_id=agent.id,
-                    agent_version_id=version.id,
-                    title=f"{project.name} — {agent.display_name}",
-                    created_by=context.actor_id,
-                    idempotency_key=conversation_key,
-                )
-                session.add(replacement)
-                await session.flush([replacement])
-                self._record(
-                    session,
-                    context,
-                    event_type="ConversationCreated",
-                    aggregate_type="conversation",
-                    aggregate_id=replacement.id,
-                    action="conversation.create",
-                    payload={
-                        "project_id": str(project.id),
-                        "project_session_id": str(project_session.id),
-                        "agent_id": str(agent.id),
-                        "agent_version_id": str(version.id),
-                    },
-                )
-            previous_id = project_session.current_conversation_id
-            project_session.current_conversation_id = replacement.id
-            project_session.revision += 1
+        if current is not None and current.agent_version_id == version.id:
+            current._conversation_mode = "project"
+            return current
+
+        conversation_key = f"project-session:{project_session.id}:version:{version.id}"
+        replacement = await session.scalar(
+            select(Conversation).where(
+                Conversation.tenant_id == context.tenant_id,
+                Conversation.idempotency_key == conversation_key,
+            )
+        )
+        if replacement is None:
+            replacement = Conversation(
+                tenant_id=context.tenant_id,
+                project_id=project.id,
+                project_session_id=project_session.id,
+                agent_id=agent.id,
+                agent_version_id=version.id,
+                title=f"{project.name} — {agent.display_name}",
+                created_by=context.actor_id,
+                idempotency_key=conversation_key,
+            )
+            session.add(replacement)
+            await session.flush([replacement])
             self._record(
                 session,
                 context,
-                event_type="ProjectSessionConversationRotated",
-                aggregate_type="project_session",
-                aggregate_id=project_session.id,
-                action="project_session.rotate_conversation",
+                event_type="ConversationCreated",
+                aggregate_type="conversation",
+                aggregate_id=replacement.id,
+                action="conversation.create",
                 payload={
-                    "previous_conversation_id": str(previous_id) if previous_id else None,
-                    "conversation_id": str(replacement.id),
+                    "project_id": str(project.id),
+                    "project_session_id": str(project_session.id),
+                    "agent_id": str(agent.id),
                     "agent_version_id": str(version.id),
-                    "revision": project_session.revision,
                 },
             )
-            await session.flush()
-            replacement._conversation_mode = "project"
-            return replacement
+        previous_id = project_session.current_conversation_id
+        project_session.current_conversation_id = replacement.id
+        project_session.revision += 1
+        self._record(
+            session,
+            context,
+            event_type="ProjectSessionConversationRotated",
+            aggregate_type="project_session",
+            aggregate_id=project_session.id,
+            action="project_session.rotate_conversation",
+            payload={
+                "previous_conversation_id": str(previous_id) if previous_id else None,
+                "conversation_id": str(replacement.id),
+                "agent_version_id": str(version.id),
+                "revision": project_session.revision,
+            },
+        )
+        await session.flush()
+        replacement._conversation_mode = "project"
+        return replacement
 
     async def _preflight(
         self,
@@ -708,13 +761,26 @@ class ProjectCollaborationService:
         *,
         for_update: bool = False,
     ) -> Project:
-        project = await self._project(session, context, project_id, for_update=for_update)
+        project = await self._collaboration_project(
+            session, context, project_id, for_update=for_update
+        )
         if ProjectStatus(project.status) is ProjectStatus.ARCHIVED:
             raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
-        if not self.is_managed(project):
+        return project
+
+    async def _collaboration_project(
+        self,
+        session: AsyncSession,
+        context: TenantContext,
+        project_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> Project:
+        project = await self._project(session, context, project_id, for_update=for_update)
+        if project.kind != "shared" or not self.is_managed(project):
             raise DomainConflict(
                 "PROJECT_NOT_MANAGED",
-                "this legacy Project has no collaboration membership",
+                "collaboration membership is available only for managed shared Projects",
             )
         return project
 
@@ -795,24 +861,43 @@ class ProjectCollaborationService:
             )
         return agent, version
 
-    async def _is_replay(
+    async def _replay_details(
         self,
         session: AsyncSession,
         context: TenantContext,
         action: str,
         resource_id: UUID,
         idempotency_key: str,
-    ) -> bool:
-        return (
-            await session.scalar(
-                select(AuditRecord.id).where(
-                    AuditRecord.tenant_id == context.tenant_id,
-                    AuditRecord.action == action,
-                    AuditRecord.resource_id == resource_id,
-                    AuditRecord.details["idempotency_key"].astext == idempotency_key,
-                )
+    ) -> dict | None:
+        value = await session.scalar(
+            select(AuditRecord).where(
+                AuditRecord.tenant_id == context.tenant_id,
+                AuditRecord.action == action,
+                AuditRecord.resource_id == resource_id,
+                AuditRecord.details["idempotency_key"].astext == idempotency_key,
             )
-        ) is not None
+        )
+        return dict(value.details) if value is not None else None
+
+    @staticmethod
+    def _require_replay_fingerprint(details: dict, fingerprint: str) -> None:
+        if details.get("request_fingerprint") != fingerprint:
+            raise DomainConflict(
+                "IDEMPOTENCY_CONFLICT",
+                "the Project mutation idempotency key was reused with different input",
+            )
+
+    @staticmethod
+    async def _lock_idempotency(
+        session: AsyncSession,
+        context: TenantContext,
+        scope: str,
+    ) -> None:
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(f"{context.tenant_id}:{scope}", 0))
+            )
+        )
 
     @staticmethod
     def _managed_metadata(project: Project) -> dict:
@@ -824,6 +909,15 @@ class ProjectCollaborationService:
 
     @staticmethod
     def _fingerprint(command: ProjectCollaborationCreate) -> str:
+        encoded = json.dumps(
+            command.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _command_fingerprint(command) -> str:
         encoded = json.dumps(
             command.model_dump(mode="json"),
             sort_keys=True,

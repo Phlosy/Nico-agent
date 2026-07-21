@@ -122,9 +122,16 @@ def narrow_coordination_policy(parent: dict[str, Any], child: dict[str, Any]) ->
         *[item for item in parent.get("errors", []) if isinstance(item, str)],
         *[item for item in child.get("errors", []) if isinstance(item, str)],
     ]
-    return {
+    parent_scope = _optional_string(parent.get("target_scope"))
+    child_scope = _optional_string(child.get("target_scope"))
+    scope_compatible = parent_scope == child_scope
+    if not scope_compatible:
+        errors.append("coordination target scope cannot be widened or dropped by a Child Run")
+    snapshot = {
         "version": 1,
-        "enabled": parent.get("enabled") is True and child.get("enabled") is True,
+        "enabled": (
+            parent.get("enabled") is True and child.get("enabled") is True and scope_compatible
+        ),
         "max_depth": _restrict_positive_int(parent.get("max_depth"), child.get("max_depth")),
         "max_children": _restrict_positive_int(
             parent.get("max_children"), child.get("max_children")
@@ -142,6 +149,9 @@ def narrow_coordination_policy(parent: dict[str, Any], child: dict[str, Any]) ->
         ),
         "errors": errors,
     }
+    if parent_scope is not None and scope_compatible:
+        snapshot["target_scope"] = parent_scope
+    return snapshot
 
 
 def delegation_fingerprint(intent: DelegationIntent) -> str:

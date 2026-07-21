@@ -256,7 +256,7 @@ def test_custom_local_provider_builds_a_unique_openai_compatible_candidate() -> 
     result = _coordinator(client, FakeBridge()).onboard(
         ProviderInput(
             provider_key="other",
-            credential_ref="secret:providers/local-ollama",
+            credential_ref="secret:providers/custom-local-ollama",
             model="qwen3:8b",
             project_id="project-1",
             starter_agent_name="assistant-local",
@@ -283,7 +283,7 @@ def test_custom_provider_accepts_a_single_character_generated_slug() -> None:
     result = _coordinator(client, FakeBridge()).onboard(
         ProviderInput(
             provider_key="other",
-            credential_ref="secret:providers/x",
+            credential_ref="secret:providers/custom-x",
             model="model-a",
             project_id="project-1",
             starter_agent_name="assistant-x",
@@ -344,7 +344,7 @@ def test_custom_local_provider_rejects_malformed_urls_without_a_traceback(base_u
         _coordinator(FakeClient(), FakeBridge()).onboard(
             ProviderInput(
                 provider_key="other",
-                credential_ref="secret:providers/local",
+                credential_ref="secret:providers/custom-local",
                 model="model-a",
                 project_id="project-1",
                 starter_agent_name="assistant-invalid-url",

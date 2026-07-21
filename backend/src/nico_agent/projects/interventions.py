@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -216,34 +217,100 @@ class ProjectInterventionService:
         content = command.content.strip()
         if not content:
             raise DomainConflict("PROJECT_CHANGE_EMPTY", "Project change cannot be blank")
+        fingerprint = self._project_change_fingerprint(session_id, command)
         async with self.database.tenant_transaction(context) as session:
-            project, source_session = await self._project_session(
-                session, context, project_id, session_id, require_active=True
-            )
-            lead_session_id = await session.scalar(
-                select(ProjectSession.id)
-                .join(
-                    ProjectMember,
-                    (ProjectMember.tenant_id == ProjectSession.tenant_id)
-                    & (ProjectMember.id == ProjectSession.project_member_id),
-                )
+            project = await session.scalar(
+                select(Project)
                 .where(
-                    ProjectSession.tenant_id == context.tenant_id,
-                    ProjectSession.project_id == project.id,
-                    ProjectSession.status == "active",
-                    ProjectMember.role == "lead",
-                    ProjectMember.status == "active",
+                    Project.tenant_id == context.tenant_id,
+                    Project.id == project_id,
+                )
+                .with_for_update()
+            )
+            if project is None:
+                raise ResourceNotFound("project", str(project_id))
+            existing = await session.scalar(
+                select(AuditRecord).where(
+                    AuditRecord.tenant_id == context.tenant_id,
+                    AuditRecord.action == "project.change.route",
+                    AuditRecord.resource_id == project_id,
+                    AuditRecord.details["idempotency_key"].astext == idempotency_key,
                 )
             )
-            if lead_session_id is None:
-                raise DomainConflict("PROJECT_LEAD_REQUIRED", "the Project has no active Lead")
-            source_agent_id = source_session.agent_id
-        conversation = await ProjectCollaborationService(
-            self.database
-        ).resolve_session_conversation(context, project_id, lead_session_id)
+            if existing is not None:
+                if existing.details.get("request_fingerprint") != fingerprint:
+                    raise DomainConflict(
+                        "IDEMPOTENCY_CONFLICT",
+                        "the Project-change idempotency key was reused with different input",
+                    )
+                conversation_id = UUID(str(existing.details["conversation_id"]))
+                source_agent_id = UUID(str(existing.details["source_agent_id"]))
+            else:
+                _, source_session = await self._project_session(
+                    session, context, project_id, session_id, require_active=True
+                )
+                lead_session = await session.scalar(
+                    select(ProjectSession)
+                    .join(
+                        ProjectMember,
+                        (ProjectMember.tenant_id == ProjectSession.tenant_id)
+                        & (ProjectMember.id == ProjectSession.project_member_id),
+                    )
+                    .where(
+                        ProjectSession.tenant_id == context.tenant_id,
+                        ProjectSession.project_id == project.id,
+                        ProjectSession.status == "active",
+                        ProjectMember.role == "lead",
+                        ProjectMember.status == "active",
+                    )
+                )
+                if lead_session is None:
+                    raise DomainConflict(
+                        "PROJECT_LEAD_REQUIRED", "the Project has no active Lead Session"
+                    )
+                lead_session_id = lead_session.id
+                lead_conversation = await ProjectCollaborationService(
+                    self.database
+                ).resolve_session_conversation_in_session(
+                    session, context, project, lead_session_id
+                )
+                conversation_id = lead_conversation.id
+                source_agent_id = source_session.agent_id
+                payload = {
+                    "project_id": str(project_id),
+                    "source_project_session_id": str(session_id),
+                    "source_agent_id": str(source_agent_id),
+                    "lead_project_session_id": str(lead_session_id),
+                    "conversation_id": str(conversation_id),
+                    "idempotency_key": idempotency_key,
+                    "request_fingerprint": fingerprint,
+                }
+                session.add(
+                    Event(
+                        tenant_id=context.tenant_id,
+                        event_type="ProjectChangeRouted",
+                        aggregate_type="project",
+                        aggregate_id=project_id,
+                        actor_id=context.actor_id,
+                        payload=payload,
+                        correlation_id=context.correlation_id,
+                    )
+                )
+                session.add(
+                    AuditRecord(
+                        tenant_id=context.tenant_id,
+                        action="project.change.route",
+                        resource_type="project",
+                        resource_id=project_id,
+                        actor_id=context.actor_id,
+                        details=payload,
+                        correlation_id=context.correlation_id,
+                    )
+                )
+                await session.flush()
         return await ConversationService(self.database).create_turn(
             context,
-            conversation.id,
+            conversation_id,
             ConversationTurnCreate(
                 user_input=(
                     "Project change request from member session "
@@ -255,6 +322,18 @@ class ProjectInterventionService:
                 timeout_seconds=command.timeout_seconds,
             ),
         )
+
+    @staticmethod
+    def _project_change_fingerprint(session_id: UUID, command: ProjectChangeCreate) -> str:
+        encoded = json.dumps(
+            {
+                "project_session_id": str(session_id),
+                "command": command.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
 
     async def freeze_for_boundary(
         self,
@@ -536,7 +615,7 @@ class ProjectInterventionService:
         )
         if project is None:
             raise ResourceNotFound("project", str(project_id))
-        if not is_managed_project(project):
+        if project.kind != "shared" or not is_managed_project(project):
             raise DomainConflict(
                 "PROJECT_NOT_MANAGED", "runtime guidance requires a managed Project"
             )

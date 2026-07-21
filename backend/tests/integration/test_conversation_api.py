@@ -191,6 +191,32 @@ async def test_personal_conversations_are_idempotent_hidden_and_actor_scoped(app
         await client.get(f"/api/v1/conversations/{first['id']}", headers=second_headers)
     ).status_code == 404
 
+    for actor_headers in (first_headers, second_headers):
+        collaboration = await client.get(
+            f"/api/v1/projects/{first['project_id']}/members",
+            headers=actor_headers,
+        )
+        assert collaboration.status_code == 409
+        assert collaboration.json()["code"] == "PROJECT_NOT_MANAGED"
+
+    turn = await client.post(
+        f"/api/v1/conversations/{first['id']}/turns",
+        json={"user_input": "Keep this private."},
+        headers={**first_headers, "Idempotency-Key": "personal-private-turn"},
+    )
+    assert turn.status_code == 202, turn.text
+    for resource in ("tasks", "runs"):
+        resource_id = turn.json()["task_id" if resource == "tasks" else "run_id"]
+        assert (
+            await client.get(f"/api/v1/{resource}/{resource_id}", headers=second_headers)
+        ).status_code == 404
+    cancelled = await client.post(
+        f"/api/v1/conversation-turns/{turn.json()['id']}/cancel",
+        json={"expected_revision": turn.json()["run_revision"]},
+        headers=first_headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+
     context = TenantContext(tenant_id, first_headers["X-Actor-ID"], uuid4())
     async with app.state.database.tenant_transaction(context) as session:
         personal_projects = list(

@@ -375,7 +375,7 @@ class ChatRunner:
             )
             selected = self._with_mode(selected, conversation.get("_cli_mode", "project"))
             self.renderer.header(self._metadata(selected))
-            return selected, False
+            return self._inherit_cli_context(selected, conversation), False
         if name == "title":
             if not command.args:
                 raise CliError("SLASH_ARGUMENT_REQUIRED", "usage: /title TEXT", exit_code=2)
@@ -387,7 +387,7 @@ class ChatRunner:
                 title=new_title,
             )
             self.output.emit({"id": selected["id"], "title": selected["title"]}, title="Title")
-            return selected, False
+            return self._inherit_cli_context(selected, conversation), False
         if name == "attach":
             self._arity(command, 1, "/attach PATH")
             path = Path(command.args[0]).expanduser()

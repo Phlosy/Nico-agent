@@ -297,15 +297,13 @@ class ProjectCli:
         member_by_id = {str(item["id"]): item for item in members}
         entries: list[dict[str, Any]] = []
         for project_session in sessions:
-            page = self.client.project_timeline(
+            page_entries = self._timeline_entries(
                 project_id,
                 str(project_session["id"]),
-                after_sequence=0,
-                limit=min(limit, 500),
             )
             membership = member_by_id.get(str(project_session["project_member_id"]), {})
             agent = agents.get(str(membership.get("agent_id")), {})
-            for item in page.get("entries") or []:
+            for item in page_entries:
                 if item.get("kind") != "task":
                     continue
                 entries.append(
@@ -546,16 +544,14 @@ class ProjectCli:
         *,
         active_only: bool,
     ) -> dict[str, Any]:
-        page = self.client.project_timeline(
+        entries = self._timeline_entries(
             str(workspace["project"]["id"]),
             str(workspace["session"]["id"]),
-            after_sequence=0,
-            limit=500,
         )
         run_ids = list(
             dict.fromkeys(
                 str(entry["run_id"])
-                for entry in reversed(page.get("entries") or [])
+                for entry in reversed(entries)
                 if entry.get("run_id") is not None
             )
         )
@@ -576,6 +572,28 @@ class ProjectCli:
             f"the selected Project Session has no {qualifier}Run",
             exit_code=2,
         )
+
+    def _timeline_entries(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        cursor = 0
+        while True:
+            page = self.client.project_timeline(
+                project_id,
+                session_id,
+                after_sequence=cursor,
+                limit=500,
+            )
+            entries.extend(page.get("entries") or [])
+            next_cursor = page.get("next_cursor")
+            if not page.get("has_more"):
+                return entries
+            if not isinstance(next_cursor, int) or next_cursor <= cursor:
+                raise CliError(
+                    "PROJECT_TIMELINE_INVALID",
+                    "the Project timeline returned a non-advancing cursor",
+                    exit_code=3,
+                )
+            cursor = next_cursor
 
     @staticmethod
     def _validate_intervention_content(content: str) -> None:

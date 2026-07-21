@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from uuid import uuid4
@@ -181,6 +182,23 @@ async def test_create_project_is_atomic_idempotent_and_returns_stable_sessions(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_project_create_replays_instead_of_leaking_unique_conflict(
+    client: AsyncClient,
+) -> None:
+    headers = await _bootstrap(client, "CollaborationConcurrentCreate")
+    lead = await _ready_agent(client, headers, "lead", lead_capable=True)
+
+    first, second = await asyncio.gather(
+        _create_project(client, headers, lead, [], key="concurrent-project-create"),
+        _create_project(client, headers, lead, [], key="concurrent-project-create"),
+    )
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["project"]["id"] == second.json()["project"]["id"]
+
+
+@pytest.mark.asyncio
 async def test_managed_project_enforces_membership_and_archival(client: AsyncClient) -> None:
     headers = await _bootstrap(client, "CollaborationMembership")
     lead = await _ready_agent(client, headers, "lead", lead_capable=True)
@@ -261,6 +279,28 @@ async def test_replace_lead_and_pause_restore_member_are_revision_safe(
     replaced_payload = replaced.json()
     assert replaced_payload["lead_agent_id"] == replacement["id"]
 
+    replace_replay = await client.post(
+        f"/api/v1/projects/{project['id']}/lead",
+        json={
+            "new_lead_agent_id": replacement["id"],
+            "expected_project_revision": project["revision"],
+        },
+        headers={**headers, "Idempotency-Key": "replace-lead"},
+    )
+    assert replace_replay.status_code == 200, replace_replay.text
+    assert replace_replay.json()["lead_agent_id"] == replacement["id"]
+
+    replace_mismatch = await client.post(
+        f"/api/v1/projects/{project['id']}/lead",
+        json={
+            "new_lead_agent_id": lead["id"],
+            "expected_project_revision": project["revision"],
+        },
+        headers={**headers, "Idempotency-Key": "replace-lead"},
+    )
+    assert replace_mismatch.status_code == 409
+    assert replace_mismatch.json()["code"] == "IDEMPOTENCY_CONFLICT"
+
     stale = await client.post(
         f"/api/v1/projects/{project['id']}/lead",
         json={
@@ -290,6 +330,39 @@ async def test_replace_lead_and_pause_restore_member_are_revision_safe(
     )
     assert paused.status_code == 200, paused.text
     stable_session_id = paused.json()["session"]["id"]
+    pause_replay = await client.post(
+        f"/api/v1/projects/{project['id']}/members/{lead['id']}/state",
+        json={
+            "target": "paused",
+            "expected_project_revision": current_project["revision"],
+            "expected_member_revision": next(
+                item["revision"]
+                for item in replaced_payload["members"]
+                if item["agent_id"] == lead["id"]
+            ),
+            "reason": "Focus elsewhere",
+        },
+        headers={**headers, "Idempotency-Key": "pause-old-lead"},
+    )
+    assert pause_replay.status_code == 200, pause_replay.text
+    assert pause_replay.json()["session"]["id"] == stable_session_id
+
+    pause_mismatch = await client.post(
+        f"/api/v1/projects/{project['id']}/members/{lead['id']}/state",
+        json={
+            "target": "removed",
+            "expected_project_revision": current_project["revision"],
+            "expected_member_revision": next(
+                item["revision"]
+                for item in replaced_payload["members"]
+                if item["agent_id"] == lead["id"]
+            ),
+            "reason": "Different request",
+        },
+        headers={**headers, "Idempotency-Key": "pause-old-lead"},
+    )
+    assert pause_mismatch.status_code == 409
+    assert pause_mismatch.json()["code"] == "IDEMPOTENCY_CONFLICT"
     restored_project = (
         await client.get(f"/api/v1/projects/{project['id']}", headers=headers)
     ).json()
@@ -306,6 +379,92 @@ async def test_replace_lead_and_pause_restore_member_are_revision_safe(
     assert restored.status_code == 200, restored.text
     assert restored.json()["session"]["id"] == stable_session_id
     assert replacement_member["id"] != restored.json()["member"]["id"]
+
+    remove_project = (await client.get(f"/api/v1/projects/{project['id']}", headers=headers)).json()
+    removed = await client.post(
+        f"/api/v1/projects/{project['id']}/members/{lead['id']}/state",
+        json={
+            "target": "removed",
+            "expected_project_revision": remove_project["revision"],
+            "expected_member_revision": restored.json()["member"]["revision"],
+            "reason": "Temporary reassignment",
+        },
+        headers={**headers, "Idempotency-Key": "remove-old-lead"},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["session"]["status"] == "paused"
+    restore_project = (
+        await client.get(f"/api/v1/projects/{project['id']}", headers=headers)
+    ).json()
+    restored_after_remove = await client.post(
+        f"/api/v1/projects/{project['id']}/members/{lead['id']}/state",
+        json={
+            "target": "active",
+            "expected_project_revision": restore_project["revision"],
+            "expected_member_revision": removed.json()["member"]["revision"],
+            "reason": "Reassigned back",
+        },
+        headers={**headers, "Idempotency-Key": "restore-removed-member"},
+    )
+    assert restored_after_remove.status_code == 200, restored_after_remove.text
+    assert restored_after_remove.json()["session"]["id"] == stable_session_id
+    assert restored_after_remove.json()["session"]["status"] == "active"
+
+    reject_project = (await client.get(f"/api/v1/projects/{project['id']}", headers=headers)).json()
+    current_lead = next(
+        item for item in replaced_payload["members"] if item["agent_id"] == replacement["id"]
+    )
+    reject_lead_removal = await client.post(
+        f"/api/v1/projects/{project['id']}/members/{replacement['id']}/state",
+        json={
+            "target": "removed",
+            "expected_project_revision": reject_project["revision"],
+            "expected_member_revision": current_lead["revision"],
+            "reason": "Must replace the Lead first",
+        },
+        headers={**headers, "Idempotency-Key": "remove-current-lead"},
+    )
+    assert reject_lead_removal.status_code == 409
+    assert reject_lead_removal.json()["code"] == "PROJECT_LEAD_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_member_add_replays_before_revision_check_and_rejects_key_reuse(
+    client: AsyncClient,
+) -> None:
+    headers = await _bootstrap(client, "CollaborationMemberReplay")
+    lead = await _ready_agent(client, headers, "lead", lead_capable=True)
+    first = await _ready_agent(client, headers, "first")
+    second = await _ready_agent(client, headers, "second")
+    created = (await _create_project(client, headers, lead, [], key="member-replay-project")).json()
+    project = created["project"]
+    request = {
+        "agent_id": first["id"],
+        "expected_project_revision": project["revision"],
+    }
+    request_headers = {**headers, "Idempotency-Key": "member-add-replay"}
+
+    added = await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json=request,
+        headers=request_headers,
+    )
+    assert added.status_code == 201, added.text
+    replay = await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json=request,
+        headers=request_headers,
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["member"]["id"] == added.json()["member"]["id"]
+
+    mismatch = await client.post(
+        f"/api/v1/projects/{project['id']}/members",
+        json={**request, "agent_id": second["id"]},
+        headers=request_headers,
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["code"] == "IDEMPOTENCY_CONFLICT"
 
 
 @pytest.mark.asyncio

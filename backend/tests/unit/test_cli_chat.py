@@ -450,7 +450,12 @@ def test_chat_slash_help_and_title_are_real_operations(tmp_path: Path) -> None:
         Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO()),
         history_path=tmp_path / "history",
     )
-    conversation = _conversation("conversation-1")
+    conversation = {
+        **_conversation("conversation-1"),
+        "_cli_mode": "project",
+        "_cli_project_id": "project-1",
+        "_cli_project_session_id": "session-1",
+    }
 
     help_command = parse_slash("/help")
     title_command = parse_slash('/title "Research Notes"')
@@ -460,6 +465,9 @@ def test_chat_slash_help_and_title_are_real_operations(tmp_path: Path) -> None:
 
     assert should_exit is False
     assert updated["title"] == "Research Notes"
+    assert updated["_cli_mode"] == "project"
+    assert updated["_cli_project_id"] == "project-1"
+    assert updated["_cli_project_session_id"] == "session-1"
     assert "Nico Slash Commands" in stdout.getvalue()
 
 

@@ -315,3 +315,37 @@ def test_invalid_cadence_and_foreign_run_fail_before_mutation() -> None:
 
     assert invalid_cadence.value.code == "PROJECT_CADENCE_INVALID"
     assert foreign_run.value.code == "PROJECT_SESSION_RUN_NOT_FOUND"
+
+
+def test_run_resolution_follows_timeline_cursors() -> None:
+    class PaginatedClient(FakeProjectClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cursors: list[int] = []
+
+        def project_timeline(self, _project_id, _session_id, **kwargs):
+            cursor = int(kwargs["after_sequence"])
+            self.cursors.append(cursor)
+            if cursor == 0:
+                return {
+                    "entries": [{"sequence": 500, "kind": "state", "run_id": None}],
+                    "next_cursor": 500,
+                    "has_more": True,
+                }
+            return {
+                "entries": [{"sequence": 501, "kind": "run", "run_id": "run-later"}],
+                "next_cursor": None,
+                "has_more": False,
+            }
+
+    client = PaginatedClient()
+    result = _coordinator(client).guide(
+        "Research",
+        agent_reference="lead",
+        content="inspect the current run",
+        run_reference="run-later",
+        expected_run_revision=None,
+    )
+
+    assert result["status"] == "pending"
+    assert client.cursors == [0, 500]

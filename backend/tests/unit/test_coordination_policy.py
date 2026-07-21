@@ -10,6 +10,7 @@ from nico_agent.coordination.policy import (
     build_coordination_policy_snapshot,
     delegation_fingerprint,
     narrow_child_permissions,
+    narrow_coordination_policy,
 )
 
 
@@ -126,6 +127,27 @@ def test_child_cannot_change_model_endpoint_or_model() -> None:
             child={"model_endpoint_id": "endpoint-b", "model": "model-a"},
             restrictions={},
         )
+
+
+def test_child_coordination_preserves_matching_project_scope_and_denies_drops() -> None:
+    parent = {
+        "enabled": True,
+        "target_scope": "project_members",
+        "max_depth": 3,
+        "max_children": 4,
+        "max_parallelism": 2,
+        "allowed_agent_version_ids": ["member-a"],
+        "allowed_secret_refs": [],
+        "errors": [],
+    }
+    matching = narrow_coordination_policy(parent, dict(parent))
+    dropped = narrow_coordination_policy(parent, {**parent, "target_scope": None})
+
+    assert matching["enabled"] is True
+    assert matching["target_scope"] == "project_members"
+    assert dropped["enabled"] is False
+    assert "target_scope" not in dropped
+    assert any("target scope" in value for value in dropped["errors"])
 
 
 def test_delegation_intent_budget_and_fingerprint_are_bounded_and_stable() -> None:
