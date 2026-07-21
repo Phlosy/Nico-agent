@@ -22,6 +22,7 @@ from nico_agent.cli.execution import ExecRunner, RunWatcher, load_exec_input, wr
 from nico_agent.cli.output import Output
 from nico_agent.cli.project import ProjectCli
 from nico_agent.cli.provider import ProviderInput, ProviderOnboardingCoordinator
+from nico_agent.cli.renderers import ProjectRenderer
 from nico_agent.cli.service_bridge import ServiceBridge
 
 T = TypeVar("T")
@@ -811,7 +812,7 @@ def project_get(ctx: typer.Context, project_id: str) -> None:
     state = _state(ctx)
     value = _api(
         state,
-        lambda client: ProjectCli(client, state.output()).resolve_project(project_id),
+        lambda client: ProjectCli(client, state.output()).get(project_id),
     )
     state.output().emit(value, title="Project")
 
@@ -829,6 +830,7 @@ def project_new(
     no_supervision: bool = typer.Option(False, "--no-supervision"),
     confirmed: bool = typer.Option(False, "--yes"),
 ) -> None:
+    """创建有一位 Lead 和零个或多个成员的协作 Project。"""
     state = _state(ctx)
 
     def operation() -> dict[str, Any]:
@@ -880,6 +882,7 @@ def project_new(
 
 @project_app.command("status")
 def project_status(ctx: typer.Context, project: str) -> None:
+    """查看 Project、成员和稳定 Session 的当前状态。"""
     state = _state(ctx)
     value = _api(state, lambda client: ProjectCli(client, state.output()).status(project))
     state.output().emit(value, title="Project Status")
@@ -887,6 +890,7 @@ def project_status(ctx: typer.Context, project: str) -> None:
 
 @project_app.command("members")
 def project_members(ctx: typer.Context, project: str) -> None:
+    """列出 Project 的 Lead 和成员。"""
     state = _state(ctx)
     value = _api(state, lambda client: ProjectCli(client, state.output()).status(project))
     state.output().table(
@@ -914,7 +918,12 @@ def _run_project_chat(
     with NicoApiClient(profile) as client:
         project_cli = ProjectCli(client, state.output())
         workspace = project_cli.workspace(project, agent_reference=agent)
-        conversation = {**workspace["conversation"], "_cli_mode": "project"}
+        conversation = {
+            **workspace["conversation"],
+            "_cli_mode": "project",
+            "_cli_project_id": str(workspace["project"]["id"]),
+            "_cli_project_session_id": str(workspace["session"]["id"]),
+        }
         runner = ChatRunner(
             client,
             state.output(),
@@ -944,6 +953,7 @@ def project_open(
     message: str | None = typer.Option(None, "--message"),
     read_only: bool = typer.Option(False, "--read-only"),
 ) -> None:
+    """进入 Project Lead 的稳定 Session。"""
     state = _state(ctx)
     _guard(
         state,
@@ -965,6 +975,7 @@ def project_session(
     message: str | None = typer.Option(None, "--message"),
     read_only: bool = typer.Option(False, "--read-only"),
 ) -> None:
+    """进入指定成员的稳定 Session；暂停或归档后自动只读。"""
     state = _state(ctx)
     _guard(
         state,
@@ -986,6 +997,7 @@ def project_timeline(
     after_sequence: int = typer.Option(0, "--after", min=0),
     limit: int = typer.Option(100, "--limit", min=1, max=500),
 ) -> None:
+    """查看成员 Session 的可审计工作时间线。"""
     state = _state(ctx)
     value = _api(
         state,
@@ -999,11 +1011,7 @@ def project_timeline(
     if state.json_mode:
         state.output().emit(value)
     else:
-        state.output().table(
-            value["timeline"]["entries"],
-            title="Project Work Timeline",
-            columns=["sequence", "kind", "event_type", "actor_id", "facts", "links"],
-        )
+        ProjectRenderer(state.output()).timeline(value["timeline"]["entries"])
 
 
 @project_app.command("member-add")
@@ -1067,6 +1075,213 @@ def project_lead(
         ),
     )
     state.output().emit(value, title="Project Lead Replaced")
+
+
+@project_app.command("tasks")
+def project_tasks(
+    ctx: typer.Context,
+    project: str,
+    limit: int = typer.Option(100, "--limit", min=1, max=500),
+) -> None:
+    """汇总各成员 Session 的持久化 Task 事件。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).tasks(project, limit=limit),
+    )
+    if state.json_mode:
+        state.output().emit(value)
+    else:
+        state.output().table(
+            value["tasks"],
+            title="Project Tasks",
+            columns=["sequence", "agent_name", "event_type", "facts", "links"],
+        )
+
+
+@project_app.command("sync")
+def project_sync(ctx: typer.Context, project: str) -> None:
+    """请求一次幂等、可恢复的 Lead 同步周期。"""
+    state = _state(ctx)
+    value = _api(state, lambda client: ProjectCli(client, state.output()).sync(project))
+    state.output().emit(value, title="Project Sync Requested")
+
+
+def _parse_cadence(value: str) -> int | None:
+    normalized = value.strip().lower()
+    if normalized in {"off", "none", "disabled"}:
+        return None
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    suffix = normalized[-1:] if normalized else ""
+    try:
+        if suffix in multipliers:
+            return int(normalized[:-1]) * multipliers[suffix]
+        return int(normalized)
+    except ValueError as exc:
+        raise CliError(
+            "PROJECT_CADENCE_INVALID",
+            "cadence must be off or an integer with s, m, h, or d suffix",
+            exit_code=2,
+        ) from exc
+
+
+@project_app.command("cadence")
+def project_cadence(
+    ctx: typer.Context,
+    project: str,
+    value: str,
+    reason: str | None = typer.Option(None, "--reason"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=1),
+) -> None:
+    """设置同步周期，例如 30m、2h、1d 或 off。"""
+    state = _state(ctx)
+    cadence_seconds = _parse_cadence(value)
+    result = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).cadence(
+            project,
+            cadence_seconds=cadence_seconds,
+            expected_project_revision=expected_revision,
+            reason=reason,
+        ),
+    )
+    state.output().emit(result, title="Project Cadence Updated")
+
+
+@project_app.command("cycles")
+def project_cycles(ctx: typer.Context, project: str) -> None:
+    """查看监督周期的数据库事实和 Lead 摘要。"""
+    state = _state(ctx)
+    value = _api(state, lambda client: ProjectCli(client, state.output()).cycles(project))
+    if state.json_mode:
+        state.output().emit(value)
+    else:
+        ProjectRenderer(state.output()).cycles(value["cycles"])
+
+
+@project_app.command("guide")
+def project_guide(
+    ctx: typer.Context,
+    project: str,
+    content: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    run_id: str | None = typer.Option(None, "--run"),
+    expected_run_revision: int | None = typer.Option(None, "--expected-run-revision", min=1),
+) -> None:
+    """在安全模型边界向成员当前 Run 提交一次性指导。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).guide(
+            project,
+            agent_reference=agent,
+            content=content,
+            run_reference=run_id,
+            expected_run_revision=expected_run_revision,
+        ),
+    )
+    state.output().emit(value, title="Run Guidance Pending")
+
+
+@project_app.command("escalate")
+def project_escalate(
+    ctx: typer.Context,
+    project: str,
+    content: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    max_steps: int = typer.Option(64, "--max-steps", min=1, max=10_000),
+    token_budget: int | None = typer.Option(None, "--token-budget", min=1),
+    timeout_seconds: int | None = typer.Option(None, "--timeout-seconds", min=1, max=604_800),
+) -> None:
+    """把范围或优先级变更升级到 Lead Session 重新规划。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).escalate(
+            project,
+            agent_reference=agent,
+            content=content,
+            max_steps=max_steps,
+            token_budget=token_budget,
+            timeout_seconds=timeout_seconds,
+        ),
+    )
+    state.output().emit(value, title="Project Change Escalated")
+
+
+@project_app.command("interventions")
+def project_interventions(
+    ctx: typer.Context,
+    project: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    run_id: str | None = typer.Option(None, "--run"),
+) -> None:
+    """查看成员 Run 上指导的 pending/consumed/terminal 状态。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).interventions(
+            project,
+            agent_reference=agent,
+            run_reference=run_id,
+        ),
+    )
+    if state.json_mode:
+        state.output().emit(value)
+    else:
+        state.output().table(
+            value["interventions"],
+            title="Run Interventions",
+            columns=["id", "kind", "status", "revision", "content", "created_at"],
+        )
+
+
+@project_app.command("withdraw")
+def project_withdraw(
+    ctx: typer.Context,
+    project: str,
+    intervention_id: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    run_id: str | None = typer.Option(None, "--run"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=1),
+    reason: str | None = typer.Option(None, "--reason"),
+) -> None:
+    """按 revision 撤回尚未消费的指导。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).withdraw(
+            project,
+            agent_reference=agent,
+            run_reference=run_id,
+            intervention_id=intervention_id,
+            expected_intervention_revision=expected_revision,
+            reason=reason,
+        ),
+    )
+    state.output().emit(value, title="Run Guidance Withdrawn")
+
+
+@project_app.command("cancel")
+def project_cancel(
+    ctx: typer.Context,
+    project: str,
+    agent: str | None = typer.Option(None, "--agent"),
+    run_id: str | None = typer.Option(None, "--run"),
+    expected_revision: int | None = typer.Option(None, "--expected-revision", min=1),
+) -> None:
+    """按 revision 取消成员 Session 中的活动 Run 树。"""
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: ProjectCli(client, state.output()).cancel(
+            project,
+            agent_reference=agent,
+            run_reference=run_id,
+            expected_run_revision=expected_revision,
+        ),
+    )
+    state.output().emit(value, title="Project Run Cancelled")
 
 
 @agent_app.command("list")

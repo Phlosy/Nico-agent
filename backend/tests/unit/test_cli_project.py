@@ -13,6 +13,9 @@ class FakeProjectClient:
     def __init__(self) -> None:
         self.created: dict | None = None
         self.member_state: dict | None = None
+        self.cadence_value: dict | None = None
+        self.guidance: dict | None = None
+        self.withdrawal: dict | None = None
 
     def list_projects(self):
         return [
@@ -106,7 +109,14 @@ class FakeProjectClient:
 
     def project_timeline(self, _project_id, _session_id, **_kwargs):
         return {
-            "entries": [{"sequence": 1, "kind": "task", "event_type": "TaskCreated"}],
+            "entries": [
+                {
+                    "sequence": 1,
+                    "kind": "task",
+                    "event_type": "TaskCreated",
+                    "run_id": "run-1",
+                }
+            ],
             "next_cursor": None,
             "has_more": False,
         }
@@ -114,6 +124,47 @@ class FakeProjectClient:
     def set_project_member_state(self, project_id, agent_id, **kwargs):
         self.member_state = {"project_id": project_id, "agent_id": agent_id, **kwargs}
         return {"member": {"agent_id": agent_id, "status": kwargs["target"]}}
+
+    def request_project_sync(self, project_id, **_kwargs):
+        return {"id": "cycle-1", "project_id": project_id, "status": "pending"}
+
+    def update_project_cadence(self, project_id, **kwargs):
+        self.cadence_value = {"project_id": project_id, **kwargs}
+        return {"id": project_id, "supervision_cadence_seconds": kwargs["cadence_seconds"]}
+
+    def list_project_supervision_cycles(self, project_id):
+        return [{"id": "cycle-1", "project_id": project_id, "status": "completed"}]
+
+    def get_run(self, run_id):
+        return {"id": run_id, "status": "running", "revision": 4}
+
+    def create_run_intervention(self, project_id, session_id, run_id, **kwargs):
+        self.guidance = {
+            "project_id": project_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            **kwargs,
+        }
+        return {"id": "intervention-1", "status": "pending", "revision": 1}
+
+    def list_run_interventions(self, _project_id, _session_id, _run_id):
+        return [{"id": "intervention-1", "status": "pending", "revision": 2}]
+
+    def withdraw_run_intervention(self, project_id, session_id, run_id, intervention_id, **kwargs):
+        self.withdrawal = {
+            "project_id": project_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            "intervention_id": intervention_id,
+            **kwargs,
+        }
+        return {"id": intervention_id, "status": "withdrawn", "revision": 3}
+
+    def escalate_project_change(self, project_id, session_id, **kwargs):
+        return {"id": "turn-lead", "project_id": project_id, "session_id": session_id, **kwargs}
+
+    def cancel_run(self, run_id, **kwargs):
+        return {"id": run_id, "status": "cancelled", "revision": kwargs["expected_revision"] + 1}
 
 
 def _coordinator(client: FakeProjectClient | None = None) -> ProjectCli:
@@ -188,3 +239,79 @@ def test_project_and_agent_resolution_fail_deterministically() -> None:
 
     assert missing_project.value.code == "PROJECT_NOT_FOUND"
     assert missing_agent.value.code == "AGENT_NOT_FOUND"
+
+
+def test_supervision_and_guidance_workflows_use_current_revisions() -> None:
+    client = FakeProjectClient()
+    coordinator = _coordinator(client)
+
+    sync = coordinator.sync("Research")
+    cadence = coordinator.cadence(
+        "Research",
+        cadence_seconds=7200,
+        expected_project_revision=None,
+        reason="less noise",
+    )
+    guidance = coordinator.guide(
+        "Research",
+        agent_reference="lead",
+        content="check the deployment logs",
+        run_reference=None,
+        expected_run_revision=None,
+    )
+
+    assert sync["status"] == "pending"
+    assert cadence["supervision_cadence_seconds"] == 7200
+    assert client.cadence_value is not None
+    assert client.cadence_value["expected_project_revision"] == 3
+    assert guidance["status"] == "pending"
+    assert client.guidance is not None
+    assert client.guidance["expected_run_revision"] == 4
+
+
+def test_withdraw_and_cancel_are_scoped_to_selected_session_run() -> None:
+    client = FakeProjectClient()
+    coordinator = _coordinator(client)
+
+    withdrawn = coordinator.withdraw(
+        "Research",
+        agent_reference="lead",
+        run_reference=None,
+        intervention_id="intervention-1",
+        expected_intervention_revision=None,
+        reason="superseded",
+    )
+    cancelled = coordinator.cancel(
+        "Research",
+        agent_reference="lead",
+        run_reference=None,
+        expected_run_revision=None,
+    )
+
+    assert withdrawn["status"] == "withdrawn"
+    assert client.withdrawal is not None
+    assert client.withdrawal["expected_intervention_revision"] == 2
+    assert cancelled["status"] == "cancelled"
+
+
+def test_invalid_cadence_and_foreign_run_fail_before_mutation() -> None:
+    coordinator = _coordinator()
+
+    with pytest.raises(CliError) as invalid_cadence:
+        coordinator.cadence(
+            "Research",
+            cadence_seconds=299,
+            expected_project_revision=None,
+            reason=None,
+        )
+    with pytest.raises(CliError) as foreign_run:
+        coordinator.guide(
+            "Research",
+            agent_reference="lead",
+            content="unsafe",
+            run_reference="run-other",
+            expected_run_revision=1,
+        )
+
+    assert invalid_cadence.value.code == "PROJECT_CADENCE_INVALID"
+    assert foreign_run.value.code == "PROJECT_SESSION_RUN_NOT_FOUND"

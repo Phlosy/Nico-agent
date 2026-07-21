@@ -150,6 +150,31 @@ def test_project_workflow_requests_preserve_revision_and_idempotency() -> None:
     )
 
 
+def test_project_intervention_request_binds_session_run_and_revision() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(201, json={"id": "intervention-1", "status": "pending"})
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        result = client.create_run_intervention(
+            "project-1",
+            "session-1",
+            "run-1",
+            content="re-check the tests",
+            expected_run_revision=7,
+            idempotency_key="guide-1",
+        )
+
+    assert result["status"] == "pending"
+    assert seen[0].url.path == (
+        "/api/v1/projects/project-1/sessions/session-1/runs/run-1/interventions"
+    )
+    assert seen[0].headers["idempotency-key"] == "guide-1"
+    assert seen[0].read() == (b'{"content":"re-check the tests","expected_run_revision":7}')
+
+
 def test_tool_approval_decision_is_versioned_and_idempotent() -> None:
     seen: list[httpx.Request] = []
 

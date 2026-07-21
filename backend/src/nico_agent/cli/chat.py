@@ -152,10 +152,7 @@ class ChatRunner:
                 "multiple ready Agents are available; pass --agent NAME_OR_ID",
                 exit_code=2,
             )
-        choices = [
-            {"selection": index, **agent}
-            for index, agent in enumerate(ready, start=1)
-        ]
+        choices = [{"selection": index, **agent} for index, agent in enumerate(ready, start=1)]
         self.output.table(
             choices,
             title="Choose an Agent",
@@ -302,6 +299,8 @@ class ChatRunner:
                     if should_exit:
                         break
                     continue
+                if self._dispatch_project_input(current, message):
+                    continue
                 self.submit(current, message)
             except CliError as exc:
                 self.output.error(exc)
@@ -340,7 +339,7 @@ class ChatRunner:
             self._arity(command, 1, "/resume ID")
             selected = self.client.get_conversation(command.args[0])
             self.renderer.header(self._metadata(selected))
-            return selected, False
+            return self._inherit_cli_context(selected, conversation), False
         if name == "continue":
             self._arity(command, 0, "/continue")
             rows = self.client.list_conversations(
@@ -353,9 +352,15 @@ class ChatRunner:
             if not rows:
                 raise CliError("CONVERSATION_NOT_FOUND", "no active conversation found")
             self.renderer.header(self._metadata(rows[0]))
-            return rows[0], False
+            return self._inherit_cli_context(rows[0], conversation), False
         if name == "new":
             self._arity(command, 0, "/new")
+            if conversation.get("_cli_project_session_id"):
+                raise CliError(
+                    "PROJECT_SESSION_STABLE",
+                    "Project Sessions rotate conversations through 'nico project open/session'",
+                    exit_code=2,
+                )
             selected = self.client.create_conversation(
                 project_id=(
                     None
@@ -478,6 +483,72 @@ class ChatRunner:
                 {"id": conversation["agent_version_id"]},
             )
             self.output.emit(value, title="Agent Version")
+        elif name == "guide":
+            if not command.raw_args:
+                raise CliError("SLASH_ARGUMENT_REQUIRED", "usage: /guide TEXT", exit_code=2)
+            project_id, session_id = self._project_context(conversation)
+            self._require_active_turn(turn)
+            value = self.client.create_run_intervention(
+                project_id,
+                session_id,
+                str(turn["run_id"]),
+                content=command.raw_args,
+                expected_run_revision=int(turn["run_revision"]),
+                idempotency_key=str(uuid4()),
+            )
+            self.output.emit(value, title="Run Guidance Pending")
+        elif name == "escalate":
+            if not command.raw_args:
+                raise CliError("SLASH_ARGUMENT_REQUIRED", "usage: /escalate TEXT", exit_code=2)
+            project_id, session_id = self._project_context(conversation)
+            value = self.client.escalate_project_change(
+                project_id,
+                session_id,
+                content=command.raw_args,
+                max_steps=64,
+                token_budget=None,
+                timeout_seconds=None,
+                idempotency_key=str(uuid4()),
+            )
+            self.output.emit(value, title="Project Change Escalated")
+        elif name == "interventions":
+            project_id, session_id = self._project_context(conversation)
+            self._require_turn(turn)
+            values = self.client.list_run_interventions(project_id, session_id, str(turn["run_id"]))
+            self.output.table(
+                values,
+                title="Run Interventions",
+                columns=["id", "kind", "status", "revision", "content", "created_at"],
+            )
+        elif name == "withdraw":
+            if not command.args:
+                raise CliError(
+                    "INVALID_SLASH_ARGUMENTS",
+                    "usage: /withdraw ID [REASON]",
+                    exit_code=2,
+                )
+            project_id, session_id = self._project_context(conversation)
+            self._require_turn(turn)
+            values = self.client.list_run_interventions(project_id, session_id, str(turn["run_id"]))
+            intervention = next(
+                (item for item in values if str(item.get("id")) == command.args[0]),
+                None,
+            )
+            if intervention is None:
+                raise CliError(
+                    "RUN_INTERVENTION_NOT_FOUND",
+                    "the requested intervention is not attached to the current Run",
+                    exit_code=2,
+                )
+            value = self.client.withdraw_run_intervention(
+                project_id,
+                session_id,
+                str(turn["run_id"]),
+                command.args[0],
+                expected_intervention_revision=int(intervention["revision"]),
+                reason=" ".join(command.args[1:]) or None,
+            )
+            self.output.emit(value, title="Run Guidance Withdrawn")
         elif name == "cancel":
             self._require_turn(turn)
             if turn["run_status"] in _TERMINAL:
@@ -537,6 +608,76 @@ class ChatRunner:
             self._require_run(run_id)
             self._inspect(name, str(run_id), turn)
         return conversation, False
+
+    def _dispatch_project_input(self, conversation: dict[str, Any], message: str) -> bool:
+        if not conversation.get("_cli_project_session_id"):
+            return False
+        turn = self._latest_turn(conversation)
+        if turn is None or turn.get("run_status") in _TERMINAL:
+            return False
+        answer = self.selection_prompt(
+            "A Run is active: [1] local guidance [2] project change "
+            "[3] wait and send later [4] cancel Run: "
+        ).strip()
+        if answer == "1":
+            project_id, session_id = self._project_context(conversation)
+            value = self.client.create_run_intervention(
+                project_id,
+                session_id,
+                str(turn["run_id"]),
+                content=message,
+                expected_run_revision=int(turn["run_revision"]),
+                idempotency_key=str(uuid4()),
+            )
+            self.output.emit(value, title="Run Guidance Pending")
+        elif answer == "2":
+            project_id, session_id = self._project_context(conversation)
+            value = self.client.escalate_project_change(
+                project_id,
+                session_id,
+                content=message,
+                max_steps=64,
+                token_budget=None,
+                timeout_seconds=None,
+                idempotency_key=str(uuid4()),
+            )
+            self.output.emit(value, title="Project Change Escalated")
+        elif answer == "4":
+            value = self.client.cancel_conversation_turn(
+                str(turn["id"]), expected_run_revision=int(turn["run_revision"])
+            )
+            self.output.emit(value, title="Cancelled")
+        else:
+            self.output.emit(
+                {"queued": False, "reason": "active Run unchanged"},
+                title="Message not sent",
+            )
+        return True
+
+    @staticmethod
+    def _project_context(conversation: dict[str, Any]) -> tuple[str, str]:
+        project_id = conversation.get("_cli_project_id")
+        session_id = conversation.get("_cli_project_session_id")
+        if not project_id or not session_id:
+            raise CliError(
+                "PROJECT_SESSION_REQUIRED",
+                "this command is only available inside 'nico project open/session'",
+                exit_code=2,
+            )
+        return str(project_id), str(session_id)
+
+    @staticmethod
+    def _require_active_turn(turn: dict[str, Any] | None) -> None:
+        ChatRunner._require_turn(turn)
+        if turn["run_status"] in _TERMINAL:
+            raise CliError("RUN_TERMINAL", "the latest Turn is already terminal")
+
+    @staticmethod
+    def _inherit_cli_context(selected: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **selected,
+            **{key: value for key, value in current.items() if key.startswith("_cli_")},
+        }
 
     def _inspect(self, name: str, run_id: str, turn: dict[str, Any] | None) -> None:
         run = self.client.get_run(run_id)

@@ -94,6 +94,7 @@ class FakeClient:
                     "sequence": after_sequence + 1,
                     "kind": "run",
                     "event_type": "RunCompleted",
+                    "run_id": "55555555-5555-4555-8555-555555555555",
                     "facts": {"status": "completed"},
                     "links": {},
                 }
@@ -101,6 +102,19 @@ class FakeClient:
             "next_cursor": None,
             "has_more": False,
         }
+
+    def request_project_sync(self, project_id: str, **_kwargs) -> dict[str, Any]:
+        return {"id": "cycle-1", "project_id": project_id, "status": "pending"}
+
+    def update_project_cadence(self, project_id: str, **kwargs) -> dict[str, Any]:
+        return {
+            **self.get_project(project_id),
+            "revision": kwargs["expected_project_revision"] + 1,
+            "supervision_cadence_seconds": kwargs["cadence_seconds"],
+        }
+
+    def list_project_supervision_cycles(self, project_id: str) -> list[dict[str, Any]]:
+        return [{"id": "cycle-1", "project_id": project_id, "status": "completed"}]
 
     def list_agents(self) -> list[dict[str, Any]]:
         return [
@@ -545,3 +559,24 @@ def test_project_open_one_shot_remembers_workspace(monkeypatch, tmp_path: Path) 
     assert cli_module.ConfigStore(config_path).load().profiles["default"].recent_project_id == UUID(
         "22222222-2222-4222-8222-222222222222"
     )
+
+
+def test_project_supervision_commands_keep_json_stdout_clean(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    prefix = [
+        "--config-file",
+        str(tmp_path / "config.toml"),
+        "--tenant-id",
+        str(TENANT_ID),
+        "--json",
+        "project",
+    ]
+
+    sync = runner.invoke(cli_module.app, [*prefix, "sync", "Research"])
+    cadence = runner.invoke(cli_module.app, [*prefix, "cadence", "Research", "2h"])
+    disabled = runner.invoke(cli_module.app, [*prefix, "cadence", "Research", "off"])
+
+    assert sync.exit_code == cadence.exit_code == disabled.exit_code == 0
+    assert json.loads(sync.stdout)["status"] == "pending"
+    assert json.loads(cadence.stdout)["supervision_cadence_seconds"] == 7200
+    assert json.loads(disabled.stdout)["supervision_cadence_seconds"] is None

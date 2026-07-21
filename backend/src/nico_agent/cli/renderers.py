@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 
 from rich.columns import Columns
@@ -15,6 +16,173 @@ from rich.text import Text
 
 from nico_agent.cli.logo import capabilities, coin_cat
 from nico_agent.cli.output import Output
+
+_PROTOCOL_LABELS = {
+    "openai_compatible": "OpenAI-compatible",
+    "anthropic_messages": "Anthropic Messages",
+    "google_gemini": "Google Gemini",
+}
+
+
+class ProviderSetupRenderer:
+    """Render the guided Provider setup without owning its decisions."""
+
+    def __init__(self, output: Output) -> None:
+        self.output = output
+
+    def welcome(self) -> None:
+        if self.output.json_mode:
+            return
+        body = Text()
+        body.append("Connect a model Provider\n", style="bold")
+        body.append(
+            "Choose a preset, or connect any compatible cloud or local endpoint.",
+            style="dim",
+        )
+        self.output.out.print(
+            Panel(body, title="Nico Setup", border_style="#7895ac", padding=(1, 2))
+        )
+
+    @contextmanager
+    def progress(self, message: str) -> Iterator[None]:
+        if self.output.json_mode:
+            yield
+            return
+        label = Text(message, style="bold #7895ac")
+        with self.output.out.status(label, spinner="dots"):
+            yield
+
+    def providers(self, providers: Iterable[Mapping[str, Any]]) -> None:
+        if self.output.json_mode:
+            return
+        materialized = list(providers)
+        table = Table(
+            title="Model Providers",
+            header_style="bold #7895ac",
+            border_style="#7895ac",
+            row_styles=("", "dim"),
+            expand=True,
+        )
+        table.add_column("#", justify="right", style="bold #d0a84e", width=3)
+        table.add_column("Provider", style="bold", min_width=18)
+        table.add_column("Protocol", min_width=18)
+        table.add_column("Popular models", overflow="fold")
+        for index, provider in enumerate(materialized, start=1):
+            models = [str(value) for value in provider.get("recommended_models") or []]
+            table.add_row(
+                str(index),
+                str(provider.get("display_name") or provider.get("key")),
+                _PROTOCOL_LABELS.get(
+                    str(provider.get("protocol")), str(provider.get("protocol") or "—")
+                ),
+                ", ".join(models[:3]) or "Discover after connecting",
+            )
+        table.add_section()
+        table.add_row(
+            str(len(materialized) + 1),
+            "Other Provider",
+            "OpenAI / local",
+            "Custom URL and exact model ID",
+            style="#d0a84e",
+        )
+        self.output.out.print(table)
+        self.output.out.print(
+            "[dim]Tip: API keys use a hidden prompt and are never sent as CLI metadata.[/dim]"
+        )
+
+    def protocols(self) -> None:
+        if self.output.json_mode:
+            return
+        table = Table(title="API Protocol", header_style="bold #7895ac", border_style="#7895ac")
+        table.add_column("#", justify="right", style="bold #d0a84e")
+        table.add_column("Protocol")
+        table.add_column("Use for")
+        table.add_row("1", "OpenAI-compatible", "Ollama, vLLM, LM Studio, most gateways")
+        table.add_row("2", "Anthropic Messages", "Claude-compatible endpoints")
+        table.add_row("3", "Google Gemini", "Gemini-compatible endpoints")
+        self.output.out.print(table)
+
+    def models(self, models: Iterable[str], recommendations: set[str]) -> None:
+        if self.output.json_mode:
+            return
+        table = Table(
+            title="Available Models",
+            header_style="bold #7895ac",
+            border_style="#7895ac",
+            expand=True,
+        )
+        table.add_column("#", justify="right", style="bold #d0a84e", width=3)
+        table.add_column("Model ID", style="bold")
+        table.add_column("Status", width=14)
+        for index, model in enumerate(models, start=1):
+            table.add_row(
+                str(index),
+                model,
+                "★ Recommended" if model in recommendations else "Discovered",
+            )
+        self.output.out.print(table)
+
+
+class ProjectRenderer:
+    """Render auditable Project work without implying access to private reasoning."""
+
+    def __init__(self, output: Output) -> None:
+        self.output = output
+
+    def timeline(self, entries: Iterable[Mapping[str, Any]]) -> None:
+        if self.output.json_mode:
+            return
+        table = Table(
+            title="Project Work Timeline",
+            header_style="bold #7895ac",
+            border_style="#7895ac",
+            expand=True,
+        )
+        table.add_column("#", justify="right", style="dim", width=6)
+        table.add_column("Type", style="bold", width=12)
+        table.add_column("Event", min_width=20)
+        table.add_column("Auditable facts", overflow="fold")
+        table.add_column("References", overflow="fold")
+        for entry in entries:
+            kind = str(entry.get("kind") or "state")
+            style, symbol = _project_kind_style(kind)
+            table.add_row(
+                str(entry.get("sequence") or "—"),
+                Text(f"{symbol} {kind}", style=style),
+                str(entry.get("event_type") or "—"),
+                _compact_mapping(entry.get("facts")),
+                _compact_mapping(entry.get("links")),
+            )
+        self.output.out.print(table)
+        self.output.out.print(
+            "[dim]Timeline shows persisted plans, actions, results, and references; "
+            "private model reasoning is never exposed.[/dim]"
+        )
+
+    def cycles(self, cycles: Iterable[Mapping[str, Any]]) -> None:
+        if self.output.json_mode:
+            return
+        materialized = list(cycles)
+        summary = Table(
+            title="Project Supervision",
+            header_style="bold #7895ac",
+            border_style="#7895ac",
+            expand=True,
+        )
+        summary.add_column("Status", style="bold", width=12)
+        summary.add_column("Trigger", width=10)
+        summary.add_column("Scheduled")
+        summary.add_column("Database facts", overflow="fold")
+        summary.add_column("Lead narrative", overflow="fold")
+        for cycle in materialized:
+            summary.add_row(
+                str(cycle.get("status") or "—"),
+                str(cycle.get("trigger") or "—"),
+                str(cycle.get("scheduled_for") or "—"),
+                _compact_mapping(cycle.get("metrics")),
+                str(cycle.get("narrative_summary") or "No model narrative"),
+            )
+        self.output.out.print(summary)
 
 
 class ExecutionRenderer:
@@ -215,3 +383,22 @@ def _label(value: Any, *, default: str = "—") -> str:
     if isinstance(value, (list, tuple)):
         return ", ".join(map(str, value))
     return str(value)
+
+
+def _project_kind_style(kind: str) -> tuple[str, str]:
+    return {
+        "plan": ("#7895ac", "▸"),
+        "tool": ("#d0a84e", "◆"),
+        "artifact": ("green", "◈"),
+        "delegation": ("magenta", "↳"),
+        "task": ("cyan", "□"),
+        "run": ("blue", "●"),
+        "conversation": ("white", "›"),
+        "state": ("dim", "·"),
+    }.get(kind, ("dim", "·"))
+
+
+def _compact_mapping(value: Any) -> str:
+    if not isinstance(value, Mapping) or not value:
+        return "—"
+    return ", ".join(f"{key}={item}" for key, item in value.items())

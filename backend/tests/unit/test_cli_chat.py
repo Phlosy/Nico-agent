@@ -140,6 +140,55 @@ class FakeApprovalClient(FakeChatClient):
         }
 
 
+class FakeProjectChatClient(FakeChatClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.guidance: list[dict[str, Any]] = []
+        self.escalations: list[dict[str, Any]] = []
+        self.withdrawals: list[dict[str, Any]] = []
+
+    def list_conversation_turns(self, _conversation_id: str, **_kwargs) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "turn-1",
+                "run_id": "run-1",
+                "run_status": "running",
+                "run_revision": 3,
+            }
+        ]
+
+    def create_run_intervention(self, project_id: str, session_id: str, run_id: str, **kwargs):
+        value = {"project_id": project_id, "session_id": session_id, "run_id": run_id, **kwargs}
+        self.guidance.append(value)
+        return {"id": "intervention-1", "status": "pending", "revision": 1}
+
+    def escalate_project_change(self, project_id: str, session_id: str, **kwargs):
+        value = {"project_id": project_id, "session_id": session_id, **kwargs}
+        self.escalations.append(value)
+        return {"id": "turn-lead", "run_id": "run-lead"}
+
+    def list_run_interventions(self, _project_id: str, _session_id: str, _run_id: str):
+        return [{"id": "intervention-1", "status": "pending", "revision": 2}]
+
+    def withdraw_run_intervention(
+        self,
+        project_id: str,
+        session_id: str,
+        run_id: str,
+        intervention_id: str,
+        **kwargs,
+    ):
+        value = {
+            "project_id": project_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            "intervention_id": intervention_id,
+            **kwargs,
+        }
+        self.withdrawals.append(value)
+        return {"id": intervention_id, "status": "withdrawn", "revision": 3}
+
+
 def _conversation(value: str) -> dict[str, Any]:
     return {
         "id": value,
@@ -274,9 +323,7 @@ def test_chat_resolves_exact_agent_name_and_uuid_without_arbitrary_choice(tmp_pa
     assert by_id["agent_id"] == "agent-1"
     with pytest.raises(CliError, match="matches multiple"):
         _runner(
-            FakeChatClient(
-                agents=[_agent("one", "duplicate"), _agent("two", "duplicate")]
-            ),
+            FakeChatClient(agents=[_agent("one", "duplicate"), _agent("two", "duplicate")]),
             tmp_path,
         ).resolve(
             project_id=None,
@@ -414,3 +461,53 @@ def test_chat_slash_help_and_title_are_real_operations(tmp_path: Path) -> None:
     assert should_exit is False
     assert updated["title"] == "Research Notes"
     assert "Nico Slash Commands" in stdout.getvalue()
+
+
+def test_project_slash_commands_bind_current_session_and_revisions(tmp_path: Path) -> None:
+    client = FakeProjectChatClient()
+    runner = _runner(client, tmp_path, json_mode=False)
+    conversation = {
+        **_conversation("conversation-1"),
+        "_cli_mode": "project",
+        "_cli_project_id": "project-1",
+        "_cli_project_session_id": "session-1",
+    }
+
+    for raw in (
+        "/guide check the failing test",
+        "/escalate reduce the project scope",
+        "/withdraw intervention-1 no longer needed",
+    ):
+        command = parse_slash(raw)
+        assert command is not None
+        runner._slash(conversation, command)
+
+    assert client.guidance[0]["run_id"] == "run-1"
+    assert client.guidance[0]["expected_run_revision"] == 3
+    assert client.escalations[0]["session_id"] == "session-1"
+    assert client.withdrawals[0]["expected_intervention_revision"] == 2
+
+
+def test_active_project_input_requires_an_explicit_intervention_choice(tmp_path: Path) -> None:
+    client = FakeProjectChatClient()
+    answers = iter(["1", "2", ""])
+    runner = ChatRunner(
+        client,  # type: ignore[arg-type]
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO()),
+        history_path=tmp_path / "history",
+        selection_prompt=lambda _message: next(answers),
+    )
+    conversation = {
+        **_conversation("conversation-1"),
+        "_cli_mode": "project",
+        "_cli_project_id": "project-1",
+        "_cli_project_session_id": "session-1",
+    }
+
+    assert runner._dispatch_project_input(conversation, "local direction") is True
+    assert runner._dispatch_project_input(conversation, "change scope") is True
+    assert runner._dispatch_project_input(conversation, "do nothing") is True
+
+    assert client.guidance[0]["content"] == "local direction"
+    assert client.escalations[0]["content"] == "change scope"
+    assert len(client.guidance) == len(client.escalations) == 1

@@ -220,6 +220,106 @@ class NicoApiClient:
             extra_headers={"Idempotency-Key": idempotency_key},
         )
 
+    def request_project_sync(self, project_id: str, *, idempotency_key: str) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/supervision/sync",
+            json_body={},
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def update_project_cadence(
+        self,
+        project_id: str,
+        *,
+        cadence_seconds: int | None,
+        expected_project_revision: int,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "PATCH",
+            f"/api/v1/projects/{project_id}/supervision/cadence",
+            json_body={
+                "cadence_seconds": cadence_seconds,
+                "expected_project_revision": expected_project_revision,
+                "reason": reason,
+            },
+        )
+
+    def list_project_supervision_cycles(self, project_id: str) -> list[dict[str, Any]]:
+        return self.request("GET", f"/api/v1/projects/{project_id}/supervision/cycles")
+
+    def create_run_intervention(
+        self,
+        project_id: str,
+        session_id: str,
+        run_id: str,
+        *,
+        content: str,
+        expected_run_revision: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/sessions/{session_id}/runs/{run_id}/interventions",
+            json_body={
+                "content": content,
+                "expected_run_revision": expected_run_revision,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
+    def list_run_interventions(
+        self, project_id: str, session_id: str, run_id: str
+    ) -> list[dict[str, Any]]:
+        return self.request(
+            "GET",
+            f"/api/v1/projects/{project_id}/sessions/{session_id}/runs/{run_id}/interventions",
+        )
+
+    def withdraw_run_intervention(
+        self,
+        project_id: str,
+        session_id: str,
+        run_id: str,
+        intervention_id: str,
+        *,
+        expected_intervention_revision: int,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/sessions/{session_id}/runs/{run_id}/"
+            f"interventions/{intervention_id}/withdraw",
+            json_body={
+                "expected_intervention_revision": expected_intervention_revision,
+                "reason": reason,
+            },
+        )
+
+    def escalate_project_change(
+        self,
+        project_id: str,
+        session_id: str,
+        *,
+        content: str,
+        max_steps: int,
+        token_budget: int | None,
+        timeout_seconds: int | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/projects/{project_id}/sessions/{session_id}/project-changes",
+            json_body={
+                "content": content,
+                "max_steps": max_steps,
+                "token_budget": token_budget,
+                "timeout_seconds": timeout_seconds,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
     def list_agents(self) -> list[dict[str, Any]]:
         return self.request("GET", "/api/v1/agents")
 
@@ -306,6 +406,13 @@ class NicoApiClient:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/runs/{run_id}")
+
+    def cancel_run(self, run_id: str, *, expected_revision: int) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/runs/{run_id}/cancel",
+            json_body={"expected_revision": expected_revision},
+        )
 
     def get_runtime(self, run_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/runs/{run_id}/runtime")

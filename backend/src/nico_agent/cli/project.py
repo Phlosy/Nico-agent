@@ -10,6 +10,8 @@ from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.output import Output
 
+_TERMINAL_RUN_STATES = {"completed", "failed", "cancelled", "timed_out"}
+
 
 class ProjectCli:
     def __init__(
@@ -168,6 +170,10 @@ class ProjectCli:
             "sessions": sessions,
         }
 
+    def get(self, project_reference: str) -> dict[str, Any]:
+        project = self.resolve_project(project_reference)
+        return self.client.get_project(str(project["id"]))
+
     def add_member(
         self,
         project_reference: str,
@@ -228,6 +234,7 @@ class ProjectCli:
         project_reference: str,
         *,
         agent_reference: str | None,
+        open_conversation: bool = True,
     ) -> dict[str, Any]:
         project = self.resolve_project(project_reference)
         project_id = str(project["id"])
@@ -249,11 +256,9 @@ class ProjectCli:
             or membership.get("status") != "active"
             or project_session.get("status") != "active"
         )
-        conversation = (
-            self.client.open_project_session(project_id, str(project_session["id"]))
-            if not read_only
-            else self._current_conversation(project_session)
-        )
+        conversation = self._current_conversation(project_session)
+        if open_conversation and not read_only:
+            conversation = self.client.open_project_session(project_id, str(project_session["id"]))
         return {
             "project": project,
             "member": membership,
@@ -271,7 +276,11 @@ class ProjectCli:
         after_sequence: int,
         limit: int,
     ) -> dict[str, Any]:
-        workspace = self.workspace(project_reference, agent_reference=agent_reference)
+        workspace = self.workspace(
+            project_reference,
+            agent_reference=agent_reference,
+            open_conversation=False,
+        )
         page = self.client.project_timeline(
             str(workspace["project"]["id"]),
             str(workspace["session"]["id"]),
@@ -279,6 +288,202 @@ class ProjectCli:
             limit=limit,
         )
         return {**workspace, "timeline": page}
+
+    def tasks(self, project_reference: str, *, limit: int) -> dict[str, Any]:
+        project = self.resolve_project(project_reference)
+        project_id = str(project["id"])
+        members = self.client.list_project_members(project_id)
+        agents = {str(item["id"]): item for item in self.client.list_agents()}
+        sessions = self.client.list_project_sessions(project_id)
+        member_by_id = {str(item["id"]): item for item in members}
+        entries: list[dict[str, Any]] = []
+        for project_session in sessions:
+            page = self.client.project_timeline(
+                project_id,
+                str(project_session["id"]),
+                after_sequence=0,
+                limit=min(limit, 500),
+            )
+            membership = member_by_id.get(str(project_session["project_member_id"]), {})
+            agent = agents.get(str(membership.get("agent_id")), {})
+            for item in page.get("entries") or []:
+                if item.get("kind") != "task":
+                    continue
+                entries.append(
+                    {
+                        **item,
+                        "agent_id": membership.get("agent_id"),
+                        "agent_name": agent.get("name"),
+                        "project_session_id": project_session["id"],
+                    }
+                )
+        entries.sort(key=lambda item: int(item.get("sequence") or 0), reverse=True)
+        return {"project": project, "tasks": entries[:limit]}
+
+    def sync(self, project_reference: str) -> dict[str, Any]:
+        project = self.resolve_project(project_reference)
+        return self.client.request_project_sync(str(project["id"]), idempotency_key=str(uuid4()))
+
+    def cadence(
+        self,
+        project_reference: str,
+        *,
+        cadence_seconds: int | None,
+        expected_project_revision: int | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        if cadence_seconds is not None and not 300 <= cadence_seconds <= 604_800:
+            raise CliError(
+                "PROJECT_CADENCE_INVALID",
+                "cadence must be off or between 300 and 604800 seconds",
+                exit_code=2,
+            )
+        project = self.resolve_project(project_reference)
+        return self.client.update_project_cadence(
+            str(project["id"]),
+            cadence_seconds=cadence_seconds,
+            expected_project_revision=(expected_project_revision or int(project["revision"])),
+            reason=reason,
+        )
+
+    def cycles(self, project_reference: str) -> dict[str, Any]:
+        project = self.resolve_project(project_reference)
+        return {
+            "project": project,
+            "cycles": self.client.list_project_supervision_cycles(str(project["id"])),
+        }
+
+    def guide(
+        self,
+        project_reference: str,
+        *,
+        agent_reference: str | None,
+        content: str,
+        run_reference: str | None,
+        expected_run_revision: int | None,
+    ) -> dict[str, Any]:
+        self._validate_intervention_content(content)
+        workspace = self.workspace(
+            project_reference,
+            agent_reference=agent_reference,
+            open_conversation=False,
+        )
+        self._require_writable(workspace)
+        run = self._resolve_session_run(workspace, run_reference, active_only=True)
+        return self.client.create_run_intervention(
+            str(workspace["project"]["id"]),
+            str(workspace["session"]["id"]),
+            str(run["id"]),
+            content=content,
+            expected_run_revision=(expected_run_revision or int(run["revision"])),
+            idempotency_key=str(uuid4()),
+        )
+
+    def escalate(
+        self,
+        project_reference: str,
+        *,
+        agent_reference: str | None,
+        content: str,
+        max_steps: int,
+        token_budget: int | None,
+        timeout_seconds: int | None,
+    ) -> dict[str, Any]:
+        self._validate_intervention_content(content)
+        workspace = self.workspace(
+            project_reference,
+            agent_reference=agent_reference,
+            open_conversation=False,
+        )
+        self._require_writable(workspace)
+        return self.client.escalate_project_change(
+            str(workspace["project"]["id"]),
+            str(workspace["session"]["id"]),
+            content=content,
+            max_steps=max_steps,
+            token_budget=token_budget,
+            timeout_seconds=timeout_seconds,
+            idempotency_key=str(uuid4()),
+        )
+
+    def interventions(
+        self,
+        project_reference: str,
+        *,
+        agent_reference: str | None,
+        run_reference: str | None,
+    ) -> dict[str, Any]:
+        workspace = self.workspace(
+            project_reference,
+            agent_reference=agent_reference,
+            open_conversation=False,
+        )
+        run = self._resolve_session_run(workspace, run_reference, active_only=False)
+        return {
+            **workspace,
+            "run": run,
+            "interventions": self.client.list_run_interventions(
+                str(workspace["project"]["id"]),
+                str(workspace["session"]["id"]),
+                str(run["id"]),
+            ),
+        }
+
+    def withdraw(
+        self,
+        project_reference: str,
+        *,
+        agent_reference: str | None,
+        run_reference: str | None,
+        intervention_id: str,
+        expected_intervention_revision: int | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        values = self.interventions(
+            project_reference,
+            agent_reference=agent_reference,
+            run_reference=run_reference,
+        )
+        intervention = next(
+            (item for item in values["interventions"] if str(item.get("id")) == intervention_id),
+            None,
+        )
+        if intervention is None:
+            raise CliError(
+                "RUN_INTERVENTION_NOT_FOUND",
+                "the intervention is not attached to the selected Project Session Run",
+                exit_code=2,
+            )
+        return self.client.withdraw_run_intervention(
+            str(values["project"]["id"]),
+            str(values["session"]["id"]),
+            str(values["run"]["id"]),
+            intervention_id,
+            expected_intervention_revision=(
+                expected_intervention_revision or int(intervention["revision"])
+            ),
+            reason=reason,
+        )
+
+    def cancel(
+        self,
+        project_reference: str,
+        *,
+        agent_reference: str | None,
+        run_reference: str | None,
+        expected_run_revision: int | None,
+    ) -> dict[str, Any]:
+        workspace = self.workspace(
+            project_reference,
+            agent_reference=agent_reference,
+            open_conversation=False,
+        )
+        self._require_writable(workspace)
+        run = self._resolve_session_run(workspace, run_reference, active_only=True)
+        return self.client.cancel_run(
+            str(run["id"]),
+            expected_revision=(expected_run_revision or int(run["revision"])),
+        )
 
     def _resolve_project_member(
         self,
@@ -325,6 +530,61 @@ class ProjectCli:
                 "PROJECT_SESSION_EMPTY", "the read-only Session has no Conversation history"
             )
         return self.client.get_conversation(str(conversation_id))
+
+    @staticmethod
+    def _require_writable(workspace: dict[str, Any]) -> None:
+        if workspace["read_only"]:
+            raise CliError(
+                "PROJECT_SESSION_READ_ONLY",
+                "the selected Project Session is paused, removed, or archived",
+                exit_code=2,
+            )
+
+    def _resolve_session_run(
+        self,
+        workspace: dict[str, Any],
+        run_reference: str | None,
+        *,
+        active_only: bool,
+    ) -> dict[str, Any]:
+        page = self.client.project_timeline(
+            str(workspace["project"]["id"]),
+            str(workspace["session"]["id"]),
+            after_sequence=0,
+            limit=500,
+        )
+        run_ids: list[str] = []
+        for entry in reversed(page.get("entries") or []):
+            run_id = entry.get("run_id")
+            if run_id is not None and str(run_id) not in run_ids:
+                run_ids.append(str(run_id))
+        if run_reference is not None and run_reference not in run_ids:
+            raise CliError(
+                "PROJECT_SESSION_RUN_NOT_FOUND",
+                "the requested Run is not attached to the selected Project Session",
+                exit_code=2,
+            )
+        candidates = [run_reference] if run_reference is not None else run_ids
+        for run_id in candidates:
+            run = self.client.get_run(str(run_id))
+            if not active_only or run.get("status") not in _TERMINAL_RUN_STATES:
+                return run
+        qualifier = "active " if active_only else ""
+        raise CliError(
+            "PROJECT_SESSION_RUN_NOT_FOUND",
+            f"the selected Project Session has no {qualifier}Run",
+            exit_code=2,
+        )
+
+    @staticmethod
+    def _validate_intervention_content(content: str) -> None:
+        length = len(content.strip())
+        if length == 0 or length > 16_000:
+            raise CliError(
+                "PROJECT_INTERVENTION_INVALID",
+                "guidance must contain between 1 and 16000 characters",
+                exit_code=2,
+            )
 
     @staticmethod
     def _candidate_message(kind: str, reference: str, candidates: list[dict[str, Any]]) -> str:
