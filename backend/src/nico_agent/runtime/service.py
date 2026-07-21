@@ -1325,8 +1325,7 @@ class RuntimeExecutionService:
             )
             .join(
                 ProjectMember,
-                (ProjectMember.tenant_id == Agent.tenant_id)
-                & (ProjectMember.agent_id == Agent.id),
+                (ProjectMember.tenant_id == Agent.tenant_id) & (ProjectMember.agent_id == Agent.id),
             )
             .join(
                 ProjectSession,

@@ -398,9 +398,7 @@ async def test_supervision_api_replays_updates_cadence_and_archive_cancels_run_t
         assert after.json()["status"] == "cancelled"
         async with database.admin_transaction() as session:
             stored_cycle = await session.scalar(
-                select(ProjectSupervisionCycle).where(
-                    ProjectSupervisionCycle.id == cycle_id
-                )
+                select(ProjectSupervisionCycle).where(ProjectSupervisionCycle.id == cycle_id)
             )
             assert stored_cycle is not None and stored_cycle.run_id is not None
             run = await session.get(Run, stored_cycle.run_id)

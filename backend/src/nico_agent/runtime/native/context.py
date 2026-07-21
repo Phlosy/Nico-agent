@@ -78,9 +78,7 @@ def inject_interventions(
                 ),
             ),
             "effect_metadata": metadata,
-            "token_estimate": max(
-                1, sum(len(message.content or "") for message in messages) // 4
-            ),
+            "token_estimate": max(1, sum(len(message.content or "") for message in messages) // 4),
             "content_hash": hashlib.sha256(encoded).hexdigest(),
         }
     )

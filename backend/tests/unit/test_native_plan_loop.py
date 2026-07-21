@@ -110,6 +110,7 @@ class OneShotInterventionHandler:
             ),
         )
 
+
 def _request(**updates) -> RuntimeSessionRequest:
     request = RuntimeSessionRequest(
         tenant_id=uuid4(),
@@ -218,9 +219,7 @@ async def test_plan_injects_guidance_at_the_next_model_boundary() -> None:
 
     assert outcome.status is RuntimeSessionStatus.COMPLETED
     assert handler.calls[0] == "planner:1"
-    assert "Add an explicit rollback step" in (
-        model.requests[0].messages[-1].content or ""
-    )
+    assert "Add an explicit rollback step" in (model.requests[0].messages[-1].content or "")
     assert "UNTRUSTED DATA" in (model.requests[0].messages[-1].content or "")
 
 

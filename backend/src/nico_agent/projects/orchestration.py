@@ -175,9 +175,7 @@ class ProjectOrchestrationService:
         reason: str | None,
     ) -> Project:
         async with self.database.tenant_transaction(context) as session:
-            project, _, _ = await self._active_lead(
-                session, context, project_id, for_update=True
-            )
+            project, _, _ = await self._active_lead(session, context, project_id, for_update=True)
             if project.revision != expected_revision:
                 raise DomainConflict(
                     "REVISION_CONFLICT",
@@ -443,9 +441,7 @@ class ProjectOrchestrationService:
             await session.scalars(
                 select(Run.status)
                 .join(Task, (Task.tenant_id == Run.tenant_id) & (Task.id == Run.task_id))
-                .where(
-                    Run.tenant_id == context.tenant_id, Task.project_id == cycle.project_id
-                )
+                .where(Run.tenant_id == context.tenant_id, Task.project_id == cycle.project_id)
             )
         )
         member_statuses = list(

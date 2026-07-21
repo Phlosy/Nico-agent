@@ -950,11 +950,7 @@ class ConversationService:
                 ProjectMember.id == project_session.project_member_id,
             )
         )
-        if (
-            member is None
-            or member.status != "active"
-            or project_session.status != "active"
-        ):
+        if member is None or member.status != "active" or project_session.status != "active":
             raise DomainConflict(
                 "PROJECT_MEMBER_INACTIVE",
                 "only an active Project member Session accepts messages",

@@ -43,9 +43,7 @@ def upgrade() -> None:
     )
     op.add_column("projects", sa.Column("owner_actor_id", sa.String(200)))
     op.add_column("projects", sa.Column("supervision_cadence_seconds", sa.Integer()))
-    op.add_column(
-        "projects", sa.Column("next_supervision_at", sa.DateTime(timezone=True))
-    )
+    op.add_column("projects", sa.Column("next_supervision_at", sa.DateTime(timezone=True)))
     op.add_column("projects", sa.Column("idempotency_key", sa.String(200)))
     op.create_check_constraint("ck_projects_kind", "projects", "kind IN ('shared', 'personal')")
     op.create_check_constraint(
@@ -58,8 +56,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_projects_supervision_cadence",
         "projects",
-        "supervision_cadence_seconds IS NULL OR "
-        "supervision_cadence_seconds BETWEEN 300 AND 604800",
+        "supervision_cadence_seconds IS NULL OR supervision_cadence_seconds BETWEEN 300 AND 604800",
     )
     op.create_index(
         "uq_projects_personal_owner",
@@ -121,9 +118,7 @@ def upgrade() -> None:
             name="fk_project_members_agent",
         ),
         sa.UniqueConstraint("tenant_id", "id", name="uq_project_members_tenant_id_id"),
-        sa.UniqueConstraint(
-            "tenant_id", "project_id", "id", name="uq_project_members_project_id"
-        ),
+        sa.UniqueConstraint("tenant_id", "project_id", "id", name="uq_project_members_project_id"),
         sa.UniqueConstraint(
             "tenant_id", "project_id", "agent_id", name="uq_project_members_project_agent"
         ),
@@ -200,9 +195,7 @@ def upgrade() -> None:
             name="fk_project_sessions_current_conversation",
         ),
         sa.UniqueConstraint("tenant_id", "id", name="uq_project_sessions_tenant_id_id"),
-        sa.UniqueConstraint(
-            "tenant_id", "project_id", "id", name="uq_project_sessions_project_id"
-        ),
+        sa.UniqueConstraint("tenant_id", "project_id", "id", name="uq_project_sessions_project_id"),
         sa.UniqueConstraint(
             "tenant_id",
             "project_id",
@@ -213,9 +206,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tenant_id", "project_id", "agent_id", name="uq_project_sessions_project_agent"
         ),
-        sa.UniqueConstraint(
-            "tenant_id", "project_member_id", name="uq_project_sessions_member"
-        ),
+        sa.UniqueConstraint("tenant_id", "project_member_id", name="uq_project_sessions_member"),
     )
     op.create_index(
         "ix_project_sessions_status",
@@ -369,9 +360,7 @@ def upgrade() -> None:
             "length(content) BETWEEN 1 AND 16000", name="ck_run_interventions_content"
         ),
         sa.CheckConstraint("length(content_hash) = 64", name="ck_run_interventions_hash"),
-        sa.CheckConstraint(
-            "expected_run_revision > 0", name="ck_run_interventions_run_revision"
-        ),
+        sa.CheckConstraint("expected_run_revision > 0", name="ck_run_interventions_run_revision"),
         sa.CheckConstraint("revision > 0", name="ck_run_interventions_revision"),
         sa.CheckConstraint(
             "status <> 'consumed' OR consumed_at IS NOT NULL",
@@ -436,9 +425,7 @@ def upgrade() -> None:
         _enable_rls(table)
 
     op.execute(_CLAIM_SUPERVISION_FUNCTION)
-    op.execute(
-        "REVOKE ALL ON FUNCTION claim_next_project_supervision(text, integer) FROM PUBLIC"
-    )
+    op.execute("REVOKE ALL ON FUNCTION claim_next_project_supervision(text, integer) FROM PUBLIC")
     op.execute(
         "GRANT EXECUTE ON FUNCTION claim_next_project_supervision(text, integer) "
         "TO nico_worker_claimer"
@@ -452,18 +439,14 @@ def downgrade() -> None:
     op.execute("DROP TRIGGER guard_supervision_terminal ON project_supervision_cycles")
     op.execute("DROP FUNCTION guard_supervision_terminal()")
     op.drop_constraint("fk_tasks_project_session", "tasks", type_="foreignkey")
-    op.drop_constraint(
-        "fk_conversations_project_session", "conversations", type_="foreignkey"
-    )
+    op.drop_constraint("fk_conversations_project_session", "conversations", type_="foreignkey")
     op.drop_table("run_interventions")
     op.drop_table("project_supervision_cycles")
     op.drop_table("project_sessions")
     op.drop_table("project_members")
     op.drop_constraint("uq_tasks_project_session_id", "tasks", type_="unique")
     op.drop_column("tasks", "project_session_id")
-    op.drop_constraint(
-        "uq_conversations_project_agent_id", "conversations", type_="unique"
-    )
+    op.drop_constraint("uq_conversations_project_agent_id", "conversations", type_="unique")
     op.drop_column("conversations", "project_session_id")
     op.drop_index("uq_projects_personal_owner", table_name="projects")
     op.drop_index("uq_projects_idempotency", table_name="projects")

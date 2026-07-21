@@ -272,9 +272,7 @@ class ProjectMember(Base, TimestampMixin):
             name="fk_project_members_agent",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_project_members_tenant_id_id"),
-        UniqueConstraint(
-            "tenant_id", "project_id", "id", name="uq_project_members_project_id"
-        ),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_project_members_project_id"),
         UniqueConstraint(
             "tenant_id", "project_id", "agent_id", name="uq_project_members_project_agent"
         ),
@@ -474,9 +472,7 @@ class ProjectSession(Base, TimestampMixin):
             name="fk_project_sessions_current_conversation",
         ),
         UniqueConstraint("tenant_id", "id", name="uq_project_sessions_tenant_id_id"),
-        UniqueConstraint(
-            "tenant_id", "project_id", "id", name="uq_project_sessions_project_id"
-        ),
+        UniqueConstraint("tenant_id", "project_id", "id", name="uq_project_sessions_project_id"),
         UniqueConstraint(
             "tenant_id",
             "project_id",
@@ -487,9 +483,7 @@ class ProjectSession(Base, TimestampMixin):
         UniqueConstraint(
             "tenant_id", "project_id", "agent_id", name="uq_project_sessions_project_agent"
         ),
-        UniqueConstraint(
-            "tenant_id", "project_member_id", name="uq_project_sessions_member"
-        ),
+        UniqueConstraint("tenant_id", "project_member_id", name="uq_project_sessions_member"),
         Index(
             "ix_project_sessions_status",
             "tenant_id",

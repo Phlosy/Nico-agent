@@ -101,8 +101,7 @@ class ProjectCollaborationService:
                 kind="shared",
                 supervision_cadence_seconds=command.supervision_cadence_seconds,
                 next_supervision_at=(
-                    datetime.now(UTC)
-                    + timedelta(seconds=command.supervision_cadence_seconds)
+                    datetime.now(UTC) + timedelta(seconds=command.supervision_cadence_seconds)
                     if command.supervision_cadence_seconds is not None
                     else None
                 ),
@@ -150,9 +149,7 @@ class ProjectCollaborationService:
             await session.flush()
             return await self._collaboration(session, context, project)
 
-    async def list_members(
-        self, context: TenantContext, project_id: UUID
-    ) -> list[ProjectMember]:
+    async def list_members(self, context: TenantContext, project_id: UUID) -> list[ProjectMember]:
         async with self.database.tenant_transaction(context) as session:
             await self._project(session, context, project_id)
             return await self._members(session, context, project_id)
@@ -166,9 +163,7 @@ class ProjectCollaborationService:
         idempotency_key: str,
     ) -> ProjectMemberMutationRead:
         async with self.database.tenant_transaction(context) as session:
-            project = await self._managed_project(
-                session, context, project_id, for_update=True
-            )
+            project = await self._managed_project(session, context, project_id, for_update=True)
             require_revision(
                 "project", expected=command.expected_project_revision, actual=project.revision
             )
@@ -214,12 +209,8 @@ class ProjectCollaborationService:
         idempotency_key: str,
     ) -> ProjectMemberMutationRead:
         async with self.database.tenant_transaction(context) as session:
-            project = await self._managed_project(
-                session, context, project_id, for_update=True
-            )
-            member = await self._member(
-                session, context, project.id, agent_id, for_update=True
-            )
+            project = await self._managed_project(session, context, project_id, for_update=True)
+            member = await self._member(session, context, project.id, agent_id, for_update=True)
             session_value = await self._member_session(session, context, member, for_update=True)
             if await self._is_replay(
                 session, context, "project.member.state", member.id, idempotency_key
@@ -303,9 +294,7 @@ class ProjectCollaborationService:
         idempotency_key: str,
     ) -> ProjectLeadReplaceRead:
         async with self.database.tenant_transaction(context) as session:
-            project = await self._managed_project(
-                session, context, project_id, for_update=True
-            )
+            project = await self._managed_project(session, context, project_id, for_update=True)
             if await self._is_replay(
                 session, context, "project.lead.replace", project.id, idempotency_key
             ):
@@ -378,9 +367,7 @@ class ProjectCollaborationService:
             value = await self._collaboration(session, context, project)
             return ProjectLeadReplaceRead(**value.model_dump())
 
-    async def list_sessions(
-        self, context: TenantContext, project_id: UUID
-    ) -> list[ProjectSession]:
+    async def list_sessions(self, context: TenantContext, project_id: UUID) -> list[ProjectSession]:
         async with self.database.tenant_transaction(context) as session:
             await self._project(session, context, project_id)
             return list(
@@ -540,9 +527,7 @@ class ProjectCollaborationService:
         ):
             issues.append("Lead Agent must have a published current version")
         else:
-            tenant = await session.scalar(
-                select(Tenant).where(Tenant.id == context.tenant_id)
-            )
+            tenant = await session.scalar(select(Tenant).where(Tenant.id == context.tenant_id))
             issues.extend(
                 AgentVersionLifecycle.project_lead_compatibility_issues(
                     version,
@@ -721,9 +706,7 @@ class ProjectCollaborationService:
         *,
         for_update: bool = False,
     ) -> Project:
-        project = await self._project(
-            session, context, project_id, for_update=for_update
-        )
+        project = await self._project(session, context, project_id, for_update=for_update)
         if ProjectStatus(project.status) is ProjectStatus.ARCHIVED:
             raise DomainConflict("PROJECT_ARCHIVED", "archived Projects are read-only")
         if not self.is_managed(project):

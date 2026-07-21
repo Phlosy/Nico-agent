@@ -331,9 +331,7 @@ async def test_react_injects_frozen_guidance_as_untrusted_context() -> None:
     assert outcome.status is RuntimeSessionStatus.COMPLETED
     assert len(intervention_handler.boundaries) == 1
     assert "UNTRUSTED DATA" in (model.requests[0].messages[-1].content or "")
-    assert "Prioritize the regression test" in (
-        model.requests[0].messages[-1].content or ""
-    )
+    assert "Prioritize the regression test" in (model.requests[0].messages[-1].content or "")
     context_event = next(
         event for event in events if event.type is RuntimeEventType.CONTEXT_SNAPSHOT_CREATED
     )

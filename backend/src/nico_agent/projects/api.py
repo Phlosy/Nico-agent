@@ -259,9 +259,7 @@ async def request_project_sync(
     context: Context,
     idempotency_key: IdempotencyKey,
 ):
-    return await service.create_manual(
-        context, project_id, idempotency_key=idempotency_key
-    )
+    return await service.create_manual(context, project_id, idempotency_key=idempotency_key)
 
 
 @router.patch("/{project_id}/supervision/cadence", response_model=ProjectRead)
@@ -340,14 +338,11 @@ async def list_run_interventions(
     service: InterventionService,
     context: Context,
 ):
-    return await service.list_interventions(
-        context, project_id, session_id, run_id
-    )
+    return await service.list_interventions(context, project_id, session_id, run_id)
 
 
 @router.post(
-    "/{project_id}/sessions/{session_id}/runs/{run_id}/interventions/"
-    "{intervention_id}/withdraw",
+    "/{project_id}/sessions/{session_id}/runs/{run_id}/interventions/{intervention_id}/withdraw",
     response_model=RunInterventionRead,
 )
 async def withdraw_run_intervention(

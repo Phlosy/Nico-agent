@@ -127,8 +127,7 @@ async def _managed_project(
 def _contains_key(value, forbidden: set[str]) -> bool:
     if isinstance(value, dict):
         return any(
-            key in forbidden or _contains_key(item, forbidden)
-            for key, item in value.items()
+            key in forbidden or _contains_key(item, forbidden) for key, item in value.items()
         )
     if isinstance(value, list):
         return any(_contains_key(item, forbidden) for item in value)
@@ -224,15 +223,11 @@ async def test_session_message_rotation_timeline_pagination_and_read_only_histor
     )
     assert second.status_code == 202, second.text
     second_turn = second.json()
-    second_run = (
-        await client.get(f"/api/v1/runs/{second_turn['run_id']}", headers=headers)
-    ).json()
+    second_run = (await client.get(f"/api/v1/runs/{second_turn['run_id']}", headers=headers)).json()
     assert second_run["agent_version_id"] == next_version.json()["id"]
     assert second_run["agent_version_id"] != first_version["id"]
     current_session = (
-        await client.get(
-            f"/api/v1/projects/{project['id']}/sessions/{session_id}", headers=headers
-        )
+        await client.get(f"/api/v1/projects/{project['id']}/sessions/{session_id}", headers=headers)
     ).json()
     assert current_session["current_conversation_id"] != first_conversation_id
     assert (

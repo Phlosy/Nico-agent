@@ -222,10 +222,7 @@ class ProjectSessionReadService:
                 if str(key).lower() not in _PRIVATE_KEYS
             }
         if isinstance(value, list):
-            return [
-                cls._sanitize_value(item, depth=depth + 1)
-                for item in value[:_MAX_ITEMS]
-            ]
+            return [cls._sanitize_value(item, depth=depth + 1) for item in value[:_MAX_ITEMS]]
         if isinstance(value, str) and len(value) > _MAX_STRING:
             return f"{value[:_MAX_STRING]}…"
         if value is None or isinstance(value, (str, int, float, bool)):
@@ -256,9 +253,7 @@ class ProjectSessionReadService:
             links["resource"] = f"/api/v1/runs/{aggregate_id}"
         elif aggregate_type == "artifact" and run_id is not None:
             links["resource"] = f"/api/v1/runs/{run_id}/artifacts"
-            links["content"] = (
-                f"/api/v1/runs/{run_id}/artifacts/{aggregate_id}/content"
-            )
+            links["content"] = f"/api/v1/runs/{run_id}/artifacts/{aggregate_id}/content"
         elif aggregate_type == "tool_call" and run_id is not None:
             links["resource"] = f"/api/v1/runs/{run_id}/tool-calls"
         elif aggregate_type == "plan" and run_id is not None:

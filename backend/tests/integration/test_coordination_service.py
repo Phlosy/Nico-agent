@@ -194,9 +194,7 @@ def _intent(target: UUID, key: str, *, tokens: int, objective: str | None = None
     )
 
 
-async def _enable_managed_scope(
-    database: Database, seeded: SeededTree
-) -> dict[UUID, UUID]:
+async def _enable_managed_scope(database: Database, seeded: SeededTree) -> dict[UUID, UUID]:
     async with database.admin_transaction() as session:
         parent_run = await session.get(Run, seeded.parent_run_id)
         assert parent_run is not None
@@ -309,8 +307,9 @@ async def test_delegate_atomically_creates_child_closure_assignment_and_idempote
 
 
 @pytest.mark.asyncio
-async def test_project_member_delegation_links_session_and_checks_live_state_before_budget(
-) -> None:
+async def test_project_member_delegation_links_session_and_checks_live_state_before_budget() -> (
+    None
+):
     settings = Settings(environment="test", _env_file=None)
     engine = create_async_engine(settings.resolved_database_url)
     database = Database(engine)
@@ -349,9 +348,7 @@ async def test_project_member_delegation_links_session_and_checks_live_state_bef
             second_member.status = "paused"
             second_session.status = "paused"
             ledger = await session.scalar(
-                select(RunBudgetLedger).where(
-                    RunBudgetLedger.run_id == seeded.parent_run_id
-                )
+                select(RunBudgetLedger).where(RunBudgetLedger.run_id == seeded.parent_run_id)
             )
             assert ledger is not None
             reserved_before = ledger.token_child_reserved
@@ -367,9 +364,7 @@ async def test_project_member_delegation_links_session_and_checks_live_state_bef
         assert inactive.value.code == "PROJECT_MEMBER_INACTIVE"
         async with database.admin_transaction() as session:
             ledger = await session.scalar(
-                select(RunBudgetLedger).where(
-                    RunBudgetLedger.run_id == seeded.parent_run_id
-                )
+                select(RunBudgetLedger).where(RunBudgetLedger.run_id == seeded.parent_run_id)
             )
             assert ledger is not None and ledger.token_child_reserved == reserved_before
             parent = await session.get(Run, seeded.parent_run_id)
@@ -391,9 +386,7 @@ async def test_project_member_delegation_links_session_and_checks_live_state_bef
         assert archived.value.code == "PROJECT_ARCHIVED"
         async with database.admin_transaction() as session:
             ledger = await session.scalar(
-                select(RunBudgetLedger).where(
-                    RunBudgetLedger.run_id == seeded.parent_run_id
-                )
+                select(RunBudgetLedger).where(RunBudgetLedger.run_id == seeded.parent_run_id)
             )
             assert ledger is not None and ledger.token_child_reserved == reserved_before
     finally:

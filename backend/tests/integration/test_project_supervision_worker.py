@@ -185,9 +185,7 @@ async def test_supervision_claim_is_exactly_once_recovers_and_uses_current_lead(
             claimed_cycle = await session.get(ProjectSupervisionCycle, crashed.id)
             assert claimed_cycle is not None
             claimed_cycle.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        assert await ProjectSupervisionWorker(
-            database, worker_id="recovery-worker"
-        ).execute_once()
+        assert await ProjectSupervisionWorker(database, worker_id="recovery-worker").execute_once()
         async with database.admin_transaction() as session:
             recovered = await session.get(ProjectSupervisionCycle, crashed.id)
             assert recovered is not None and recovered.status == "running"
@@ -201,12 +199,8 @@ async def test_supervision_claim_is_exactly_once_recovers_and_uses_current_lead(
             new_lead.role = "lead"
             await session.flush()
 
-        future = await service.create_manual(
-            context, project_id, idempotency_key="manual-new-lead"
-        )
-        assert await ProjectSupervisionWorker(
-            database, worker_id="new-lead-worker"
-        ).execute_once()
+        future = await service.create_manual(context, project_id, idempotency_key="manual-new-lead")
+        assert await ProjectSupervisionWorker(database, worker_id="new-lead-worker").execute_once()
         async with database.admin_transaction() as session:
             current = await session.get(ProjectSupervisionCycle, future.id)
             assert current is not None
@@ -228,9 +222,7 @@ async def test_due_cadence_creates_one_slot_and_advances_without_backlog() -> No
             project = await session.get(Project, seeded["project_id"])
             assert project is not None
             project.next_supervision_at = datetime.now(UTC) - timedelta(days=3)
-        assert await ProjectSupervisionWorker(
-            database, worker_id="scheduled-worker"
-        ).execute_once()
+        assert await ProjectSupervisionWorker(database, worker_id="scheduled-worker").execute_once()
         cycles = await ProjectOrchestrationService(database).list_cycles(
             context, seeded["project_id"]
         )

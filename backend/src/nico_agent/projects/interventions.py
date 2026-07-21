@@ -183,9 +183,7 @@ class ProjectInterventionService:
             if intervention is None:
                 raise ResourceNotFound("run_intervention", str(intervention_id))
             if intervention.revision != command.expected_intervention_revision:
-                raise DomainConflict(
-                    "REVISION_CONFLICT", "intervention revision does not match"
-                )
+                raise DomainConflict("REVISION_CONFLICT", "intervention revision does not match")
             if intervention.status != "pending" or intervention.consumed_by is not None:
                 raise DomainConflict(
                     "INTERVENTION_NOT_WITHDRAWABLE",
@@ -271,11 +269,7 @@ class ProjectInterventionService:
                 .where(Run.tenant_id == claim.tenant_id, Run.id == claim.run_id)
                 .with_for_update()
             )
-            if (
-                run is None
-                or run.lease_owner != worker_id
-                or run.lease_token != claim.lease_token
-            ):
+            if run is None or run.lease_owner != worker_id or run.lease_token != claim.lease_token:
                 raise DomainConflict(
                     "RUN_LEASE_LOST", "only the current Run owner may freeze guidance"
                 )
@@ -301,9 +295,7 @@ class ProjectInterventionService:
                 None,
             )
             if existing is not None:
-                return await self._frozen_values(
-                    session, context, run.id, boundary_key, existing
-                )
+                return await self._frozen_values(session, context, run.id, boundary_key, existing)
             candidates = list(
                 await session.scalars(
                     select(RunIntervention)
@@ -526,9 +518,7 @@ class ProjectInterventionService:
         require_active: bool,
     ) -> tuple[Project, ProjectSession]:
         project = await session.scalar(
-            select(Project).where(
-                Project.tenant_id == context.tenant_id, Project.id == project_id
-            )
+            select(Project).where(Project.tenant_id == context.tenant_id, Project.id == project_id)
         )
         if project is None:
             raise ResourceNotFound("project", str(project_id))

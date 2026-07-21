@@ -249,9 +249,12 @@ async def test_guidance_freeze_consume_recovery_and_withdraw_are_deterministic()
         )[0]
         assert consumed.status == "consumed"
         assert consumed.consumed_at is not None
-        assert await service.freeze_for_boundary(
-            claim, worker_id=seeded["worker_id"], boundary_key="react:1"
-        ) == frozen
+        assert (
+            await service.freeze_for_boundary(
+                claim, worker_id=seeded["worker_id"], boundary_key="react:1"
+            )
+            == frozen
+        )
         with pytest.raises(DomainConflict) as terminal:
             await service.withdraw(
                 seeded["context"],
@@ -259,9 +262,7 @@ async def test_guidance_freeze_consume_recovery_and_withdraw_are_deterministic()
                 seeded["member_session_id"],
                 seeded["run_id"],
                 consumed.id,
-                RunInterventionWithdraw(
-                    expected_intervention_revision=consumed.revision
-                ),
+                RunInterventionWithdraw(expected_intervention_revision=consumed.revision),
             )
         assert terminal.value.code == "INTERVENTION_NOT_WITHDRAWABLE"
 
@@ -272,9 +273,7 @@ async def test_guidance_freeze_consume_recovery_and_withdraw_are_deterministic()
             assert runtime is not None
             assert runtime.provider_state["safe"] == "unchanged"
             assert runtime.tool_policy_snapshot == {"allow": ["file.read@1.0.0"]}
-            assert runtime.coordination_policy_snapshot == {
-                "allowed_agent_version_ids": []
-            }
+            assert runtime.coordination_policy_snapshot == {"allowed_agent_version_ids": []}
     finally:
         await engine.dispose()
 

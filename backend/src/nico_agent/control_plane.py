@@ -151,8 +151,7 @@ class ControlPlaneService:
             if include_system:
                 visibility = or_(
                     Project.kind == "shared",
-                    (Project.kind == "personal")
-                    & (Project.owner_actor_id == context.actor_id),
+                    (Project.kind == "personal") & (Project.owner_actor_id == context.actor_id),
                 )
             return list(
                 await session.scalars(
@@ -194,13 +193,10 @@ class ControlPlaneService:
             require_revision("project", expected=expected_revision, actual=project.revision)
             active_cycles = list(
                 await session.scalars(
-                    select(ProjectSupervisionCycle)
-                    .where(
+                    select(ProjectSupervisionCycle).where(
                         ProjectSupervisionCycle.tenant_id == context.tenant_id,
                         ProjectSupervisionCycle.project_id == project.id,
-                        ProjectSupervisionCycle.status.in_(
-                            ["pending", "claimed", "running"]
-                        ),
+                        ProjectSupervisionCycle.status.in_(["pending", "claimed", "running"]),
                     )
                 )
             )
@@ -231,9 +227,7 @@ class ControlPlaneService:
                     .where(
                         ProjectSupervisionCycle.tenant_id == context.tenant_id,
                         ProjectSupervisionCycle.project_id == project.id,
-                        ProjectSupervisionCycle.status.in_(
-                            ["pending", "claimed", "running"]
-                        ),
+                        ProjectSupervisionCycle.status.in_(["pending", "claimed", "running"]),
                     )
                     .with_for_update()
                 )
@@ -1128,9 +1122,7 @@ class ControlPlaneService:
             select(ProjectSession.id)
             .join(
                 ProjectMember,
-                (
-                    ProjectMember.tenant_id == ProjectSession.tenant_id
-                )
+                (ProjectMember.tenant_id == ProjectSession.tenant_id)
                 & (ProjectMember.id == ProjectSession.project_member_id),
             )
             .where(
