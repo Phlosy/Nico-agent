@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from nico_agent.config import Settings
@@ -123,6 +123,17 @@ async def _seed(database: Database) -> tuple[TenantContext, dict[str, object]]:
         }
 
 
+async def _clear_shared_supervision_queue(database: Database) -> None:
+    """Isolate worker assertions from cycles left by earlier integration tests."""
+
+    async with database.admin_transaction() as session:
+        await session.execute(
+            update(ProjectSupervisionCycle)
+            .where(ProjectSupervisionCycle.status.in_(("pending", "claimed")))
+            .values(status="cancelled")
+        )
+
+
 @pytest.mark.asyncio
 async def test_supervision_claim_is_exactly_once_recovers_and_uses_current_lead() -> None:
     engine = create_async_engine(Settings(environment="test", _env_file=None).resolved_database_url)
@@ -131,6 +142,7 @@ async def test_supervision_claim_is_exactly_once_recovers_and_uses_current_lead(
         context, seeded = await _seed(database)
         project_id = seeded["project_id"]
         service = ProjectOrchestrationService(database)
+        await _clear_shared_supervision_queue(database)
         first = await service.create_manual(context, project_id, idempotency_key="manual-one")
         replay = await service.create_manual(context, project_id, idempotency_key="manual-one")
         assert replay.id == first.id
@@ -219,6 +231,7 @@ async def test_stale_supervision_claim_fails_cleanly_after_project_archive() -> 
     try:
         context, seeded = await _seed(database)
         service = ProjectOrchestrationService(database)
+        await _clear_shared_supervision_queue(database)
         cycle = await service.create_manual(
             context,
             seeded["project_id"],
@@ -246,6 +259,7 @@ async def test_due_cadence_creates_one_slot_and_advances_without_backlog() -> No
     database = Database(engine)
     try:
         context, seeded = await _seed(database)
+        await _clear_shared_supervision_queue(database)
         async with database.admin_transaction() as session:
             project = await session.get(Project, seeded["project_id"])
             assert project is not None
