@@ -67,6 +67,21 @@ X-Actor-ID: <optional actor; defaults to development-user>
 | Project | `POST/GET /api/v1/projects` | 创建、列表 |
 | Project | `GET/PATCH /api/v1/projects/{project_id}` | 读取、乐观锁更新 |
 | Project | `POST /api/v1/projects/{project_id}/archive` | 归档 |
+| Project collaboration | `POST /api/v1/projects/collaboration/preflight` | 在写入前验证 Lead runtime、协调 policy 和成员版本 |
+| Project collaboration | `POST /api/v1/projects/collaboration` | 原子创建 shared Project、Lead/Member 和稳定 Session |
+| Project member | `GET/POST .../projects/{project_id}/members` | 列表或 revision-safe 添加成员 |
+| Project member | `POST .../projects/{project_id}/members/{agent_id}/state` | 暂停、恢复或移除成员 |
+| Project lead | `POST .../projects/{project_id}/lead` | 原子替换唯一 active Lead |
+| ProjectSession | `GET .../projects/{project_id}/sessions` | 列出成员稳定 Session |
+| ProjectSession | `GET/POST .../sessions/{session_id}`、`.../open` | 读取或解析当前冻结 Conversation |
+| ProjectSession | `GET .../sessions/{session_id}/timeline` | 使用 Event sequence 分页读取有界工作投影 |
+| ProjectSession | `POST .../sessions/{session_id}/messages` | 在可写成员 Session 创建 Conversation Turn |
+| Supervision | `POST .../projects/{project_id}/supervision/sync` | 以 Idempotency-Key 请求手动 Lead 周期 |
+| Supervision | `PATCH .../projects/{project_id}/supervision/cadence` | revision-safe 设置 5 分钟至 7 天 cadence 或关闭 |
+| Supervision | `GET .../projects/{project_id}/supervision/cycles` | 读取持久化周期、数据库 metrics 和可选 narrative |
+| Intervention | `POST/GET .../sessions/{session_id}/runs/{run_id}/interventions` | 创建或查询有界 local guidance |
+| Intervention | `POST .../interventions/{intervention_id}/withdraw` | revision-safe 撤回 pending guidance |
+| Project change | `POST .../sessions/{session_id}/project-changes` | 把范围变化作为 Lead Session 新 Turn 重新规划 |
 | Agent | `POST/GET /api/v1/agents` | 创建、列表 |
 | Agent | `GET/PATCH/DELETE /api/v1/agents/{agent_id}` | 读取、更新；仅无引用 Draft 可物理删除 |
 | Agent | `POST .../{agent_id}/clone\|archive\|restore` | 克隆、归档、恢复 |
@@ -116,7 +131,13 @@ X-Actor-ID: <optional actor; defaults to development-user>
 
 更新和状态命令使用 `expected_revision`。并发冲突返回 `409 REVISION_CONFLICT`，非法状态转换返回 `409 INVALID_STATE_TRANSITION`，已决定的工具审批收到不同决定返回 `409 TOOL_APPROVAL_ALREADY_DECIDED`，跨租户读取与不存在资源统一返回 `404 RESOURCE_NOT_FOUND`。唯一键或引用冲突返回 `409 DATA_CONFLICT`。
 
-Conversation 与 Turn 创建支持请求体 `idempotency_key`，也支持长度 1–200 的 `Idempotency-Key` Header；同一个键携带不同输入会被拒绝。Conversation 创建时固定精确 AgentVersion，后续新版本发布不会改写已有会话。每个 Turn 对应一个新 Task 和首次 Run；同一 Conversation 同时只允许一个非终态 Run。`cancel` 不在 CLI 本地篡改 Turn，而是先提交 Run 树的权威取消，再由数据库投影更新 Turn。
+Conversation 与 Turn 创建支持请求体 `idempotency_key`，也支持长度 1–200 的 `Idempotency-Key` Header；同一个键携带不同输入会被拒绝。`mode=personal` 不接受显式 shared Project，而是按 Tenant/actor 幂等解析隐藏 Personal Project；默认 Project 列表不返回该系统资源。`mode=project` 保持旧显式 Project 路径，并在 ProjectSession 下再次校验 active membership。Conversation 创建时固定精确 AgentVersion，后续新版本发布不会改写已有会话。每个 Turn 对应一个新 Task 和首次 Run；同一 Conversation 同时只允许一个非终态 Run。`cancel` 不在 CLI 本地篡改 Turn，而是先提交 Run 树的权威取消，再由数据库投影更新 Turn。
+
+Project timeline 是原始 Event、ConversationTurn、Task/Run、Plan、ToolCall、Delegation
+和 Artifact 引用的有界查询投影，不是第二套执行状态。响应不包含 trajectory/raw
+reasoning、对象存储键或 Secret。Intervention 内容按不可信输入处理，必须匹配活动
+Run revision 和 active membership；Direct/Hermes 等未声明 capability 的 Runtime
+明确拒绝，而不会静默丢弃。
 
 Turn retry 请求必须提供当前 `expected_run_id` 和 `expected_run_revision`，只允许最新 Turn 的 Failed/TimedOut Run。服务在一个事务中创建 `retry_of_run_id` 指向旧 Run 的新 attempt、恢复 Task、切换 Turn current Run 并追加 Event/Audit；AgentVersion 继续使用 Conversation 冻结版本。并发重复请求在 current Run 已改变后失败，不会创建第二个 retry。Conversation 所属 Task 的通用 `/runs/{id}/retry` 被明确拒绝，调用方必须使用 Turn API，避免绕过冻结版本和 Turn 指针。
 

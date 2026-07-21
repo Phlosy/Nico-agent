@@ -2,6 +2,62 @@
 
 状态值在领域枚举中定义，API 不接受未知字符串。每次转换必须校验触发者、前置条件和租户权限，并在同一事务追加 Event 与 AuditRecord。
 
+## Project、Membership 与 Session
+
+```mermaid
+stateDiagram-v2
+    [*] --> ActiveProject
+    ActiveProject --> ArchivedProject: archive + revision
+    state ActiveProject {
+        [*] --> ActiveMember
+        ActiveMember --> PausedMember: pause
+        PausedMember --> ActiveMember: restore
+        ActiveMember --> RemovedMember: remove
+        PausedMember --> RemovedMember: remove
+    }
+```
+
+active shared Project 由数据库部分唯一索引保证恰有一个 active Lead。Lead 替换在
+单事务中降级旧 Lead、提升新 Lead 并推进 Project revision。成员暂停/移除会阻止
+新 Task、Session 写入和委派，但不删除历史；Project 归档会归档所有稳定 Session
+并取消活动监督 Run 树。
+
+ProjectSession 使用 `active -> paused -> active`，Project 归档时进入 `archived`。
+成员恢复复用同一 Session；AgentVersion 变化只轮换 current Conversation 指针。
+
+## ProjectSupervisionCycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Claimed: database claim + lease
+    Claimed --> Running: Lead Task/Run materialized
+    Claimed --> Pending: lease expired
+    Running --> Completed: facts + optional narrative committed
+    Pending --> Cancelled: Project archive
+    Claimed --> Cancelled: Project archive
+    Running --> Cancelled: Run tree cancelled
+    Claimed --> Failed: materialization error
+    Running --> Failed: terminal execution error
+```
+
+`Completed`、`Failed`、`Cancelled` 不可回退。同一 Project/cadence slot 唯一；手动
+sync 通过 Idempotency-Key 防止逻辑重复。
+
+## RunIntervention
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Consumed: safe model boundary
+    Pending --> Withdrawn: operator + revision
+    Pending --> Rejected: validation/runtime failure
+```
+
+`Consumed`、`Withdrawn`、`Rejected` 均为终态。Worker 先把 Intervention ID、内容
+Hash 和模型边界键冻结进 RuntimeSession/checkpoint，再与 ContextSnapshot/Event/Audit
+同事务消费；崩溃恢复使用同一冻结集合，不会重复向模型注入。
+
 ## Agent
 
 ```mermaid

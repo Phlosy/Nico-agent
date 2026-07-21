@@ -1,6 +1,6 @@
 # Nico CLI
 
-> 当前状态：CLI Goal F 已完成。持久化 chat、`nico exec`、`nico run watch`、Rich 终端视图、Conversation summary、有界上下文、受控附件和敏感工具审批均使用服务端权威事实。分阶段状态见[功能矩阵](progress/feature-matrix.md)。
+> 当前状态：CLI 同时提供单 Agent 独立 Session 和受管理的多 Agent Project。持久化 chat、ProjectSession、监督、Intervention、`nico exec`、Rich 终端视图和敏感工具审批均使用服务端权威事实。
 
 ## 安装
 
@@ -61,7 +61,10 @@ nico doctor
 nico setup
 nico provider add|configure|test|list
 nico config path|list|show|set|use|delete
-nico project list|get
+nico project list|get|new|status|members|open|session|timeline|tasks
+nico project member-add|member-state|lead
+nico project sync|cadence|cycles
+nico project guide|escalate|interventions|withdraw|cancel
 nico agent list|get|versions
 nico task get
 nico run get|runtime|events|watch
@@ -117,17 +120,75 @@ nico --json provider add openai \
 
 CLI 先轮询 Worker 探测，再显示服务端生成的完整预览；activation 必须携带该
 preview hash。取消、超时、`Ctrl+C`、预览过期或激活失败都会走同一个本地回滚
-路径。成功结果会打印可复制的 `nico chat --project ... --agent ...` 命令。
+路径。成功后可以直接运行裸 `nico chat`；旧的显式 Project/Agent 入口仍兼容。
 
-## 持续对话
+## 独立 Session
 
-新会话需要指定 Project 与 Agent；`--version` 可显式固定一个已发布 AgentVersion，不提供时固定 Agent 当前发布版本：
+裸 `nico chat` 是用户与一个 ready Agent 的独立会话。只有一个 ready Agent 时直接
+使用；有多个时在终端选择，脚本模式必须传精确名称或 ID。服务端在内部幂等解析
+当前 actor 的隐藏 Personal Project，但 CLI 不把它作为用户概念展示：
 
 ```bash
-nico chat --project <project-id> --agent <agent-id>
-nico chat --project <project-id> --agent <agent-id> --version <agent-version-id>
-nico chat --project <project-id> --agent <agent-id> "请分析这项任务"
+nico chat
+nico chat --agent researcher "请分析这项任务"
+nico chat --continue "继续上一轮"
 ```
+
+同一 Tenant 中不同 `actor_id` 的 Personal Project 和默认恢复互相隔离。Profile 只
+记录最近使用的 Agent ID，服务端每次仍重新校验 ready 状态和 Tenant 边界。
+`--version` 可显式固定一个已发布 AgentVersion；兼容入口仍可使用
+`nico chat --project <project-id> --agent <agent-id>`。
+
+## Project 工作区
+
+Project 是多 Agent 的共享任务边界，不是某个 Agent 的所有物。每个 active Project
+恰有一个可替换 Lead；Lead 和 Member 都有稳定 ProjectSession。AgentVersion 发布
+新版本时只轮换该 Session 的当前 Conversation，旧 Turn/Task/Run 保持可读：
+
+```bash
+nico project new launch --goal "发布并验证新版本" --lead coordinator \
+  --member researcher --member reviewer --yes
+nico project open launch
+nico project session launch --agent researcher
+nico project status launch
+nico project members launch
+nico project timeline launch --agent researcher
+nico project tasks launch
+```
+
+Project、Agent 参数接受精确名称或 UUID；无匹配或重名会失败，不会任意选择。
+成员 paused/removed 或 Project archived 后 Session 自动只读，历史仍可查询。
+
+Lead 同步和 cadence 使用 PostgreSQL 持久化周期，不依赖 CLI 持续在线：
+
+```bash
+nico project sync launch
+nico project cycles launch
+nico project cadence launch 30m
+nico project cadence launch off
+```
+
+运行中指导绑定成员当前 Run 和 revision；普通项目范围变化改投 Lead：
+
+```bash
+nico project guide launch --agent researcher "先运行回归测试"
+nico project escalate launch --agent researcher "将范围缩小到 API"
+nico project interventions launch --agent researcher
+nico project withdraw launch <intervention-id> --agent researcher
+nico project cancel launch --agent researcher
+```
+
+Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
+`/interventions` 和 `/withdraw ID [REASON]`。活动 Run 存在时，普通输入会先要求
+明确选择 local guidance、project change、等待或取消；非交互调用必须通过显式
+命令表达动作。Intervention 只作为有界、不可信文本在安全模型边界消费，不能
+改变工具、Secret、预算、成员或协调权限。
+
+时间线只展示持久化计划、决策理由摘要、步骤、工具、Artifact、测试、阻塞和
+结构化结果；不会请求或显示模型原始私有思维链。监督输出把数据库权威 metrics
+与可选 Lead narrative 分栏，模型摘要失败不会丢失事实。
+
+## 持续对话操作
 
 不带 `MESSAGE` 时进入普通滚动式交互，适合 SSH 和日志复制。输入历史保存在平台默认用户数据目录，目录权限为 `0700`、文件为 `0600`。快捷键语义如下：
 
@@ -141,6 +202,8 @@ nico chat --project <project-id> --agent <agent-id> "请分析这项任务"
 - `/approvals`：查看当前 Run 的审批请求及终态；
 - `/approve ID once|run`：批准一次调用，或允许同一 Run 后续调用相同工具版本；
 - `/reject ID [REASON]`：拒绝待处理调用；
+- `/guide TEXT`、`/interventions`、`/withdraw ID [REASON]`：在 Project Session 中管理一次性运行指导；
+- `/escalate TEXT`：把范围、优先级或跨 Agent 依赖变化送到 Lead Session；
 - `/cancel`、`/retry`：通过 revisioned API 控制当前 Turn；
 - `/attach PATH`：读取本地文件字节并暂存到下一轮；服务端不会读取本地路径；
 - `/compact`：排队执行独立摘要 Run，并在完成后更新覆盖序号、输入 Hash 和 ModelCall 引用；

@@ -8,6 +8,12 @@ implemented model; it deliberately omits fixed Team, Workflow, and Plugin concep
 ```mermaid
 classDiagram
     Tenant "1" *-- "many" Project
+    Project "1" *-- "many" ProjectMember
+    Agent "1" --> "many" ProjectMember
+    ProjectMember "1" *-- "1" ProjectSession
+    ProjectSession "1" --> "many" Conversation
+    ProjectSession "1" --> "many" Task
+    Project "1" *-- "many" ProjectSupervisionCycle
     Tenant "1" *-- "many" Agent
     Agent "1" *-- "many" AgentVersion
     Project "1" *-- "many" Conversation
@@ -19,6 +25,7 @@ classDiagram
     Project "1" *-- "many" Task
     Task "1" *-- "many" Run
     Run "1" *-- "one" RuntimeSession
+    Run "1" *-- "many" RunIntervention
     Run "1" *-- "many" ContextSnapshot
     ConversationTurn "1" --> "many" ContextSnapshot
     Run "1" *-- "many" ModelCall
@@ -63,7 +70,10 @@ Team membership, fixed business Workflow, and Plugin loading are not implemented
 | Object | Responsibility | Important rule |
 | --- | --- | --- |
 | Tenant | Isolation boundary, limits, and tool policy | Tenant ID is immutable |
-| Project | Groups Tasks inside one Tenant | Archived Projects are read-only |
+| Project | Personal 或 shared 执行边界；shared Project 持有目标、验收和监督 cadence | Personal 按 Tenant/actor 唯一；Archived Project 只读 |
+| ProjectMember | shared Project 中 Agent 的 `lead`/`member` membership | active Project 恰有一个 active Lead；暂停/移除阻止新工作 |
+| ProjectSession | 一个成员的稳定项目工作台和当前 Conversation 指针 | AgentVersion 改变时轮换 Conversation，不改写历史 |
+| ProjectSupervisionCycle | 手动或定期 Lead 同步的持久化调度、Task/Run 和结果 | cadence slot 幂等；数据库 claim/lease 是权威 |
 | Agent | Stable Agent identity and current-version pointer | Behavior changes through AgentVersion |
 | AgentVersion | Frozen prompt, policy, budgets, model, and Runtime configuration | Published versions are immutable |
 | Conversation | Durable user-facing dialog across multiple Turns/Runs | Creation freezes one AgentVersion; version switches require a new Conversation |
@@ -72,6 +82,7 @@ Team membership, fixed business Workflow, and Plugin loading are not implemented
 | Task | A requested objective | Input is frozen once execution starts |
 | Run | One execution attempt for a Task | Retry creates a new attempt; terminal state is immutable |
 | RuntimeSession | Provider identity, protocol, resolution source, compatibility metadata, external session, checkpoint, usage, and trajectory | One per Run; its Provider/version/protocol are authoritative and never silently rewritten |
+| RunIntervention | 绑定 ProjectSession/Run/revision 的有界一次性指导 | 仅在安全模型边界冻结/消费；不能扩大任何权限或预算 |
 | ModelEndpoint | Tenant-owned immutable endpoint semantics plus operational credential/rate-limit state | Referenced semantics require a new revision |
 | ContextSnapshot | Reconstructable, hashed model context for one Run, optionally linked to a ConversationTurn | Immutable and same-Run/same-Conversation constrained |
 | ModelCall | Streaming model request/result, usage, cost and provider request ID | Terminal records are immutable and bound to the same Run/context |
@@ -106,6 +117,11 @@ the result. Full history is durable. Compaction stores a versioned summary and
 coverage Hash without deleting Turns; Runtime preparation freezes summary,
 recent Turn IDs, Artifact references and trimming facts in ContextSnapshot.
 
+ProjectSession 也不是 RuntimeSession。它跨多个用户 Turn 和自主 Task/Run 稳定存在，
+只负责把某个 ProjectMember 的对话与执行证据组织为工作台。RuntimeSession 仍严格
+一 Run 一个。独立 Session 在内部使用 actor-scoped Personal Project 复用非空外键，
+但不创建 ProjectMember，也不获得 Lead/监督/委派语义。
+
 ## Memory and Skill objects
 
 | Object | Responsibility | Important rule |
@@ -138,6 +154,9 @@ RuntimeSession also records how the Provider was selected. New AgentVersions res
 - Published AgentVersion and SkillVersion rows, Plan semantics, RuntimeEvaluation,
   Event, AuditRecord, terminal Run/RunStep/PlanStep/ToolCall/ToolApprovalRequest/Delegation/Artifact,
   and GrowthSource provenance are immutable.
+- ProjectMember、ProjectSession、ProjectSupervisionCycle 与 RunIntervention 使用
+  Tenant 复合外键、`FORCE ROW LEVEL SECURITY`、revision/幂等约束；terminal 周期
+  和 consumed/rejected/withdrawn Intervention 不可回退。
 - JSON policy and configuration payloads are validated by Pydantic and JSON
   Schema before use.
 - Memory retrieval filters Tenant, scope, status, expiry, and tombstones in SQL

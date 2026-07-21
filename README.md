@@ -51,6 +51,7 @@ Nico 当前没有这些框架的内置适配器。领域应用可以通过 HTTP 
 - **Nico Native Runtime** — 新 AgentVersion 默认使用内置 `nico_native` Direct 模式，通过统一模型网关完成流式推理，无需依赖 Hermes。
 - **规划、反思与恢复** — 支持有界 Plan DAG、不可覆盖的 Plan revision、步骤验证、Reflection/Replan、Completion Evaluation 和带完整性校验的恢复检查点。
 - **动态多 Agent 协作** — Parent 可按策略委托多个 Child Run；平台持久化父子关系、消息、预算预留、权限收缩、挂起/唤醒、重试请求和整树取消，但不固化 Team 或 Workflow。
+- **独立对话与 Project 工作区** — `nico chat` 直接进入单 Agent 的 actor-scoped 独立 Session；`nico project` 用可替换 Lead、成员稳定 Session、监督周期和安全运行中指导组织多 Agent 项目。
 - **模型调用事实** — 按 Run 保存可审计的 ContextSnapshot、ModelCall、usage、cost、请求 ID、检查点和可续传 SSE 事件。
 - **可恢复的 Task 与 Run** — 持久化 Task、Run、RunStep、RuntimeSession、检查点、结果、取消、超时、重试和规范化轨迹。
 - **受控 Tool Gateway** — 默认拒绝工具调用，按精确版本执行 Tenant ∩ AgentVersion 策略、Schema 校验、幂等、超时、重试、输出限制、Secret 解析和审计。
@@ -142,6 +143,27 @@ nico setup
 安装、固定版本、Hermes、升级和移除说明见
 [安装与部署](docs/installation.md)。
 
+Provider 和 Starter Agent 就绪后有两条入口。独立对话不需要 Project 或 UUID：
+
+```bash
+nico chat
+```
+
+协作工作使用 Project。名称可直接代替 UUID，Lead 负责拆分、分配和周期同步，
+每位成员保留自己的稳定 Session：
+
+```bash
+nico project new launch --goal "发布并验证新版本" --lead nico-assistant \
+  --member researcher --member reviewer --yes
+nico project open launch
+nico project session launch --agent researcher
+nico project status launch
+```
+
+这两种模式共享 Conversation → Turn → Task → Run 执行链，但语义不同：裸
+`nico chat` 是用户与一个 Agent 的独立会话；Project 额外提供显式 membership、
+可替换 Lead、成员工作时间线、可恢复监督与受审计指导。
+
 ### 发布前在本地运行同一安装链路
 
 无需先创建 GitHub Release。`make release` 会在本机构建三个版本化镜像、
@@ -170,7 +192,8 @@ OPENROUTER_API_KEY='<secret>' \
   make install RUNTIME=hermes PROVIDER=openrouter
 ```
 
-停止本地 Release 服务并移除 `~/.nico` 与对应命令链接（保留 Docker 数据卷）：
+停止本地 Release 服务并移除程序文件与命令链接（保留 Docker 数据卷以及
+`~/.nico/config`、`~/.nico/state` 中与数据卷配套的凭据和本地状态）：
 
 ```bash
 make uninstall
@@ -217,11 +240,14 @@ nico agent list
 nico run get <run-id>
 ```
 
-CLI 也可以新建持久化 Conversation、提交消息并实时观看 Worker 的执行事件：
+CLI 可以新建独立 Conversation、提交消息并实时观看 Worker 的执行事件：
 
 ```bash
-nico chat --project <project-id> --agent <agent-id> "分析这份任务并给出结论"
+nico chat
+nico chat "分析这份任务并给出结论"
 nico chat --continue "继续验证上一轮结论"
+# 旧显式 Project/Agent 入口仍兼容
+nico chat --project <project-id> --agent <agent-id> "分析这份任务并给出结论"
 nico exec "生成一次性研究报告" --project <project-id> --agent <agent-id>
 nico exec "生成日报" --project <project-id> --agent <agent-id> --detach --json
 nico run watch <run-id>
@@ -229,6 +255,26 @@ nico conversation list
 nico conversation history <conversation-id>
 nico chat --resume <conversation-id> --read-only
 ```
+
+Project 工作区可以完全用名称操作：
+
+```bash
+nico project list
+nico project status launch
+nico project timeline launch --agent researcher
+nico project tasks launch
+nico project sync launch
+nico project cadence launch 2h
+nico project guide launch --agent researcher "先修复失败测试再继续"
+nico project escalate launch --agent researcher "把交付范围缩小到 API"
+nico project interventions launch --agent researcher
+nico project cancel launch --agent researcher
+```
+
+`guide` 只把有界文本作为不可信输入，在 Native ReAct/Plan 的下一个安全模型边界
+消费，不会扩大工具、凭据、预算或成员权限；范围、优先级和跨 Agent 依赖变更应
+使用 `escalate` 交给 Lead 重新规划。时间线公开持久化计划、操作、结果和 Artifact
+引用，不公开或保存模型的原始私有思维链。
 
 首次 Native 配置和后续 Provider 管理使用同一套流程：
 
@@ -243,9 +289,31 @@ nico provider list --models openai --limit 20
 
 当前内置 OpenAI、Anthropic、Google Gemini、OpenRouter、xAI、DeepSeek、阿里云
 百炼/Qwen、Moonshot/Kimi、智谱 GLM 和 MiniMax 预设。交互模式允许隐藏输入仅存
-于本机 Native Worker 的新 Key，也可输入 `env:NICO_MODEL_SECRET_*` 或
-`secret:*` 引用。自动化模式必须显式提供引用、模型、Project、Agent/Starter
-以及 `--yes`，不存在接受明文 Key 的命令行选项。
+于本机 Native Worker 的新 Key；第一个凭据提示就是隐藏输入，不需要先输入
+`key`。复用 `env:NICO_MODEL_SECRET_*` 或 `secret:*` 时，通过
+`--credential-ref` 明确传入。自动化模式必须显式提供引用、模型、Project、
+Agent/Starter 以及 `--yes`，不存在接受明文 Key 的命令行选项。
+
+列表最后的 **Other Provider** 可接入任意 OpenAI-compatible、Anthropic Messages
+或 Google Gemini 兼容端点。宿主机上的 Ollama、vLLM、LM Studio 可直接填写例如
+`http://localhost:11434/v1`；安装版会将它转换成 Worker 容器可访问的地址。发现
+不到模型时，向导会继续询问精确模型 ID。
+
+非交互式自定义连接示例：
+
+```bash
+nico provider add other \
+  --custom-name "Local Ollama" \
+  --custom-key custom-local-ollama \
+  --protocol openai_compatible \
+  --base-url http://localhost:11434/v1 \
+  --credential-ref secret:providers/local-ollama \
+  --model qwen3:8b \
+  --project "$PROJECT_ID" \
+  --starter-name local-assistant \
+  --starter-display-name "Local Assistant" \
+  --yes
+```
 
 交互模式还可以把本地文件按字节暂存到下一轮、压缩较早历史并下载该会话引用的产物：
 

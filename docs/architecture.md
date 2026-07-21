@@ -9,7 +9,7 @@ This document describes the current implementation. Planned capabilities are cal
 ```mermaid
 flowchart LR
     Domain["Domain system<br/>owns team and Workflow"] -->|HTTP| API["Nico REST API"]
-    CLI["Nico CLI<br/>chat / resume / history"] -->|REST + resumable SSE| API
+    CLI["Nico CLI<br/>personal chat / project workspace"] -->|REST + resumable SSE| API
     Console["Nico Console<br/>status + read-only Run Inspector"] --> API
     API --> PG[("PostgreSQL + pgvector<br/>authoritative state")]
     Worker["Persistent Worker"] -->|lease and commit| PG
@@ -97,6 +97,32 @@ summary hash, bounded Artifact references, token budget and trimming facts. The
 selector keeps the current input, adds recent completed Turns newest-first, and
 uses the durable Conversation summary for covered history. Recovery reuses the
 selection frozen in RuntimeSession instead of reading changed live history.
+
+### Two user-facing session modes
+
+Nico keeps one execution chain and exposes two product modes:
+
+- `nico chat` resolves a ready Agent and an actor-scoped hidden Personal Project, then creates
+  or resumes an independent Conversation. It has no Lead or membership semantics.
+- `nico project new/open/session` uses a shared Project, explicit ProjectMember rows and one
+  stable ProjectSession per active member. The Lead is a replaceable membership role rather
+  than the Project owner.
+
+ProjectSession organizes many Conversations and autonomous Tasks/Runs; it never replaces
+RuntimeSession. Opening an active member rotates the current Conversation only when the
+published AgentVersion changed. Paused/removed/archived sessions remain readable but cannot
+accept new work.
+
+Supervision is a durable ProjectSupervisionCycle claimed with PostgreSQL lease semantics. A
+cycle materializes an ordinary bounded Lead Task/Run and stores deterministic database metrics
+separately from optional model narrative. Cadence timers only wake the query; they are not
+authoritative state.
+
+RunIntervention binds untrusted text to the exact ProjectSession, Run and expected revision.
+Native ReAct/Plan freezes pending guidance into checkpoint/context metadata at the next safe
+model boundary and consumes it once. The frozen RuntimeSession tool, credential, budget and
+coordination capabilities cannot be changed by guidance. Scope or priority changes become a
+new Turn in the Lead Session instead of rewriting a member Run.
 
 ## Runtime boundary
 
