@@ -73,6 +73,25 @@ def test_resolve_applies_environment_without_persisting_token(tmp_path: Path) ->
     assert "secret-value" not in path.read_text()
 
 
+def test_recent_personal_agent_is_profile_scoped_and_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    store = ConfigStore(path, environ={})
+    store.save(
+        CliConfig(
+            current_profile="remote",
+            profiles={"default": Profile(), "remote": Profile()},
+        )
+    )
+    agent_id = UUID("33333333-3333-4333-8333-333333333333")
+
+    store.remember_personal_agent("remote", agent_id)
+
+    loaded = store.load()
+    assert loaded.profiles["remote"].recent_personal_agent_id == agent_id
+    assert loaded.profiles["default"].recent_personal_agent_id is None
+    assert store.resolve(profile_name="remote").recent_personal_agent_id == agent_id
+
+
 @pytest.mark.parametrize(
     "content",
     [

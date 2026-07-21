@@ -110,13 +110,17 @@ def test_conversation_writes_send_idempotency_key() -> None:
 
     with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
         client.create_conversation(
-            project_id="project-1",
+            project_id=None,
             agent_id="agent-1",
+            mode="personal",
             idempotency_key="create-1",
         )
 
     assert seen[0].headers["idempotency-key"] == "create-1"
     assert seen[0].url.path == "/api/v1/conversations"
+    assert seen[0].read() == (
+        b'{"mode":"personal","agent_id":"agent-1","title":"New conversation"}'
+    )
 
 
 def test_tool_approval_decision_is_versioned_and_idempotent() -> None:

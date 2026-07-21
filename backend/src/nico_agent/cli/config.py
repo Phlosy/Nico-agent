@@ -37,6 +37,8 @@ class Profile(BaseModel):
     verify_tls: bool = True
     service_command: str | None = None
     install_root: str | None = None
+    recent_personal_agent_id: UUID | None = None
+    recent_project_id: UUID | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -104,6 +106,8 @@ class ResolvedProfile(BaseModel):
     verify_tls: bool
     service_command: str | None = None
     install_root: str | None = None
+    recent_personal_agent_id: UUID | None = None
+    recent_project_id: UUID | None = None
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +121,10 @@ class ResolvedProfile(BaseModel):
             "verify_tls": self.verify_tls,
             "service_command": self.service_command,
             "install_root": self.install_root,
+            "recent_personal_agent_id": (
+                str(self.recent_personal_agent_id) if self.recent_personal_agent_id else None
+            ),
+            "recent_project_id": str(self.recent_project_id) if self.recent_project_id else None,
         }
 
 
@@ -239,6 +247,19 @@ class ConfigStore:
         mode = stat.S_IMODE(self.path.stat().st_mode)
         return {"exists": True, "secure": mode & 0o077 == 0, "mode": f"{mode:04o}"}
 
+    def remember_personal_agent(self, profile_name: str, agent_id: UUID) -> None:
+        config = self.load()
+        profile = config.profiles.get(profile_name)
+        if profile is None:
+            raise CliError(
+                "PROFILE_NOT_FOUND",
+                f"profile '{profile_name}' does not exist",
+                exit_code=2,
+            )
+        profiles = dict(config.profiles)
+        profiles[profile_name] = profile.model_copy(update={"recent_personal_agent_id": agent_id})
+        self.save(config.model_copy(update={"profiles": profiles}))
+
 
 def _serialize(config: CliConfig) -> str:
     lines = [f"current_profile = {json.dumps(config.current_profile)}", ""]
@@ -257,5 +278,11 @@ def _serialize(config: CliConfig) -> str:
             lines.append(f"service_command = {json.dumps(profile.service_command)}")
         if profile.install_root is not None:
             lines.append(f"install_root = {json.dumps(profile.install_root)}")
+        if profile.recent_personal_agent_id is not None:
+            lines.append(
+                f"recent_personal_agent_id = {json.dumps(str(profile.recent_personal_agent_id))}"
+            )
+        if profile.recent_project_id is not None:
+            lines.append(f"recent_project_id = {json.dumps(str(profile.recent_project_id))}")
         lines.append("")
     return "\n".join(lines)

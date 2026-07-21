@@ -7,7 +7,8 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.conversations.contracts import (
@@ -66,8 +67,25 @@ class ConversationService:
                 )
             )
             if existing is not None:
+                existing_project = await self._project(
+                    session,
+                    context,
+                    existing.project_id,
+                    include_foreign_personal=True,
+                )
+                expected_project_id = command.project_id
+                if command.mode == "personal":
+                    if (
+                        existing_project.kind != "personal"
+                        or existing_project.owner_actor_id != context.actor_id
+                    ):
+                        raise DomainConflict(
+                            "IDEMPOTENCY_KEY_REUSED",
+                            "conversation idempotency key was reused with different input",
+                        )
+                    expected_project_id = existing.project_id
                 expected = (
-                    command.project_id,
+                    expected_project_id,
                     command.agent_id,
                     command.agent_version_id or existing.agent_version_id,
                     command.title,
@@ -83,9 +101,19 @@ class ConversationService:
                         "IDEMPOTENCY_KEY_REUSED",
                         "conversation idempotency key was reused with different input",
                     )
+                existing._conversation_mode = self._mode_for_project(existing_project.kind)
                 return existing
 
-            project = await self._project(session, context, command.project_id)
+            project = (
+                await self._personal_project(session, context)
+                if command.mode == "personal"
+                else await self._project(session, context, command.project_id)
+            )
+            if command.mode == "project" and project.kind != "shared":
+                raise DomainConflict(
+                    "PERSONAL_PROJECT_EXPLICIT",
+                    "personal Projects are resolved by mode=personal and cannot be selected",
+                )
             if project.status != "active":
                 raise DomainConflict("PROJECT_NOT_ACTIVE", "conversation project must be active")
             agent = await self._agent(session, context, command.agent_id)
@@ -111,6 +139,7 @@ class ConversationService:
                 created_by=context.actor_id,
                 idempotency_key=command.idempotency_key,
             )
+            conversation._conversation_mode = self._mode_for_project(project.kind)
             session.add(conversation)
             await session.flush()
             self._record(
@@ -136,11 +165,30 @@ class ConversationService:
         project_id: UUID | None = None,
         agent_id: UUID | None = None,
         status: ConversationStatus | None = None,
+        mode: str | None = None,
         before: datetime | None = None,
         limit: int = 50,
     ) -> list[Conversation]:
         async with self.database.tenant_transaction(context) as session:
-            statement = select(Conversation).where(Conversation.tenant_id == context.tenant_id)
+            statement = (
+                select(Conversation, Project.kind)
+                .join(
+                    Project,
+                    (Project.tenant_id == Conversation.tenant_id)
+                    & (Project.id == Conversation.project_id),
+                )
+                .where(
+                    Conversation.tenant_id == context.tenant_id,
+                    or_(Project.kind == "shared", Project.owner_actor_id == context.actor_id),
+                )
+            )
+            if mode == "personal":
+                statement = statement.where(
+                    Project.kind == "personal",
+                    Project.owner_actor_id == context.actor_id,
+                )
+            elif mode == "project":
+                statement = statement.where(Project.kind == "shared")
             if project_id is not None:
                 statement = statement.where(Conversation.project_id == project_id)
             if agent_id is not None:
@@ -149,11 +197,16 @@ class ConversationService:
                 statement = statement.where(Conversation.status == status.value)
             if before is not None:
                 statement = statement.where(Conversation.updated_at < before)
-            return list(
-                await session.scalars(
+            rows = (
+                await session.execute(
                     statement.order_by(Conversation.updated_at.desc(), Conversation.id).limit(limit)
                 )
-            )
+            ).all()
+            conversations: list[Conversation] = []
+            for conversation, project_kind in rows:
+                conversation._conversation_mode = self._mode_for_project(project_kind)
+                conversations.append(conversation)
+            return conversations
 
     async def get(self, context: TenantContext, conversation_id: UUID) -> Conversation:
         async with self.database.tenant_transaction(context) as session:
@@ -931,7 +984,20 @@ class ConversationService:
         value = await session.scalar(statement)
         if value is None:
             raise ResourceNotFound("conversation", str(conversation_id))
+        project = await ConversationService._project(
+            session,
+            context,
+            value.project_id,
+            include_foreign_personal=True,
+        )
+        if project.kind == "personal" and project.owner_actor_id != context.actor_id:
+            raise ResourceNotFound("conversation", str(conversation_id))
+        value._conversation_mode = ConversationService._mode_for_project(project.kind)
         return value
+
+    @staticmethod
+    def _mode_for_project(project_kind: str) -> str:
+        return "personal" if project_kind == "personal" else "project"
 
     @staticmethod
     async def _turn(
@@ -941,9 +1007,23 @@ class ConversationService:
         *,
         for_update: bool = False,
     ) -> ConversationTurn:
-        statement = select(ConversationTurn).where(
-            ConversationTurn.tenant_id == context.tenant_id,
-            ConversationTurn.id == turn_id,
+        statement = (
+            select(ConversationTurn)
+            .join(
+                Conversation,
+                (Conversation.tenant_id == ConversationTurn.tenant_id)
+                & (Conversation.id == ConversationTurn.conversation_id),
+            )
+            .join(
+                Project,
+                (Project.tenant_id == Conversation.tenant_id)
+                & (Project.id == Conversation.project_id),
+            )
+            .where(
+                ConversationTurn.tenant_id == context.tenant_id,
+                ConversationTurn.id == turn_id,
+                or_(Project.kind == "shared", Project.owner_actor_id == context.actor_id),
+            )
         )
         if for_update:
             statement = statement.with_for_update()
@@ -953,7 +1033,15 @@ class ConversationService:
         return value
 
     @staticmethod
-    async def _project(session: AsyncSession, context: TenantContext, project_id: UUID) -> Project:
+    async def _project(
+        session: AsyncSession,
+        context: TenantContext,
+        project_id: UUID | None,
+        *,
+        include_foreign_personal: bool = False,
+    ) -> Project:
+        if project_id is None:
+            raise ResourceNotFound("project", "None")
         value = await session.scalar(
             select(Project).where(
                 Project.tenant_id == context.tenant_id,
@@ -962,7 +1050,64 @@ class ConversationService:
         )
         if value is None:
             raise ResourceNotFound("project", str(project_id))
+        if (
+            not include_foreign_personal
+            and value.kind == "personal"
+            and value.owner_actor_id != context.actor_id
+        ):
+            raise ResourceNotFound("project", str(project_id))
         return value
+
+    async def _personal_project(
+        self,
+        session: AsyncSession,
+        context: TenantContext,
+    ) -> Project:
+        actor_hash = hashlib.sha256(context.actor_id.encode()).hexdigest()
+        project_id = uuid4()
+        inserted = await session.scalar(
+            pg_insert(Project.__table__)
+            .values(
+                id=project_id,
+                tenant_id=context.tenant_id,
+                name=f"Personal workspace {actor_hash[:16]}",
+                kind="personal",
+                owner_actor_id=context.actor_id,
+                idempotency_key=f"personal-project:{actor_hash}",
+                description=None,
+                metadata={"_nico_collaboration": {"managed": True, "system": True}},
+                status="active",
+                revision=1,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["tenant_id", "owner_actor_id"],
+                index_where=text("kind = 'personal'"),
+            )
+            .returning(Project.id)
+        )
+        project = await session.scalar(
+            select(Project).where(
+                Project.tenant_id == context.tenant_id,
+                Project.owner_actor_id == context.actor_id,
+                Project.kind == "personal",
+            )
+        )
+        if project is None:
+            raise DomainConflict(
+                "PERSONAL_PROJECT_RESOLUTION_FAILED",
+                "could not resolve the actor Personal Project",
+            )
+        if inserted is not None:
+            self._record(
+                session,
+                context,
+                event_type="PersonalProjectCreated",
+                aggregate_type="project",
+                aggregate_id=project.id,
+                action="personal_project.create",
+                payload={"kind": "personal", "owner_actor_id": context.actor_id},
+            )
+        return project
 
     @staticmethod
     async def _agent(session: AsyncSession, context: TenantContext, agent_id: UUID) -> Agent:

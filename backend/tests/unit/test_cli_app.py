@@ -39,7 +39,7 @@ class FakeClient:
     def list_agents(self) -> list[dict[str, Any]]:
         return [
             {
-                "id": "agent-1",
+                "id": "33333333-3333-4333-8333-333333333333",
                 "name": "researcher",
                 "display_name": "Researcher",
                 "status": "ready",
@@ -68,7 +68,8 @@ class FakeClient:
     def create_conversation(self, **kwargs) -> dict[str, Any]:
         return {
             "id": "33333333-3333-4333-8333-333333333333",
-            "project_id": kwargs.get("project_id", "22222222-2222-4222-8222-222222222222"),
+            "mode": kwargs.get("mode", "project"),
+            "project_id": kwargs.get("project_id") or "22222222-2222-4222-8222-222222222222",
             "agent_id": kwargs.get("agent_id", "33333333-3333-4333-8333-333333333333"),
             "title": kwargs["title"],
             "agent_version_id": "version-1",
@@ -285,6 +286,36 @@ def test_chat_one_shot_json_and_conversation_history(monkeypatch, tmp_path: Path
     assert json.loads(chat.stdout)["turn"]["assistant_output"] == {"answer": "hello"}
     assert history.exit_code == 0
     assert json.loads(history.stdout) == []
+
+
+def test_bare_chat_uses_ready_agent_and_remembers_it_per_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    config_path = tmp_path / "config.toml"
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(config_path),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "chat",
+            "hello",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["conversation"]["project_id"] == "22222222-2222-4222-8222-222222222222"
+    assert payload["conversation"]["mode"] == "personal"
+    assert "_cli_mode" not in payload["conversation"]
+    assert (
+        cli_module.ConfigStore(config_path).load().profiles["default"].recent_personal_agent_id
+        == UUID("33333333-3333-4333-8333-333333333333")
+    )
 
 
 def test_json_interactive_chat_is_rejected(monkeypatch, tmp_path: Path) -> None:

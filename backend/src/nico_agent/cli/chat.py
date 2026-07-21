@@ -33,12 +33,14 @@ class ChatRunner:
         *,
         history_path: Path,
         approval_prompt: Callable[[str], str] | None = None,
+        selection_prompt: Callable[[str], str] | None = None,
     ) -> None:
         self.client = client
         self.output = output
         self.history_path = history_path
         self.renderer = ExecutionRenderer(output)
         self.approval_prompt = approval_prompt or prompt
+        self.selection_prompt = selection_prompt or prompt
 
     def resolve(
         self,
@@ -49,6 +51,8 @@ class ChatRunner:
         resume_id: str | None,
         continue_latest: bool,
         title: str,
+        interactive: bool = False,
+        recent_agent_id: str | None = None,
     ) -> dict[str, Any]:
         if resume_id is not None and continue_latest:
             raise CliError(
@@ -57,12 +61,22 @@ class ChatRunner:
                 exit_code=2,
             )
         if resume_id is not None:
-            return self.client.get_conversation(resume_id)
+            resumed = self.client.get_conversation(resume_id)
+            return self._with_mode(resumed, resumed.get("mode", "project"))
+        mode = "personal" if project_id is None else "project"
         if continue_latest:
+            resolved_agent_id = agent_id
+            if mode == "personal":
+                resolved_agent_id = self._resolve_agent(
+                    agent_id,
+                    recent_agent_id=recent_agent_id,
+                    interactive=interactive,
+                )["id"]
             values = self.client.list_conversations(
                 project_id=project_id,
-                agent_id=agent_id,
+                agent_id=resolved_agent_id,
                 status="active",
+                mode=mode,
                 limit=1,
             )
             if not values:
@@ -71,20 +85,98 @@ class ChatRunner:
                     "no active conversation matches --continue",
                     exit_code=2,
                 )
-            return values[0]
-        if project_id is None or agent_id is None:
-            raise CliError(
-                "CHAT_TARGET_REQUIRED",
-                "new chat requires --project and --agent",
-                exit_code=2,
-            )
-        return self.client.create_conversation(
+            return self._with_mode(values[0], mode)
+        selected = self._resolve_agent(
+            agent_id,
+            recent_agent_id=recent_agent_id,
+            interactive=interactive,
+        )
+        created = self.client.create_conversation(
             project_id=project_id,
-            agent_id=agent_id,
+            agent_id=selected["id"],
+            mode=mode,
             agent_version_id=agent_version_id,
             title=title,
             idempotency_key=str(uuid4()),
         )
+        return self._with_mode(created, mode)
+
+    def _resolve_agent(
+        self,
+        reference: str | None,
+        *,
+        recent_agent_id: str | None,
+        interactive: bool,
+    ) -> dict[str, Any]:
+        ready = [agent for agent in self.client.list_agents() if agent.get("status") == "ready"]
+        if reference is not None:
+            matches = [
+                agent
+                for agent in ready
+                if str(agent.get("id")) == reference or agent.get("name") == reference
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                candidates = ", ".join(
+                    f"{agent.get('name')} ({agent.get('id')})" for agent in matches
+                )
+                raise CliError(
+                    "AGENT_NAME_AMBIGUOUS",
+                    f"Agent reference '{reference}' matches multiple ready Agents: {candidates}",
+                    exit_code=2,
+                )
+            raise CliError(
+                "AGENT_NOT_FOUND",
+                f"no ready Agent matches '{reference}'; run 'nico agent list'",
+                exit_code=2,
+            )
+        if recent_agent_id is not None:
+            recent = next(
+                (agent for agent in ready if str(agent.get("id")) == recent_agent_id),
+                None,
+            )
+            if recent is not None:
+                return recent
+        if len(ready) == 1:
+            return ready[0]
+        if not ready:
+            raise CliError(
+                "READY_AGENT_REQUIRED",
+                "no ready Agent is available; run 'nico setup' or configure a Provider",
+                exit_code=2,
+            )
+        if not interactive:
+            raise CliError(
+                "CHAT_AGENT_REQUIRED",
+                "multiple ready Agents are available; pass --agent NAME_OR_ID",
+                exit_code=2,
+            )
+        choices = [
+            {"selection": index, **agent}
+            for index, agent in enumerate(ready, start=1)
+        ]
+        self.output.table(
+            choices,
+            title="Choose an Agent",
+            columns=["selection", "name", "display_name", "status", "id"],
+        )
+        answer = self.selection_prompt("Agent number, exact name, or ID: ").strip()
+        if not answer:
+            raise CliError("CHAT_SELECTION_CANCELLED", "Agent selection was cancelled", exit_code=2)
+        if answer.isdecimal():
+            number = int(answer)
+            if 1 <= number <= len(ready):
+                return ready[number - 1]
+        return self._resolve_agent(answer, recent_agent_id=None, interactive=False)
+
+    @staticmethod
+    def _with_mode(conversation: dict[str, Any], mode: str) -> dict[str, Any]:
+        return {**conversation, "_cli_mode": mode}
+
+    @staticmethod
+    def public_conversation(conversation: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in conversation.items() if not key.startswith("_cli_")}
 
     def history(self, conversation_id: str) -> list[dict[str, Any]]:
         return self.client.list_conversation_turns(conversation_id, limit=500)
@@ -144,7 +236,7 @@ class ChatRunner:
             if not self.output.json_mode:
                 self.output.emit(current, title="Run cancelled")
             return {
-                "conversation": conversation,
+                "conversation": self.public_conversation(conversation),
                 "turn": current,
                 "events": events,
                 "events_truncated": events_truncated,
@@ -152,7 +244,7 @@ class ChatRunner:
             }
         final = self.client.get_conversation_turn(turn["id"])
         result = {
-            "conversation": conversation,
+            "conversation": self.public_conversation(conversation),
             "turn": final,
             "events": events,
             "events_truncated": events_truncated,
@@ -255,6 +347,7 @@ class ChatRunner:
                 project_id=conversation.get("project_id"),
                 agent_id=conversation.get("agent_id"),
                 status="active",
+                mode=conversation.get("_cli_mode"),
                 limit=1,
             )
             if not rows:
@@ -264,12 +357,18 @@ class ChatRunner:
         if name == "new":
             self._arity(command, 0, "/new")
             selected = self.client.create_conversation(
-                project_id=conversation["project_id"],
+                project_id=(
+                    None
+                    if conversation.get("_cli_mode") == "personal"
+                    else conversation["project_id"]
+                ),
                 agent_id=conversation["agent_id"],
+                mode=conversation.get("_cli_mode", "project"),
                 agent_version_id=conversation["agent_version_id"],
                 title="New conversation",
                 idempotency_key=str(uuid4()),
             )
+            selected = self._with_mode(selected, conversation.get("_cli_mode", "project"))
             self.renderer.header(self._metadata(selected))
             return selected, False
         if name == "title":
@@ -487,7 +586,11 @@ class ChatRunner:
             raise CliError("UNKNOWN_SLASH_COMMAND", f"unknown command '/{name}'")
 
     def _metadata(self, conversation: dict[str, Any]) -> dict[str, Any]:
-        project = self.client.get_project(conversation["project_id"])
+        project = (
+            None
+            if conversation.get("_cli_mode") == "personal"
+            else self.client.get_project(conversation["project_id"])
+        )
         agent = self.client.get_agent(conversation["agent_id"])
         versions = self.client.list_agent_versions(conversation["agent_id"])
         version = next(
@@ -496,7 +599,7 @@ class ChatRunner:
         )
         policy = version.get("tool_policy") or {}
         return {
-            "project": project.get("name") or project.get("id"),
+            "project": (project.get("name") or project.get("id")) if project else None,
             "agent": agent.get("display_name") or agent.get("name") or agent.get("id"),
             "version": version.get("version") or conversation.get("agent_version_id"),
             "runtime": (

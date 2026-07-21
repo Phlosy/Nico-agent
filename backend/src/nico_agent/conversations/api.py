@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
@@ -93,6 +93,7 @@ async def list_conversations(
     project_id: UUID | None = None,
     agent_id: UUID | None = None,
     status_filter: Annotated[ConversationStatus | None, Query(alias="status")] = None,
+    mode: Literal["personal", "project"] | None = None,
     before: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ):
@@ -101,6 +102,7 @@ async def list_conversations(
         project_id=project_id,
         agent_id=agent_id,
         status=status_filter,
+        mode=mode,
         before=before,
         limit=limit,
     )

@@ -125,8 +125,12 @@ async def create_project(command: ProjectCreate, service: Service, context: Cont
 
 
 @router.get("/projects", response_model=list[ProjectRead])
-async def list_projects(service: Service, context: Context):
-    return await service.list_projects(context)
+async def list_projects(
+    service: Service,
+    context: Context,
+    include_system: bool = False,
+):
+    return await service.list_projects(context, include_system=include_system)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectRead)

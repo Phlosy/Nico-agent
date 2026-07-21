@@ -430,6 +430,12 @@ class Conversation(Base, TimestampMixin):
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
+    @property
+    def mode(self) -> str:
+        """API projection populated by ConversationService without storing duplicate state."""
+
+        return getattr(self, "_conversation_mode", "project")
+
 
 class ProjectSession(Base, TimestampMixin):
     __tablename__ = "project_sessions"

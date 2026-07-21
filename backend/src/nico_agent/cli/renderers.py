@@ -38,7 +38,8 @@ class ExecutionRenderer:
         details.add_row("Agent", _label(metadata.get("agent")))
         details.add_row("Version", _label(metadata.get("version")))
         details.add_row("Runtime", _label(metadata.get("runtime")))
-        details.add_row("Project", _label(metadata.get("project")))
+        if metadata.get("project") is not None:
+            details.add_row("Project", _label(metadata.get("project")))
         details.add_row("Tools", _label(metadata.get("tools"), default="policy default"))
         body = Columns([coin_cat(caps), details], padding=(0, 3), expand=False)
         self.output.out.print(

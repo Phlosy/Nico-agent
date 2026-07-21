@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,11 +16,20 @@ class FromAttributesModel(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    project_id: UUID
+    mode: Literal["personal", "project"] = "project"
+    project_id: UUID | None = None
     agent_id: UUID
     agent_version_id: UUID | None = None
     title: str = Field(default="New conversation", min_length=1, max_length=300)
     idempotency_key: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_mode_target(self) -> ConversationCreate:
+        if self.mode == "project" and self.project_id is None:
+            raise ValueError("project mode requires project_id")
+        if self.mode == "personal" and self.project_id is not None:
+            raise ValueError("personal mode does not accept project_id")
+        return self
 
 
 class ConversationPatch(BaseModel):
@@ -36,6 +46,7 @@ class ConversationPatch(BaseModel):
 
 class ConversationRead(FromAttributesModel):
     id: UUID
+    mode: Literal["personal", "project"]
     project_id: UUID
     agent_id: UUID
     agent_version_id: UUID

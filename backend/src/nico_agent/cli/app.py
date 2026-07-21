@@ -407,7 +407,7 @@ def chat_command(
     ctx: typer.Context,
     message: str | None = typer.Argument(None, help="单轮消息；省略时进入交互模式。"),
     project_id: UUID | None = typer.Option(None, "--project"),
-    agent_id: UUID | None = typer.Option(None, "--agent"),
+    agent_id: str | None = typer.Option(None, "--agent", help="Agent exact name or UUID."),
     agent_version_id: UUID | None = typer.Option(None, "--version"),
     resume_id: UUID | None = typer.Option(None, "--resume"),
     continue_latest: bool = typer.Option(False, "--continue"),
@@ -423,7 +423,8 @@ def chat_command(
                 "--json chat requires MESSAGE or --read-only",
                 exit_code=2,
             )
-        with NicoApiClient(state.resolved_profile()) as client:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
             runner = ChatRunner(
                 client,
                 state.output(),
@@ -431,16 +432,32 @@ def chat_command(
             )
             conversation = runner.resolve(
                 project_id=str(project_id) if project_id else None,
-                agent_id=str(agent_id) if agent_id else None,
+                agent_id=agent_id,
                 agent_version_id=str(agent_version_id) if agent_version_id else None,
                 resume_id=str(resume_id) if resume_id else None,
                 continue_latest=continue_latest,
                 title=title,
+                interactive=not state.json_mode and sys.stdin.isatty(),
+                recent_agent_id=(
+                    str(profile.recent_personal_agent_id)
+                    if profile.recent_personal_agent_id
+                    else None
+                ),
             )
+            if conversation.get("_cli_mode") == "personal":
+                state.store().remember_personal_agent(
+                    profile.name,
+                    UUID(str(conversation["agent_id"])),
+                )
             if read_only:
                 history = runner.history(conversation["id"])
                 if state.json_mode:
-                    state.output().emit({"conversation": conversation, "turns": history})
+                    state.output().emit(
+                        {
+                            "conversation": runner.public_conversation(conversation),
+                            "turns": history,
+                        }
+                    )
                 else:
                     runner.run_interactive(conversation, read_only=True)
                 return
@@ -769,10 +786,24 @@ def config_delete(ctx: typer.Context, name: str) -> None:
 
 
 @project_app.command("list")
-def project_list(ctx: typer.Context) -> None:
+def project_list(
+    ctx: typer.Context,
+    include_system: bool = typer.Option(False, "--include-system"),
+) -> None:
     state = _state(ctx)
-    rows = _api(state, lambda client: client.list_projects())
-    state.output().table(rows, title="Projects", columns=["id", "name", "status", "revision"])
+    rows = _api(
+        state,
+        lambda client: (
+            client.list_projects(include_system=True)
+            if include_system
+            else client.list_projects()
+        ),
+    )
+    state.output().table(
+        rows,
+        title="Projects",
+        columns=["id", "name", "kind", "status", "revision"],
+    )
 
 
 @project_app.command("get")

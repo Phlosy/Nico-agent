@@ -12,7 +12,16 @@ from sqlalchemy.exc import DBAPIError
 from nico_agent.api import create_app
 from nico_agent.config import Settings
 from nico_agent.database import TenantContext
-from nico_agent.domain.models import Artifact, Conversation, ConversationAttachment, Run, Task
+from nico_agent.domain.models import (
+    Artifact,
+    AuditRecord,
+    Conversation,
+    ConversationAttachment,
+    Event,
+    Project,
+    Run,
+    Task,
+)
 from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
 from nico_agent.runtime.executor import RuntimeWorker
 
@@ -117,6 +126,132 @@ async def _create_conversation(
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+@pytest.mark.asyncio
+async def test_personal_conversations_are_idempotent_hidden_and_actor_scoped(app_client) -> None:
+    app, client = app_client
+    tenant_id, first_headers = await _bootstrap(client, "PersonalConversation")
+    _, agent, _ = await _project_and_agent(client, first_headers)
+
+    created = await client.post(
+        "/api/v1/conversations",
+        json={"mode": "personal", "agent_id": agent["id"], "title": "Private chat"},
+        headers={**first_headers, "Idempotency-Key": "personal-chat-1"},
+    )
+    assert created.status_code == 201, created.text
+    first = created.json()
+    replay = await client.post(
+        "/api/v1/conversations",
+        json={"mode": "personal", "agent_id": agent["id"], "title": "Private chat"},
+        headers={**first_headers, "Idempotency-Key": "personal-chat-1"},
+    )
+    assert replay.status_code == 201
+    assert replay.json()["id"] == first["id"]
+    assert replay.json()["project_id"] == first["project_id"]
+
+    conflict = await client.post(
+        "/api/v1/conversations",
+        json={"mode": "personal", "agent_id": agent["id"], "title": "Changed"},
+        headers={**first_headers, "Idempotency-Key": "personal-chat-1"},
+    )
+    assert conflict.status_code == 400
+    assert conflict.json()["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    assert (await client.get("/api/v1/projects", headers=first_headers)).json() != []
+    visible = (await client.get("/api/v1/projects", headers=first_headers)).json()
+    assert all(project["kind"] == "shared" for project in visible)
+    with_system = (
+        await client.get("/api/v1/projects?include_system=true", headers=first_headers)
+    ).json()
+    personal = [project for project in with_system if project["kind"] == "personal"]
+    assert len(personal) == 1
+    assert personal[0]["id"] == first["project_id"]
+    assert personal[0]["owner_actor_id"] == first_headers["X-Actor-ID"]
+
+    second_headers = {**first_headers, "X-Actor-ID": "another-operator"}
+    second_created = await client.post(
+        "/api/v1/conversations",
+        json={"mode": "personal", "agent_id": agent["id"], "title": "Other private chat"},
+        headers={**second_headers, "Idempotency-Key": "personal-chat-2"},
+    )
+    assert second_created.status_code == 201, second_created.text
+    second = second_created.json()
+    assert second["project_id"] != first["project_id"]
+
+    first_list = (
+        await client.get("/api/v1/conversations?mode=personal", headers=first_headers)
+    ).json()
+    second_list = (
+        await client.get("/api/v1/conversations?mode=personal", headers=second_headers)
+    ).json()
+    assert [item["id"] for item in first_list] == [first["id"]]
+    assert [item["id"] for item in second_list] == [second["id"]]
+    assert (
+        await client.get(f"/api/v1/conversations/{first['id']}", headers=second_headers)
+    ).status_code == 404
+
+    context = TenantContext(tenant_id, first_headers["X-Actor-ID"], uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        personal_projects = list(
+            await session.scalars(
+                select(Project).where(
+                    Project.tenant_id == tenant_id,
+                    Project.kind == "personal",
+                )
+            )
+        )
+        project_events = list(
+            await session.scalars(
+                select(Event).where(
+                    Event.tenant_id == tenant_id,
+                    Event.event_type == "PersonalProjectCreated",
+                )
+            )
+        )
+        project_audits = list(
+            await session.scalars(
+                select(AuditRecord).where(
+                    AuditRecord.tenant_id == tenant_id,
+                    AuditRecord.action == "personal_project.create",
+                )
+            )
+        )
+    assert len(personal_projects) == 2
+    assert len(project_events) == len(project_audits) == 2
+
+
+@pytest.mark.asyncio
+async def test_personal_mode_rejects_explicit_project_and_project_mode_stays_compatible(
+    app_client,
+) -> None:
+    _, client = app_client
+    _, headers = await _bootstrap(client, "PersonalContract")
+    project, agent, _ = await _project_and_agent(client, headers)
+
+    invalid = await client.post(
+        "/api/v1/conversations",
+        json={
+            "mode": "personal",
+            "project_id": project["id"],
+            "agent_id": agent["id"],
+        },
+        headers=headers,
+    )
+    assert invalid.status_code == 422
+    legacy = await _create_conversation(client, headers, project, agent, key="legacy-explicit")
+    explicit = await client.post(
+        "/api/v1/conversations",
+        json={
+            "mode": "project",
+            "project_id": project["id"],
+            "agent_id": agent["id"],
+            "title": "Explicit project chat",
+        },
+        headers={**headers, "Idempotency-Key": "explicit-project"},
+    )
+    assert explicit.status_code == 201, explicit.text
+    assert explicit.json()["project_id"] == legacy["project_id"] == project["id"]
 
 
 @pytest.mark.asyncio

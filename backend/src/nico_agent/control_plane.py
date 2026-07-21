@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.agent_versions import AgentVersionLifecycle
@@ -139,14 +139,26 @@ class ControlPlaneService:
             await session.flush()
             return project
 
-    async def list_projects(self, context: TenantContext) -> list[Project]:
+    async def list_projects(
+        self,
+        context: TenantContext,
+        *,
+        include_system: bool = False,
+    ) -> list[Project]:
         async with self.database.tenant_transaction(context) as session:
+            visibility = Project.kind == "shared"
+            if include_system:
+                visibility = or_(
+                    Project.kind == "shared",
+                    (Project.kind == "personal")
+                    & (Project.owner_actor_id == context.actor_id),
+                )
             return list(
                 await session.scalars(
                     select(Project)
                     .where(
                         Project.tenant_id == context.tenant_id,
-                        Project.kind == "shared",
+                        visibility,
                     )
                     .order_by(Project.created_at, Project.id)
                 )
@@ -1002,7 +1014,10 @@ class ControlPlaneService:
         )
         if for_update:
             statement = statement.with_for_update()
-        return await self._one(session, statement, "project", project_id)
+        project = await self._one(session, statement, "project", project_id)
+        if project.kind == "personal" and project.owner_actor_id != context.actor_id:
+            raise ResourceNotFound("project", str(project_id))
+        return project
 
     async def _agent(
         self,

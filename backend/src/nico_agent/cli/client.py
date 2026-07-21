@@ -89,8 +89,12 @@ class NicoApiClient:
     def readiness(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/health/ready", require_tenant=False)
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        return self.request("GET", "/api/v1/projects")
+    def list_projects(self, *, include_system: bool = False) -> list[dict[str, Any]]:
+        return self.request(
+            "GET",
+            "/api/v1/projects",
+            params={"include_system": include_system},
+        )
 
     def get_project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/projects/{project_id}")
@@ -259,13 +263,16 @@ class NicoApiClient:
     def create_conversation(
         self,
         *,
-        project_id: str,
+        project_id: str | None,
         agent_id: str,
+        mode: str = "project",
         agent_version_id: str | None = None,
         title: str = "New conversation",
         idempotency_key: str,
     ) -> dict[str, Any]:
-        body = {"project_id": project_id, "agent_id": agent_id, "title": title}
+        body = {"mode": mode, "agent_id": agent_id, "title": title}
+        if project_id is not None:
+            body["project_id"] = project_id
         if agent_version_id is not None:
             body["agent_version_id"] = agent_version_id
         return self.request(
@@ -281,6 +288,7 @@ class NicoApiClient:
         project_id: str | None = None,
         agent_id: str | None = None,
         status: str | None = None,
+        mode: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}
@@ -290,6 +298,8 @@ class NicoApiClient:
             params["agent_id"] = agent_id
         if status is not None:
             params["status"] = status
+        if mode is not None:
+            params["mode"] = mode
         return self.request("GET", "/api/v1/conversations", params=params)
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:

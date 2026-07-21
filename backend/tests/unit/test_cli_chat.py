@@ -14,10 +14,20 @@ from nico_agent.cli.slash import parse_slash
 
 
 class FakeChatClient:
-    def __init__(self, *, interrupt: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        interrupt: bool = False,
+        agents: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.interrupt = interrupt
         self.cancelled: list[tuple[str, int]] = []
         self.created: list[str] = []
+        self.create_calls: list[dict[str, Any]] = []
+        self.agents = [_agent("agent-1", "researcher")] if agents is None else agents
+
+    def list_agents(self) -> list[dict[str, Any]]:
+        return self.agents
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return _conversation(conversation_id)
@@ -27,7 +37,12 @@ class FakeChatClient:
 
     def create_conversation(self, **kwargs) -> dict[str, Any]:
         self.created.append(kwargs["title"])
-        return _conversation("new")
+        self.create_calls.append(kwargs)
+        return {
+            **_conversation("new"),
+            "project_id": kwargs.get("project_id") or "personal-project",
+            "agent_id": kwargs["agent_id"],
+        }
 
     def update_conversation(self, conversation_id: str, **kwargs) -> dict[str, Any]:
         return {**_conversation(conversation_id), "title": kwargs["title"], "revision": 2}
@@ -138,6 +153,16 @@ def _conversation(value: str) -> dict[str, Any]:
     }
 
 
+def _agent(value: str, name: str, *, status: str = "ready") -> dict[str, Any]:
+    return {
+        "id": value,
+        "name": name,
+        "display_name": name.title(),
+        "status": status,
+        "current_version_id": f"version-{value}",
+    }
+
+
 def _runner(client: FakeChatClient, tmp_path: Path, *, json_mode: bool = True) -> ChatRunner:
     return ChatRunner(
         client,  # type: ignore[arg-type]
@@ -153,7 +178,7 @@ def test_chat_resolve_new_resume_and_continue(tmp_path: Path) -> None:
     assert (
         runner.resolve(
             project_id="p",
-            agent_id="a",
+            agent_id="agent-1",
             agent_version_id=None,
             resume_id=None,
             continue_latest=False,
@@ -186,9 +211,100 @@ def test_chat_resolve_new_resume_and_continue(tmp_path: Path) -> None:
     assert client.created == ["Fresh"]
 
 
-def test_chat_requires_target_and_rejects_conflicting_selection(tmp_path: Path) -> None:
-    runner = _runner(FakeChatClient(), tmp_path)
-    with pytest.raises(CliError, match="requires --project"):
+def test_bare_chat_uses_the_only_ready_agent_and_personal_mode(tmp_path: Path) -> None:
+    client = FakeChatClient(
+        agents=[
+            _agent("draft", "draft-agent", status="draft"),
+            _agent("ready", "ready-agent"),
+        ]
+    )
+    runner = _runner(client, tmp_path, json_mode=False)
+
+    conversation = runner.resolve(
+        project_id=None,
+        agent_id=None,
+        agent_version_id=None,
+        resume_id=None,
+        continue_latest=False,
+        title="Personal",
+        interactive=False,
+    )
+
+    assert conversation["agent_id"] == "ready"
+    assert conversation["_cli_mode"] == "personal"
+    assert client.create_calls[0]["mode"] == "personal"
+    assert client.create_calls[0]["project_id"] is None
+    runner.renderer.header(
+        {
+            "agent": "Ready Agent",
+            "version": "1",
+            "runtime": "nico_native",
+            "project": None,
+            "tools": [],
+        }
+    )
+    assert "Project" not in runner.output.stdout.getvalue()
+
+
+def test_chat_resolves_exact_agent_name_and_uuid_without_arbitrary_choice(tmp_path: Path) -> None:
+    agents = [_agent("agent-1", "researcher"), _agent("agent-2", "writer")]
+    client = FakeChatClient(agents=agents)
+    runner = _runner(client, tmp_path)
+
+    by_name = runner.resolve(
+        project_id=None,
+        agent_id="writer",
+        agent_version_id=None,
+        resume_id=None,
+        continue_latest=False,
+        title="By name",
+        interactive=False,
+    )
+    by_id = runner.resolve(
+        project_id=None,
+        agent_id="agent-1",
+        agent_version_id=None,
+        resume_id=None,
+        continue_latest=False,
+        title="By ID",
+        interactive=False,
+    )
+
+    assert by_name["agent_id"] == "agent-2"
+    assert by_id["agent_id"] == "agent-1"
+    with pytest.raises(CliError, match="matches multiple"):
+        _runner(
+            FakeChatClient(
+                agents=[_agent("one", "duplicate"), _agent("two", "duplicate")]
+            ),
+            tmp_path,
+        ).resolve(
+            project_id=None,
+            agent_id="duplicate",
+            agent_version_id=None,
+            resume_id=None,
+            continue_latest=False,
+            title="Ambiguous",
+            interactive=False,
+        )
+    with pytest.raises(CliError, match="no ready Agent matches"):
+        runner.resolve(
+            project_id=None,
+            agent_id="missing",
+            agent_version_id=None,
+            resume_id=None,
+            continue_latest=False,
+            title="Missing",
+            interactive=False,
+        )
+
+
+def test_bare_chat_requires_selector_only_when_multiple_ready_agents(tmp_path: Path) -> None:
+    runner = _runner(
+        FakeChatClient(agents=[_agent("one", "first"), _agent("two", "second")]),
+        tmp_path,
+    )
+    with pytest.raises(CliError, match="pass --agent"):
         runner.resolve(
             project_id=None,
             agent_id=None,
@@ -196,7 +312,22 @@ def test_chat_requires_target_and_rejects_conflicting_selection(tmp_path: Path) 
             resume_id=None,
             continue_latest=False,
             title="x",
+            interactive=False,
         )
+    with pytest.raises(CliError, match="run 'nico setup'"):
+        _runner(FakeChatClient(agents=[]), tmp_path).resolve(
+            project_id=None,
+            agent_id=None,
+            agent_version_id=None,
+            resume_id=None,
+            continue_latest=False,
+            title="x",
+            interactive=False,
+        )
+
+
+def test_chat_rejects_conflicting_selection(tmp_path: Path) -> None:
+    runner = _runner(FakeChatClient(), tmp_path)
     with pytest.raises(CliError, match="cannot be used together"):
         runner.resolve(
             project_id=None,
