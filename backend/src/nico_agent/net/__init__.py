@@ -8,8 +8,10 @@ from nico_agent.net.safe_http import (
     SafeHttpClient,
     SafeHttpError,
     SafeHttpPolicy,
+    SafeHttpResult,
     SocketHttpTransport,
     canonicalize_http_url,
+    domain_allowed,
     resolve_http_target,
 )
 
@@ -21,7 +23,9 @@ __all__ = [
     "SafeHttpClient",
     "SafeHttpError",
     "SafeHttpPolicy",
+    "SafeHttpResult",
     "SocketHttpTransport",
     "canonicalize_http_url",
+    "domain_allowed",
     "resolve_http_target",
 ]

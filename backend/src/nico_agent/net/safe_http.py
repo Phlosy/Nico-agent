@@ -8,7 +8,7 @@ import ipaddress
 import socket
 import ssl
 import unicodedata
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -147,11 +147,19 @@ class RawHttpResponse:
     body: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class SafeHttpResult:
+    response: RawHttpResponse
+    target: ResolvedHttpTarget
+    redirects: int
+
+
 class HttpTransport(Protocol):
     async def request(self, request: PinnedRequest) -> RawHttpResponse: ...
 
 
 Resolver = Callable[[str, int], Sequence[str]]
+RequestAuthorizer = Callable[[str, str | None], Awaitable[None]]
 
 
 class SocketHttpTransport:
@@ -241,6 +249,29 @@ class SafeHttpClient:
         max_response_bytes: int = 1_048_576,
         max_redirects: int = 0,
     ) -> RawHttpResponse:
+        result = await self.request_with_metadata(
+            method,
+            url,
+            policy=policy,
+            headers=headers,
+            params=params,
+            max_response_bytes=max_response_bytes,
+            max_redirects=max_redirects,
+        )
+        return result.response
+
+    async def request_with_metadata(
+        self,
+        method: str,
+        url: str,
+        *,
+        policy: SafeHttpPolicy,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, str] | None = None,
+        max_response_bytes: int = 1_048_576,
+        max_redirects: int = 0,
+        authorize: RequestAuthorizer | None = None,
+    ) -> SafeHttpResult:
         if method not in {"GET", "HEAD"}:
             raise SafeHttpError("METHOD_DENIED", "HTTP method is not allowed")
         if not 1 <= max_response_bytes <= 10_485_760:
@@ -251,12 +282,29 @@ class SafeHttpClient:
         redirect_from: str | None = None
         redirects = 0
         while True:
-            target = await resolve_http_target(
-                current_url,
-                policy=policy,
-                resolver=self.resolver,
-                redirect_from=redirect_from,
-            )
+            if authorize is not None:
+                await authorize(current_url, redirect_from)
+            try:
+                target = await resolve_http_target(
+                    current_url,
+                    policy=policy,
+                    resolver=self.resolver,
+                    redirect_from=redirect_from,
+                )
+            except SafeHttpError as exc:
+                if redirect_from is not None and exc.code in {
+                    "URL_INVALID",
+                    "DOMAIN_DENIED",
+                    "PORT_DENIED",
+                    "SCHEME_DENIED",
+                    "ADDRESS_DENIED",
+                    "REDIRECT_DENIED",
+                }:
+                    raise SafeHttpError(
+                        "REDIRECT_DENIED",
+                        "HTTP redirect target is not allowed",
+                    ) from exc
+                raise
             response = await self.transport.request(
                 PinnedRequest(
                     method=method,
@@ -278,7 +326,7 @@ class SafeHttpClient:
             if encoding not in {"", "identity"}:
                 raise SafeHttpError("ENCODING_DENIED", "compressed HTTP responses are not accepted")
             if response.status not in self._REDIRECT_STATUSES:
-                return response
+                return SafeHttpResult(response=response, target=target, redirects=redirects)
             location = response_headers.get("location")
             if not location:
                 raise SafeHttpError("REDIRECT_INVALID", "HTTP redirect has no location")
@@ -386,7 +434,7 @@ def _authorize_url(
 ) -> None:
     if policy.mode is SafeHttpMode.EXACT_ENDPOINT and parsed.origin != policy.exact_origin:
         raise SafeHttpError("DOMAIN_DENIED", "HTTP target is outside the configured endpoint")
-    if policy.mode is SafeHttpMode.ALLOWLISTED and not _domain_allowed(
+    if policy.mode is SafeHttpMode.ALLOWLISTED and not domain_allowed(
         parsed.hostname, policy.allowed_domains
     ):
         raise SafeHttpError("DOMAIN_DENIED", "HTTP hostname is not allowed")
@@ -427,7 +475,7 @@ def _validate_address(value: str, *, policy: SafeHttpPolicy) -> str:
     return str(address)
 
 
-def _domain_allowed(hostname: str, configured: Sequence[str]) -> bool:
+def domain_allowed(hostname: str, configured: Sequence[str]) -> bool:
     if not configured or len(configured) > 100:
         return False
     for raw_pattern in configured:

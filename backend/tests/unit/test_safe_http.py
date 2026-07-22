@@ -216,3 +216,60 @@ async def test_safe_client_reauthorizes_redirect_before_second_request() -> None
 
     assert captured.value.code == "REDIRECT_DENIED"
     assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_client_calls_external_authorizer_before_each_redirect_hop() -> None:
+    transport = FakeTransport(
+        [
+            RawHttpResponse(302, (("Location", "https://cdn.example/final"),), b""),
+            RawHttpResponse(200, (("Content-Type", "text/plain"),), b"done"),
+        ]
+    )
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    authorized = []
+
+    async def authorize(url, redirect_from):
+        authorized.append((url, redirect_from))
+
+    result = await client.request_with_metadata(
+        "GET",
+        "https://docs.example/start",
+        policy=SafeHttpPolicy.strict_public(allow_cross_origin_redirects=True),
+        max_redirects=1,
+        authorize=authorize,
+    )
+
+    assert authorized == [
+        ("https://docs.example/start", None),
+        ("https://cdn.example/final", "https://docs.example/start"),
+    ]
+    assert result.response.body == b"done"
+    assert result.target.canonical_url == "https://cdn.example/final"
+    assert result.redirects == 1
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_safe_client_reports_private_redirect_target_as_redirect_denied() -> None:
+    transport = FakeTransport(
+        [RawHttpResponse(302, (("Location", "https://private.example/final"),), b"")]
+    )
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["10.0.0.8" if host == "private.example" else "93.184.216.34"],
+    )
+
+    with pytest.raises(SafeHttpError) as captured:
+        await client.request(
+            "GET",
+            "https://docs.example/start",
+            policy=SafeHttpPolicy.strict_public(allow_cross_origin_redirects=True),
+            max_redirects=1,
+        )
+
+    assert captured.value.code == "REDIRECT_DENIED"
+    assert len(transport.requests) == 1

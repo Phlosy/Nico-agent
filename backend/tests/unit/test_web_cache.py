@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from nico_agent.web.cache import RedisWebSearchCache
+from nico_agent.web.cache import RedisWebFetchCache, RedisWebSearchCache
 from nico_agent.web.contracts import SearchPage, SearchRequest, SearchResult
 
 
@@ -75,3 +75,81 @@ async def test_cache_corruption_and_redis_outage_degrade_to_a_miss() -> None:
     redis.fail = True
     assert await cache.get(tenant, "brave", "a" * 64, request) is None
     await cache.set(tenant, "brave", "a" * 64, request, _page(), ttl_seconds=60)
+
+
+@pytest.mark.asyncio
+async def test_fetch_cache_is_source_isolated_and_revalidates_normalized_output() -> None:
+    redis = FakeRedis()
+    cache = RedisWebFetchCache(redis)
+    tenant = uuid4()
+    output = {
+        "url": "https://docs.example/guide",
+        "final_url": "https://docs.example/guide",
+        "status": 200,
+        "content_type": "text/plain",
+        "title": None,
+        "extractor": "plain",
+        "content": "Current guide",
+        "bytes": 13,
+        "sha256": "a" * 64,
+        "fetched_at": "2026-07-22T00:00:00+00:00",
+        "redirects": 0,
+        "truncated": False,
+        "cached": False,
+        "external_content": {
+            "untrusted": True,
+            "source": "web_fetch",
+            "wrapped": True,
+            "origin": "https://docs.example",
+        },
+    }
+    await cache.set(
+        tenant,
+        "a" * 64,
+        output["url"],
+        "text",
+        1000,
+        output,
+        ttl_seconds=60,
+        source_key="search-call-1",
+    )
+
+    assert (
+        await cache.get(
+            tenant,
+            "a" * 64,
+            output["url"],
+            "text",
+            1000,
+            "search-call-1",
+        )
+        == output
+    )
+    assert (
+        await cache.get(
+            tenant,
+            "a" * 64,
+            output["url"],
+            "text",
+            1000,
+            "different-search-call",
+        )
+        is None
+    )
+
+    key = next(iter(redis.values))
+    redis.values[key] = redis.values[key].replace(
+        '"origin":"https://docs.example"',
+        '"origin":"https://evil.example"',
+    )
+    assert (
+        await cache.get(
+            tenant,
+            "a" * 64,
+            output["url"],
+            "text",
+            1000,
+            "search-call-1",
+        )
+        is None
+    )

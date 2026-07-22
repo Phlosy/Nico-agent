@@ -46,13 +46,15 @@ from nico_agent.tools.builtin import (
     PythonSandboxExecutor,
     ReportWriteExecutor,
     SandboxRunnerClient,
+    WebFetchExecutor,
     WebSearchExecutor,
     WorkspaceManager,
 )
-from nico_agent.web.cache import RedisWebSearchCache
+from nico_agent.web.cache import RedisWebFetchCache, RedisWebSearchCache
 from nico_agent.web.providers import BraveSearchProvider, SearxngSearchProvider
 from nico_agent.web.rate_limit import RedisWebRateLimiter
 from nico_agent.web.registry import WebProviderRegistry
+from nico_agent.web.source_authorization import WebSourceAuthorizer
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,11 @@ async def worker_main(settings: Settings | None = None) -> None:
                 cache=RedisWebSearchCache(resources.redis),
                 rate_limiter=RedisWebRateLimiter(resources.redis),
                 environment=runtime_settings.environment,
+            ),
+            WebFetchExecutor(
+                WebSourceAuthorizer(database),
+                http=web_http,
+                cache=RedisWebFetchCache(resources.redis),
             ),
         ]
     )
