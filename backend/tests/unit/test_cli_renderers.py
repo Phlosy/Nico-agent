@@ -9,6 +9,7 @@ from nico_agent.cli.renderers import (
     ProjectRenderer,
     ProviderSetupRenderer,
     chat_footer_status,
+    execution_event_has_durable_output,
 )
 
 
@@ -365,6 +366,22 @@ def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None
     assert len(narrow) <= 36
     assert "q:paused" in narrow
     assert "private-model-delta-canary" not in wide + narrow
+
+
+def test_only_curated_durable_events_interrupt_the_interactive_composer() -> None:
+    assert not execution_event_has_durable_output(
+        {"type": "RuntimeModelOutputDelta", "payload": {"message": "private"}}
+    )
+    assert not execution_event_has_durable_output(
+        {"type": "ToolCallStarted", "payload": {"tool": "web.search@1.0.0"}}
+    )
+    assert execution_event_has_durable_output(
+        {"type": "ToolCallSucceeded", "payload": {"tool": "web.search@1.0.0"}}
+    )
+    assert execution_event_has_durable_output(
+        {"type": "ArtifactAvailable", "payload": {"name": "report.md"}}
+    )
+    assert execution_event_has_durable_output({"type": "RunFailed", "payload": {}})
 
 
 def test_execution_progress_pause_resume_and_stop_are_idempotent() -> None:

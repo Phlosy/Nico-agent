@@ -645,6 +645,16 @@ def chat_footer_status(
     return _ellipsize(compact, available)
 
 
+def execution_event_has_durable_output(event: Mapping[str, Any]) -> bool:
+    """Return whether projecting this event writes a curated scrolling result."""
+
+    event_type = str(event.get("type") or event.get("event_type") or "")
+    normalized_type = event_type.replace("_", "")
+    return normalized_type in (
+        _TOOL_TERMINAL_EVENTS | _VISIBLE_ARTIFACT_EVENTS | _VISIBLE_RUN_EVENTS
+    )
+
+
 def _safe_tool_detail(payload: Mapping[str, Any]) -> str:
     value = _safe_value(payload.get("tool") or payload.get("tool_name") or payload.get("name"))
     reference = value.lower()

@@ -17,7 +17,11 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
-from nico_agent.cli.renderers import ExecutionProgress, chat_footer_status
+from nico_agent.cli.renderers import (
+    ExecutionProgress,
+    chat_footer_status,
+    execution_event_has_durable_output,
+)
 from nico_agent.cli.slash import parse_slash
 
 if TYPE_CHECKING:
@@ -362,9 +366,17 @@ class InteractiveChatSession:
             turn = client.get_conversation_turn(turn_id)
             queue = client.get_conversation_queue(conversation_id)
             self._enqueue_from_thread("finished", (turn, queue, run_id))
-        except CliError as exc:
+        except Exception as exc:
             if not self._stop.is_set():
-                self._enqueue_from_thread("error", (run_id, exc))
+                error = (
+                    exc
+                    if isinstance(exc, CliError)
+                    else CliError(
+                        "CHAT_WATCH_FAILED",
+                        "background Run observation failed",
+                    )
+                )
+                self._enqueue_from_thread("error", (run_id, error))
         finally:
             try:
                 client.close()
@@ -390,7 +402,10 @@ class InteractiveChatSession:
                 run_id, event = value
                 if run_id != self._watch_run_id:
                     continue
-                await run_in_terminal(lambda event=event: self.progress.event(event))
+                if execution_event_has_durable_output(event):
+                    await run_in_terminal(lambda event=event: self.progress.event(event))
+                else:
+                    self.progress.event(event)
                 if event.get("type") == "ApprovalRequested":
                     approval_id = (event.get("payload") or {}).get("approval_id")
                     if approval_id and str(approval_id) not in self._seen_approvals:

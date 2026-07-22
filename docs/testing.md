@@ -32,6 +32,8 @@
 | CLI Goal E full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-e/<UTC> scripts/verify-cli-goal-e.sh` | All suites, migration roundtrip, CLI-B/C/D regression and Goal E security/E2E evidence |
 | CLI Goal F approval E2E | `scripts/e2e-cli-goal-f.sh` | Non-interactive disconnect at ApprovalRequested, PTY resume, once/run decisions, two sensitive tools, audit and exactly-once execution |
 | CLI Goal F full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-f/<UTC> scripts/verify-cli-goal-f.sh` | All suites, migration roundtrip, CLI-B–E regression, approval recovery/expiry and Goal F PTY evidence |
+| CLI session controls E2E | `scripts/e2e-cli-session-controls.sh` | 异步 composer、持久 FIFO、双 Worker 串行、current/next 权限 footer、失败暂停、retry/resume 和隐私 canary |
+| CLI session controls full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-session-controls/<UTC> scripts/verify-cli-session-controls.sh` | 静态/单元/迁移/集成、CLI-C–F 回归及新 PTY session-controls 证据 |
 | User Demo | `scripts/demo.sh` | Published AgentVersion through Task/Run, Worker, Mock Runtime, result, Events, and query URLs |
 
 Integration tests are skipped by ordinary `pytest`. The integration script starts
@@ -186,8 +188,20 @@ CLI Goal F 使用真实 PostgreSQL、API、Worker、Sandbox Runner、fake model 
 scripts/e2e-cli-goal-f.sh
 ```
 
-阶段总验收同时运行全部单元、前端构建、真实基础设施集成和 CLI-B/C/D/E/F E2E：
+Session controls E2E 启动两个真实 Worker，在第一条 Mock Run 仍活动时通过 PTY 连续
+提交两条后续消息并切换 Conversation 权限。它验证数据库 FIFO 无执行时间重叠、下一
+Run 才冻结新权限、后续 ContextSnapshot 包含此前完成 Turn、CLI detach 不取消队列，
+以及失败后 `/retry` 与 `/queue resume` 的显式恢复。终端证据同时扫描模型 delta、
+Runtime 内部事件名和测试 canary：
 
 ```bash
-NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-f/<UTC> scripts/verify-cli-goal-f.sh
+scripts/e2e-cli-session-controls.sh
+```
+
+Session controls 总验收运行相关静态/单元门、完整真实基础设施集成、CLI-C/D/E/F
+回归和新的持久队列 PTY E2E：
+
+```bash
+NICO_EVIDENCE_DIR=artifacts/goals/cli-session-controls/<UTC> \
+  scripts/verify-cli-session-controls.sh
 ```

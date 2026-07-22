@@ -222,10 +222,10 @@ nico project cancel launch --agent researcher
 ```
 
 Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
-`/interventions` 和 `/withdraw ID [REASON]`。活动 Run 存在时，普通输入会先要求
-明确选择 local guidance、project change、等待或取消；非交互调用必须通过显式
-命令表达动作。Intervention 只作为有界、不可信文本在安全模型边界消费，不能
-改变工具、Secret、预算、成员或协调权限。
+`/interventions` 和 `/withdraw ID [REASON]`。活动 Run 存在时，普通输入与独立
+Session 一样成为下一条持久 Turn；只有显式 `/guide` 才绑定当前 Run，显式
+`/escalate` 才创建 Project 范围变化。Intervention 只作为有界、不可信文本在安全
+模型边界消费，不能改变工具、Secret、预算、成员或协调权限。
 
 时间线只展示持久化计划、决策理由摘要、步骤、工具、Artifact、测试、阻塞和
 结构化结果；不会请求或显示模型原始私有思维链。监督输出把数据库权威 metrics
@@ -233,7 +233,12 @@ Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
 
 ## 持续对话操作
 
-不带 `MESSAGE` 时进入普通滚动式交互，适合 SSH 和日志复制。输入历史保存在平台默认用户数据目录，目录权限为 `0700`、文件为 `0600`。快捷键语义如下：
+不带 `MESSAGE` 时进入普通滚动式交互，适合 SSH 和日志复制。模型执行期间输入框
+保持可用；按 Enter 会立即把文本保存为下一条服务端 Turn，而不等待当前回答。
+Conversation 同一时刻只执行一个 Run，后续消息严格按 sequence 串行领取；退出 CLI
+不会删除队列。底部状态栏持续显示完整或确定性缩写后的模型、当前 Run 冻结权限、
+下一 Run 权限、执行阶段和排队数量。输入历史保存在平台默认用户数据目录，目录权限
+为 `0700`、文件为 `0600`。快捷键语义如下：
 
 - `Alt+Enter`：插入换行；
 - `Ctrl+C`：输入时清空当前输入，执行时请求服务端取消当前 Run；
@@ -243,11 +248,13 @@ Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
 - `/status`、`/agent`、`/version`、`/runtime`、`/usage`、`/context`：查看当前运行上下文；
 - `/plan`、`/steps`、`/tools`、`/children`、`/messages`、`/artifacts`、`/audit`、`/inspect`：读取服务端持久化执行事实；
 - `/approvals`：查看当前 Run 的审批请求及终态；
+- `/permissions [ask|auto-medium|auto-all]`：查看或修改当前 Conversation 后续 Run 的审批模式；扩大自动批准范围需要确认；
+- `/queue`：查看活动、暂停和排队 Turn；`/queue cancel TURN` 取消指定队列项，`/queue resume` 显式恢复异常后续执行；
 - `/approve ID once|run`：批准一次调用，或允许同一 Run 后续调用相同工具版本；
 - `/reject ID [REASON]`：拒绝待处理调用；
 - `/guide TEXT`、`/interventions`、`/withdraw ID [REASON]`：在 Project Session 中管理一次性运行指导；
 - `/escalate TEXT`：把范围、优先级或跨 Agent 依赖变化送到 Lead Session；
-- `/cancel`、`/retry`：通过 revisioned API 控制当前 Turn；
+- `/cancel`、`/retry`：取消活动队首，或只重试导致队列暂停的 Turn；
 - `/attach PATH`：读取本地文件字节并暂存到下一轮；服务端不会读取本地路径；
 - `/compact`：排队执行独立摘要 Run，并在完成后更新覆盖序号、输入 Hash 和 ModelCall 引用；
 - `/download ARTIFACT_ID [PATH]`：只下载当前 Conversation 已引用的 Artifact，以 `0600` 原子写入并拒绝符号链接目标；
@@ -259,7 +266,17 @@ Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
 
 ## 敏感工具审批
 
-默认情况下，风险等级为 `medium` 或 `high` 的平台工具需要人工确认。模型提出调用后，Tool Gateway 先保存 pre-action checkpoint、待执行 ToolCall 和 ToolApprovalRequest，再把 Run 置为 `waiting_for_approval`。CLI 收到 `ApprovalRequested` 后显示工具精确版本、风险、过期时间和服务端已经脱敏的参数：
+新 Conversation 默认使用 `ask`：风险等级为 `medium` 或 `high` 的平台工具需要人工
+确认。`auto-medium` 自动批准已经获得 AgentVersion 与 Tenant 授权的 medium 调用，
+`auto-all` 自动批准已经授权且未被部署策略锁定的 medium/high 调用。模式只决定是否
+等待人工确认，不会添加工具、Skill、Secret、网络或文件权限。活动 Run 在首次创建
+RuntimeSession 时冻结模式，所以运行中变更会在 footer 中显示为 current → next，
+只影响尚未开始的 Run。
+
+需要人工确认时，Tool Gateway 先保存 pre-action checkpoint、待执行 ToolCall 和
+ToolApprovalRequest，再把 Run 置为 `waiting_for_approval`。CLI 收到
+`ApprovalRequested` 后保存当前草稿与光标，显示工具精确版本、风险、过期时间和
+服务端已经脱敏的参数：
 
 ```text
 [1] Allow once
@@ -267,7 +284,11 @@ Project Session 交互中也可用 `/guide TEXT`、`/escalate TEXT`、
 [3] Reject
 ```
 
-选择会通过带 revision 和 `Idempotency-Key` 的 API 写入服务端。批准后 Worker 重新 claim Run，从同一个 checkpoint 和 ToolCall 幂等键继续；拒绝或超时会产生失败的工具观察，Agent 可以据此调整回答。`run` scope 只适用于当前 Run、同一 ToolDefinition，不扩张 AgentVersion 或租户策略。
+选择会通过带 revision 和 `Idempotency-Key` 的 API 写入服务端，之后原草稿和光标
+原样恢复。批准后 Worker 重新 claim Run，从同一个 checkpoint 和 ToolCall 幂等键
+继续；拒绝或超时会暂停 Conversation 队列并保留后续消息。`run` scope 只适用于
+当前 Run、同一 ToolDefinition，不扩张 AgentVersion 或租户策略。policy 自动批准也
+会保留 ToolApprovalRequest、Event 和 Audit，并明确记录决定来源。
 
 CLI 断开不会取消审批，也不会隐式批准。再次运行 `nico chat --resume <conversation-id>` 时，CLI 会读取该 Run 尚未决定的请求并重新展示。非 TTY、`--json`、`nico exec` 和 `nico run watch` 遇到审批时会安全停止观察并返回 `approval_required` 标识，绝不会自动授权；可稍后进入交互 chat，或使用 `/approve`、`/reject` 完成决定。
 
@@ -317,13 +338,20 @@ nico conversation history <conversation-id>
 
 `--continue` 可配合 `--project`、`--agent` 缩小最近会话范围；`--resume` 与 `--continue` 互斥。已有 Conversation 固定创建时的 AgentVersion，发布新版本不会静默改变旧会话。要切换版本，应新建 Conversation。
 
-每条消息在一个数据库事务中创建 ConversationTurn、Task 与 Pending Run。Worker 仍是唯一执行者；CLI 通过可续传 SSE 接收持久化 Event，按 sequence 去重，并在流结束后通过 Turn API 校准最终结果。终端断线不改变服务端权威状态。
+每条消息在一个数据库事务中创建 ConversationTurn、Task 与 Pending Run。默认最多
+保留 20 条未开始 Turn；取消队列项不会复用 sequence。同一 Conversation 的数据库
+领取条件只允许最早可执行 Run 被一个 Worker 领取。正常完成自动推进；失败、超时、
+当前 Turn 取消、工具拒绝或审批过期会暂停后续执行，直到 `/retry`、取消队列项或
+`/queue resume` 明确处理。Worker 仍是唯一执行者；CLI 通过可续传 SSE 接收持久化
+Event，按 sequence 去重，并在流结束后通过 Turn API 校准最终结果。终端断线不改变
+服务端权威状态。
 
 human 模式不会把持久化事件流原样打印到对话中。普通 Task、Run、RuntimeSession、计划、步骤、ContextSnapshot、ModelCall 和 checkpoint 生命周期只用于审计与显式检查命令；聊天滚动区只显示最终回答、真实工具动作、审批、可用 Artifact，以及失败或取消。由于模型增量事件无法可靠区分最终正文与中间结构化输出，CLI 等 Turn 终态校准后再渲染 `assistant_output`。`--json` 仍返回完整事件数组供自动化消费。
 
 ### 执行中的反馈
 
-交互终端在等待服务端结果时只保留一行临时状态，例如：
+`nico exec`、`nico run watch` 和单轮 chat 在等待服务端结果时只保留一行临时状态，
+例如：
 
 ```text
 ⠋ Queued · 0:00
@@ -331,7 +359,11 @@ human 模式不会把持久化事件流原样打印到对话中。普通 Task、
 ⠹ Running http_read@1 · 0:12 | reconnecting 1/3
 ```
 
-状态会在准备、规划、思考、运行工具、反思和整理答案之间切换，并显示本次等待的经过时间。连接暂时中断时，同一行显示有界重连次数；连接恢复后自动消失。这一行在最终回答、错误、审批面板或用户中断前清除，不会污染可复制的对话历史。
+交互式 TTY chat 使用同一安全阶段投影，但把它放在始终可见的 composer footer 中；
+后台 SSE 使用独立连接，工具结果和最终回答通过 prompt_toolkit 的滚动输出写入，不会
+覆盖正在编辑的草稿。状态会在准备、规划、思考、运行工具、反思和整理答案之间切换，
+并显示本次等待的经过时间。连接暂时中断时，同一行显示有界重连次数；连接恢复后
+自动消失。
 
 滚动区只保留有长期价值的结果：每个工具调用至多一条终态、已保存的 Artifact、审批面板、失败或取消，以及最终回答。能够由同一工具调用的开始和结束事件精确关联时才显示耗时。模型增量、私有推理、内部事件名、sequence、内部 ID、原始工具参数和返回 payload 都不会出现在 human 输出中；需要审计时使用 `/inspect`、`/plan`、`/steps`、`/tools`、`/audit` 等显式命令。
 

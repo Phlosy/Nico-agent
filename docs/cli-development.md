@@ -13,11 +13,15 @@ cli/client.py    httpx REST、租户 header、token、错误和 request ID
 cli/output.py    Rich human、JSON、no-color 和 stderr 错误输出
 cli/errors.py    稳定 CLI 错误合同与退出码
 cli/sse.py       增量 SSE 分片解析、续读游标和事件合同
-cli/chat.py      Conversation 选择、滚动式 prompt、Turn、附件、compact 和下载
+cli/chat.py      Conversation 选择、slash command、附件、compact 和下载
+cli/chat_session.py 交互 TTY 的异步 composer、后台 SSE、审批草稿和 footer
 cli/execution.py exec/watch 与私有原子结果文件写入
 ```
 
-prompt_toolkit 用于滚动式 chat 输入、私有历史和 Alt+Enter 多行；Rich 继续承担人类可读输出。CLI 不建立第二套执行状态机，ConversationTurn 的执行状态由服务端 Run 投影。
+prompt_toolkit 用于滚动式 chat 输入、私有历史、Alt+Enter 多行、动态 footer 和安全的
+后台输出；Rich 继续承担人类可读输出。交互控制器使用 `prompt_async`，阻塞 httpx/SSE
+由独立 client 在后台线程观察，所有 buffer 变化回到主事件循环。CLI 不建立第二套执行
+状态机，Conversation queue、审批模式和 ConversationTurn 执行状态都由服务端投影。
 
 ## 本地运行
 
@@ -75,6 +79,8 @@ scripts/verify-cli-goal-e.sh
 8. SSE 只能展示持久化 Run Event；断线按最后 sequence 设置 `Last-Event-ID`，客户端去重，流结束后再读取 Turn 终态。
 9. chat 输入历史只能保存用户输入，不保存 API token；目录/文件分别保持 `0700`/`0600`。
 10. `/attach` 只上传已读取的本地字节，HTTP 请求不得包含本地绝对路径；`/download` 必须原子写入 `0600` 文件并拒绝最终符号链接。
+11. 交互 TTY 可以在 Run 活动时创建后续 Turn；输入队列不得保存在 CLI 内存中，也不得让后台线程直接修改 prompt buffer。
+12. footer 只能消费 `ExecutionProgress` 的安全投影和服务端 queue/runtime facts；不得拼接模型 delta、原始 payload、工具参数或内部 ID。
 
 ## 配置优先级与安全
 

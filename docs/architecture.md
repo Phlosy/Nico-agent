@@ -86,12 +86,32 @@ Project, Agent and exact AgentVersion. Every user message commits a
 ConversationTurn, Task and first Pending Run atomically; the independent Worker
 then follows the same claim/runtime/tool/persistence path as every other Run.
 ConversationTurn is a durable projection for user-facing history, while Run and
-RuntimeSession retain execution authority. Closing or reconnecting the CLI does
-not alter those records.
+RuntimeSession retain execution authority. Multiple future Turns may be committed
+while one Run executes. A queue-aware PostgreSQL claim predicate permits at most
+one executing Run per Conversation and only releases the lowest eligible Turn
+sequence; separate Conversations and non-Conversation Tasks remain independently
+claimable. Closing or reconnecting the CLI does not alter those records.
+
+Conversation persists `active|paused` queue state, pause cause and an approval mode.
+Normal completion releases the next Turn. Failure, timeout, active-head cancellation,
+tool rejection or approval expiry retains later Turns and pauses their claims until
+an operator retries the cause, cancels a queued Turn or revision-safely resumes the
+queue. Context selection occurs when a queued Run first starts, so it includes prior
+answers that did not exist when the user originally pressed Enter.
+
+The approval mode is `ask`, `auto-medium` or `auto-all`. RuntimeSession freezes the
+mode on first preparation; the Tool Gateway still authorizes Tenant and immutable
+AgentVersion policy before applying it. Every policy-approved sensitive call keeps
+a terminal ToolApprovalRequest plus Event/Audit source, and deployment-locked risks
+cannot be auto-approved.
 
 SSE replays persisted Run Events and resumes from `Last-Event-ID`; the CLI drops
-duplicate sequences and reads the final Turn after the stream closes. Ctrl+C
-during execution calls the existing revisioned Run-tree cancellation service.
+duplicate sequences and reads the final Turn after the stream closes. Interactive
+TTY chat keeps `prompt_async` active while a separate HTTP client watches the queue
+head. Its footer consumes only the curated execution projection plus server model,
+frozen/current mode and queue count. Approval temporarily replaces the composer and
+restores the exact draft/cursor afterward. Ctrl+C during execution calls the existing
+revisioned Run-tree cancellation service; Ctrl+D and `/exit` only detach.
 ContextSnapshot links the Conversation/Turn and freezes selected Turn IDs,
 summary hash, bounded Artifact references, token budget and trimming facts. The
 selector keeps the current input, adds recent completed Turns newest-first, and

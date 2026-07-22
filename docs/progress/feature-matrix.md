@@ -48,24 +48,25 @@
 
 ## Nico CLI 一等入口
 
-下表独立跟踪 CLI-A–F。CLI-F 已完成 ToolApprovalRequest、挂起/恢复、断线重连、审批审计和交互式决定。
+下表独立跟踪 CLI。Session controls 已在 CLI-F 的审批恢复之上增加持久 FIFO、
+Conversation 权限模式、异步 composer 和常驻安全 footer。
 
 | 功能 | 设计完成 | 代码完成 | 单测完成 | 集成测试 | E2E | 文档 | 最终状态 |
 | -- | ---- | ---- | ---- | ---- | --- | -- | ---- |
-| `nico chat` | 已设计 | 新建/单轮/滚动交互、resume/continue/read-only、上下文/附件/审批 slash commands 和 Ctrl+C 权威取消已实现 | 参数、选择、终态、取消、审批、slash、字节传输与私有文件已覆盖 | 真实 API/Worker、摘要、ContextSnapshot、附件与审批恢复通过 | Compose chat/SIGINT、inspect、附件及断线审批恢复通过 | README、CLI 使用/开发文档已完成 | CLI-F 已实现 |
+| `nico chat` | 已设计 | 新建/单轮/异步滚动交互、持久 FIFO、resume/continue/read-only、权限/队列/上下文/附件/审批 slash commands、草稿恢复和 Ctrl+C 权威取消已实现 | 参数、异步提交、current/next footer、窄宽隐私、取消/退出、审批草稿、slash 与文件安全已覆盖 | 双 Worker 串行领取、动态上下文、异常暂停、Runtime 权限快照与审批恢复通过 | PTY 连续入队、detach/resume、失败 retry/resume、审批恢复和隐私 canary 已覆盖 | CLI 使用、开发、架构与测试文档已完成 | Session controls 已实现 |
 | `nico exec` | 已设计 | prompt、严格 JSON input、私有原子 output、JSON、版本固定和 detach 已实现 | runner、参数、冲突、文件权限与符号链接拒绝已覆盖 | 复用真实 Conversation/Turn/Run API | attached、input/output 与 detach Compose E2E 通过 | CLI 使用与 README 已完成 | CLI-D 已验证 |
 | `nico run watch` | 已设计 | SSE 观察、Last-Event-ID cursor、终态校准和 Ctrl+C 仅退出观察已实现 | cursor、去重、SIGINT 语义与 JSON 已覆盖 | 复用真实持久化 Event SSE | detached Run 首次观察与 cursor 续读通过 | CLI 使用文档已完成 | CLI-D 已验证 |
 | Conversation CRUD | 已设计 | RLS/幂等/冻结版本/列表/读取/标题与归档 API 已实现 | 合同与 OpenAPI 已覆盖 | 双租户、幂等、归档、不可变约束通过 | chat/list/get/history 使用真实 API 通过 | API、领域、状态机、CLI 文档已完成 | CLI-C 已验证 |
-| ConversationTurn 与 Task/Run 原子链 | 已设计 | 同事务 Turn→Task→首次 Run、Run 权威投影、树取消和冻结版本 retry 已实现 | 状态、输入/重试边界与取消已覆盖 | 原子链、活动 Run 防重、终态输出/usage、失败 retry 通过 | 双 Turn、SIGINT 取消与 CLI `/retry` 路径可用 | API、领域、状态机已完成 | CLI-D 已验证 |
+| ConversationTurn 与 Task/Run 原子链 | 已设计 | 同事务 Turn→Task→Pending Run、有界 FIFO、queue pause/resume、Run 权威投影、树取消和暂停原因 retry 已实现 | 状态、容量、输入/重试边界、queue target 与取消已覆盖 | 双 claimer 不并行、租约恢复、终态投影、上下文延迟冻结和失败 retry 通过 | 三 Turn 跨 detach 严格串行，失败后保留并显式恢复 | API、领域、状态机、架构和 CLI 已完成 | Session controls 已实现 |
 | resume / continue / history | 已设计 | 指定恢复、筛选最近活跃会话、只读历史与 500 条有界读取已实现 | 选择冲突、缺目标和命令输出已覆盖 | 两轮持久化历史与版本冻结通过 | 跨 CLI 进程 continue/resume/history 通过 | CLI 使用文档已完成 | CLI-C 已验证 |
 | CLI SSE streaming | 复用服务端 SSE 的方案已设计 | 增量 parser、分片/多行、Last-Event-ID、sequence 去重、3 次有界重连、连接状态回调和终态校准已实现 | parser、client 去重/续读、重连/恢复通知及耗尽错误码已覆盖 | 真实 Run SSE 与 Turn 终态通过 | 双轮 RunCompleted 流与无 ANSI JSON 通过 | CLI 使用/开发文档已完成 | 安全执行进度已实现 |
 | Slash commands | 已设计 | 会话、状态、检查、控制、compact/attach/download 与 approvals/approve/reject 共 30 条命令及补全已实现 | parser、引号、未知命令、审批、help/title 与文件安全已覆盖 | 所有命令调用租户 API | `/help`、`/inspect`、Goal E 文件命令与 Goal F 审批真实 PTY 通过 | CLI 命令表已更新 | CLI-F 已实现 |
 | Attachments | Run 前暂存→Run Artifact 已设计 | ConversationAttachment、私有 MinIO、TTL、数量/总量、一次性消费、重试复用与 CLI 上传/下载已实现 | client 原始字节与 0600/symlink 拒绝已覆盖 | 幂等、RLS、物化、授权下载和内容完整性通过 | 真实 CLI 本地文件→服务端字节→Run Artifact→下载通过 | ADR、API、领域、安全与 CLI 文档已完成 | CLI-E 已验证 |
 | Conversation summary | summary + recent turns 已设计 | `/compact` 创建独立 Task/Run，保存覆盖 sequence、输入 Hash、摘要与 ModelCall 引用 | 合同、slash 和输出已覆盖 | Native fake model 验证独立 ModelCall 与摘要落库 | Compose Worker 摘要链通过 | ADR、API、CLI 与上下文裁剪文档已完成 | CLI-E 已验证 |
 | Conversation ContextSnapshot | 复用并增量扩展现有表 | RuntimeSession 冻结 summary/recent Turns/Artifact refs，ContextSnapshot 保存精确选择、Hash、预算和裁剪事实 | 有界选择与冻结合同已覆盖 | 0018 迁移/RLS、Native ModelCall、下一轮 summary 选择通过 | Goal E 上下文与 compact 路径通过 | API、领域与架构已完成 | CLI-E 已验证 |
-| Tool approval workflow | ToolApprovalRequest 与唤醒流程已设计 | requested→approved/rejected/expired/cancelled、once/run、RLS、API、SSE、Native checkpoint suspension、Worker wake/reconcile、CLI 决策/重连已实现 | 状态、合同、client、交互与非 TTY 禁止自动批准已覆盖 | 0019 迁移往返、RLS、幂等/冲突、挂起恢复、审批前零副作用、超时与 exactly-once 通过 | JSON 断开、PTY resume、两次审批、file/Python 执行与审计通过 | ADR、API、架构、Runtime、Tool、CLI 文档已完成 | CLI-F 已实现 |
+| Tool approval workflow | ToolApprovalRequest、Conversation mode 与唤醒流程已设计 | ask/auto-medium/auto-all、RuntimeSession 冻结、部署锁、creator-only 更新、policy 决定来源、once/run/reject 与队列暂停已实现 | 状态、合同、client、授权先行、模式矩阵、footer 和非 TTY 禁止隐式授权已覆盖 | RLS、幂等/冲突、挂起恢复、自动批准审计、未授权拒绝、超时与 exactly-once 通过 | JSON 断开、PTY resume、两次人工审批及 session current/next 权限通过 | 配置、架构、Runtime、Tool 与 CLI 文档已完成 | Session controls 已实现 |
 | Terminal cat logo | 用户反馈后收敛为三行简易小猫 | 蓝色轮廓、金色面部细节与无色同形输出已实现 | 彩色、无色、窄宽、非 Unicode 与 JSON omission 已覆盖 | 不适用 | 彩色 PTY 与非 TTY 同轮廓输出通过 | 当前字符画、颜色和兼容策略已更新 | CLI-D 后续迭代 |
-| Rich terminal rendering | 单行临时状态与持久结果边界已设计 | TTY spinner、阶段/耗时/重连、工具终态/Artifact/审批/失败和 cleanup 已实现；内部生命周期与私有推理默认隐藏 | 阶段投影、窄宽、脱敏、工具耗时、审批暂停、终态/异常/中断 cleanup、Chat/Exec parity 已覆盖 | 读取真实 API 持久化事实 | TTY、非 TTY、JSON 与交互 inspect 通过 | 执行反馈与审计入口合同已完成 | 安全执行进度已实现 |
+| Rich terminal rendering | 临时状态、交互 footer 与持久结果边界已设计 | exec/watch spinner；chat 动态 model/permission/activity/queue footer、后台安全输出和审批草稿恢复已实现 | 阶段投影、窄宽、current/next、脱敏、工具耗时、终态 once 与取消/detach cleanup 已覆盖 | 读取真实 queue、RuntimeSession 和 Event 事实 | PTY composer/footer、非 TTY、JSON、审批与交互 inspect 通过 | 执行反馈与审计入口合同已完成 | Session controls 已实现 |
 | Config / profiles | platformdirs + TOML + env 已设计 | 多 profile、CLI/env 覆盖、token 环境引用、原子替换、0700/0600 已实现 | roundtrip、优先级、权限、非法 TOML/URL/env/name 已覆盖 | 真实 CLI 写入并读取服务端上下文通过 | profile set/use、doctor 和资源查询通过 | 使用、安全与开发说明已完成 | CLI-B 已验证 |
 | JSON / no-color / non-TTY output | 输出合同已设计 | exec/watch 单 JSON、stderr error、Rich human、NO_COLOR、非 TTY 静态反馈与 compact logo 已实现 | parse、无 ANSI、无合成进度事件、error channel 和 TTY capability 已覆盖 | 真实服务端响应可解析 | exec/watch JSON、彩色 PTY 与非 TTY 无 ANSI 通过 | 输出合同已完成 | 安全执行进度保持兼容 |
 | CLI audit / artifacts integration | 复用现有 Run 查询 API | `/audit`、`/artifacts`、`/inspect`、`/attach` 与 `/download` 已实现 | API 映射、原始字节、renderer 与安全写入已覆盖 | Run 授权、Hash/size 与 Conversation 引用验证通过 | 交互 inspect 与附件往返通过 | 查询、上传和下载说明已完成 | CLI-E 已验证 |

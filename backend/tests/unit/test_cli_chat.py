@@ -451,6 +451,13 @@ class BlockingWatchClient:
         self.release.set()
 
 
+class FailingWatchClient(BlockingWatchClient):
+    def stream_run_events(self, _run_id: str, *, on_connection=None):
+        del on_connection
+        raise RuntimeError("client closed during stream setup")
+        yield
+
+
 def _conversation(value: str) -> dict[str, Any]:
     return {
         "id": value,
@@ -1130,6 +1137,30 @@ async def test_interactive_ctrl_c_targets_only_active_head_and_detach_does_not_c
     assert "run-1" not in rendered
     await session.close()
     assert client.cancelled == [("turn-1", 4)]
+
+
+async def test_interactive_watcher_converts_transport_races_to_safe_cli_errors(
+    tmp_path: Path,
+) -> None:
+    client = FakeInteractiveChatClient()
+    watcher = FailingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+    session._loop = asyncio.get_running_loop()
+
+    await asyncio.to_thread(
+        session._watch_blocking,
+        "run-1",
+        "turn-1",
+        "conversation-1",
+    )
+    kind, value = await session._background.get()
+
+    assert kind == "error"
+    run_id, error = value
+    assert run_id == "run-1"
+    assert error.code == "CHAT_WATCH_FAILED"
+    assert "client closed" not in error.message
+    await session.close()
 
 
 def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Path) -> None:
