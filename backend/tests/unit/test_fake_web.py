@@ -87,6 +87,44 @@ async def test_fake_model_scripts_search_fetch_and_observed_url_citation() -> No
     assert text == f"Verified offline Web evidence: {EVIDENCE_URL}"
 
 
+@pytest.mark.asyncio
+async def test_fake_model_does_not_invent_an_unadvertised_tool() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=model_app), base_url="http://model"
+    ) as client:
+        response = await client.post(
+            "/openai/v1/chat/completions",
+            headers={"Authorization": "Bearer goal-g-fake-token"},
+            json={
+                "model": "fake-openai",
+                "messages": [{"role": "user", "content": "confirm provider route"}],
+                "stream": True,
+                "tools": [
+                    {"type": "function", "function": {"name": "delegate_agent"}},
+                    {"type": "function", "function": {"name": "store_artifact"}},
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    assert not any(
+        event["choices"][0]["delta"].get("tool_calls") for event in events if event.get("choices")
+    )
+    assert (
+        "".join(
+            event["choices"][0]["delta"].get("content", "")
+            for event in events
+            if event.get("choices")
+        )
+        == "Nico native runtime is ready."
+    )
+
+
 async def _complete(client: AsyncClient, headers: dict, messages: list[dict]) -> list[dict]:
     response = await client.post(
         "/v1/chat/completions",

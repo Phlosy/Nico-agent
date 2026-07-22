@@ -503,6 +503,33 @@ async def test_web_status_test_and_disable_preserve_immutable_versions() -> None
         assert ready.provider == "searxng"
         assert [agent.id for agent in ready.agents] == [agent_id]
 
+        unrelated_candidate = WebProviderCandidate(
+            provider="brave",
+            endpoint_key="managed",
+            credential_ref="env:NICO_TOOL_SECRET_UNRELATED_PROBE",
+            catalog_revision=get_web_provider_catalog(settings).catalog_revision,
+        )
+        unrelated_probe = await service.create_probe(
+            context,
+            WebProbeCreate(
+                candidate=unrelated_candidate,
+                idempotency_key=f"web-unrelated-{uuid4().hex}",
+            ),
+        )
+        async with database.tenant_transaction(context) as session:
+            unrelated = await session.get(ProviderProbe, unrelated_probe.id)
+            assert unrelated is not None
+            unrelated.status = "failed"
+            unrelated.error_code = "WEB_PROVIDER_AUTH_FAILED"
+            unrelated.error_detail = "unrelated candidate failed"
+            unrelated.completed_at = datetime.now(UTC)
+            unrelated.revision += 1
+
+        still_ready = await service.status(context)
+        assert still_ready.diagnosis == "ready"
+        assert still_ready.latest_probe is not None
+        assert still_ready.latest_probe.id == probe.id
+
         test_probe = await service.test_configuration(
             context,
             WebConfigurationTestCreate(idempotency_key=f"web-test-{uuid4().hex}"),

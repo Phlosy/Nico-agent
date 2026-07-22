@@ -229,6 +229,7 @@ class ToolGateway:
                 prepared.executor.spec.retry_policy.max_attempts + 1,
             ):
                 started = time.monotonic()
+                retry_after_seconds = prepared.executor.spec.retry_policy.backoff_seconds
                 try:
                     async with asyncio.timeout(prepared.executor.spec.timeout_seconds):
                         execution = await prepared.executor.execute(
@@ -266,9 +267,22 @@ class ToolGateway:
                     attempts.append(
                         self._attempt(attempt_number, started, status="failed", code=exc.code)
                     )
-                    if not self._should_retry(prepared.executor.spec, exc.code, attempt_number):
+                    if not self._should_retry(
+                        prepared.executor.spec,
+                        exc.code,
+                        attempt_number,
+                        retryable=exc.retryable,
+                    ):
                         final_error = {"code": exc.code, "message": safe_message}
                         break
+                    if exc.retry_after_seconds is not None:
+                        retry_after_seconds = max(
+                            retry_after_seconds,
+                            min(
+                                exc.retry_after_seconds,
+                                prepared.executor.spec.timeout_seconds,
+                            ),
+                        )
                     if not await self._checkpoint_attempts(
                         claim,
                         worker_id=worker_id,
@@ -300,8 +314,8 @@ class ToolGateway:
                     }
                     break
 
-                if prepared.executor.spec.retry_policy.backoff_seconds:
-                    await asyncio.sleep(prepared.executor.spec.retry_policy.backoff_seconds)
+                if retry_after_seconds:
+                    await asyncio.sleep(retry_after_seconds)
             if final_status is ToolCallStatus.FAILED and final_error is None:
                 final_error = {
                     "code": "TOOL_RETRY_EXHAUSTED",
@@ -1005,9 +1019,19 @@ class ToolGateway:
         )
 
     @staticmethod
-    def _should_retry(spec: ToolDefinitionSpec, code: str, attempt_number: int) -> bool:
+    def _should_retry(
+        spec: ToolDefinitionSpec,
+        code: str,
+        attempt_number: int,
+        *,
+        retryable: bool | None = None,
+    ) -> bool:
         policy = spec.retry_policy
-        return attempt_number < policy.max_attempts and code in policy.retryable_codes
+        return (
+            retryable is not False
+            and attempt_number < policy.max_attempts
+            and code in policy.retryable_codes
+        )
 
     @staticmethod
     def _attempt(

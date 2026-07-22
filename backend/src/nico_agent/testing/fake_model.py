@@ -211,7 +211,7 @@ async def chat_completions(
             values = _goal_j_chunks(command, tool_observations)
         elif command.model == "web-e2e-fake":
             values = _web_e2e_chunks(command, tool_observations)
-        elif command.tools and tool_observations == 0:
+        elif _has_tool(command, "file.write") and tool_observations == 0:
             values = _tool_chunks(
                 call_id="goal-h-file-write",
                 name="file.write",
@@ -220,13 +220,13 @@ async def chat_completions(
                     "content": "written exactly once before worker recovery\n",
                 },
             )
-        elif command.tools and tool_observations == 1:
+        elif _has_tool(command, "python.execute") and tool_observations == 1:
             values = _tool_chunks(
                 call_id="goal-h-python",
                 name="python.execute",
                 arguments={"code": "result = {'sum': sum(range(6)), 'proof': 'sandbox'}"},
             )
-        elif command.tools:
+        elif tool_observations >= 2:
             values = _text_chunks("Nico ReAct recovered safely after two tool observations.")
         else:
             values = _text_chunks("Nico native runtime is ready.")

@@ -45,6 +45,9 @@ jobs:
       - name: Run backend and frontend tests
         run: scripts/test.sh
 
+      - name: Run real dependency integration tests
+        run: scripts/test-integration.sh
+
       - name: Run installer and release contract tests
         run: scripts/test-install.sh
 

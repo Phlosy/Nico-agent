@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -46,13 +44,35 @@ from nico_agent.web_onboarding.contracts import (
     WebSetupReadiness,
     canonical_candidate_hash,
 )
+from nico_agent.web_onboarding.policy import (
+    FETCH_REF as _FETCH_REF,
+)
+from nico_agent.web_onboarding.policy import (
+    SEARCH_REF as _SEARCH_REF,
+)
+from nico_agent.web_onboarding.policy import (
+    disable_preview_hash as _disable_preview_hash,
+)
+from nico_agent.web_onboarding.policy import (
+    merge_agent_policy as _merge_agent_policy,
+)
+from nico_agent.web_onboarding.policy import (
+    merge_tenant_policy as _merge_tenant_policy,
+)
+from nico_agent.web_onboarding.policy import (
+    preview_hash as _preview_hash,
+)
+from nico_agent.web_onboarding.policy import (
+    remove_agent_web_policy as _remove_agent_web_policy,
+)
+from nico_agent.web_onboarding.policy import (
+    remove_tenant_web_policy as _remove_tenant_web_policy,
+)
+from nico_agent.web_onboarding.policy import (
+    strings as _strings,
+)
 
 _PREVIEW_TTL = timedelta(minutes=15)
-_SEARCH_REF = "web.search@1.0.0"
-_FETCH_REF = "web.fetch@1.0.0"
-_SEARCH_PERMISSION = "network.web.search"
-_FETCH_PERMISSION = "network.web.fetch"
-_BRAVE_SECRET = "web_search_brave_api_key"
 
 
 class WebOnboardingService:
@@ -84,6 +104,7 @@ class WebOnboardingService:
             provider = provider_value if provider_value in {"brave", "searxng"} else None
             configured = provider is not None and bool(configured_web.get("endpoint_key"))
             enabled = configured and configured_web.get("enabled") is True
+            candidate_hash = configured_web.get("candidate_hash")
 
             tenant_policy_value = settings.get("tool_policy")
             tenant_policy = tenant_policy_value if isinstance(tenant_policy_value, dict) else {}
@@ -119,6 +140,8 @@ class WebOnboardingService:
                 .where(
                     ProviderProbe.tenant_id == context.tenant_id,
                     ProviderProbe.kind == "verify_web",
+                    ProviderProbe.provider_key == provider,
+                    ProviderProbe.candidate_hash == candidate_hash,
                 )
                 .order_by(ProviderProbe.created_at.desc())
                 .limit(1)
@@ -971,134 +994,3 @@ class WebOnboardingService:
                 "the Web Provider verification was already activated",
             )
         return WebActivationRead.model_validate(audit.details["result"])
-
-
-def _merge_tenant_policy(
-    value: Any,
-    candidate: WebProviderCandidate,
-) -> dict[str, Any]:
-    policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = sorted(set(_strings(policy.get("allow"))) | {_SEARCH_REF, _FETCH_REF})
-    policy["permissions"] = sorted(
-        set(_strings(policy.get("permissions"))) | {_SEARCH_PERMISSION, _FETCH_PERMISSION}
-    )
-    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    search_config, fetch_config = _tool_configs(candidate)
-    tools[_SEARCH_REF] = search_config
-    tools[_FETCH_REF] = fetch_config
-    policy["tools"] = tools
-    secret_refs = (
-        deepcopy(policy.get("secret_refs")) if isinstance(policy.get("secret_refs"), dict) else {}
-    )
-    if candidate.credential_ref is not None:
-        secret_refs[_BRAVE_SECRET] = candidate.credential_ref
-    else:
-        secret_refs.pop(_BRAVE_SECRET, None)
-    policy["secret_refs"] = secret_refs
-    return policy
-
-
-def _merge_agent_policy(
-    value: Any,
-    candidate: WebProviderCandidate,
-) -> dict[str, Any]:
-    policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = sorted(set(_strings(policy.get("allow"))) | {_SEARCH_REF, _FETCH_REF})
-    policy["permissions"] = sorted(
-        set(_strings(policy.get("permissions"))) | {_SEARCH_PERMISSION, _FETCH_PERMISSION}
-    )
-    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    search_config, fetch_config = _tool_configs(candidate)
-    tools[_SEARCH_REF] = search_config
-    tools[_FETCH_REF] = fetch_config
-    policy["tools"] = tools
-    secrets = set(_strings(policy.get("secrets")))
-    if candidate.credential_ref is not None:
-        secrets.add(_BRAVE_SECRET)
-    else:
-        secrets.discard(_BRAVE_SECRET)
-    policy["secrets"] = sorted(secrets)
-    return policy
-
-
-def _tool_configs(candidate: WebProviderCandidate) -> tuple[dict[str, Any], dict[str, Any]]:
-    policy = candidate.policy
-    return (
-        {
-            "provider": candidate.provider,
-            "safe_search": policy.safe_search,
-            "cache_ttl_seconds": policy.cache_ttl_seconds,
-            "rate_limit_per_minute": policy.rate_limit_per_minute,
-        },
-        {
-            "allowed_domains": list(policy.allowed_domains),
-            "cache_ttl_seconds": policy.cache_ttl_seconds,
-        },
-    )
-
-
-def _remove_tenant_web_policy(value: Any) -> dict[str, Any]:
-    policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = [
-        item for item in _strings(policy.get("allow")) if item not in {_SEARCH_REF, _FETCH_REF}
-    ]
-    policy["permissions"] = [
-        item
-        for item in _strings(policy.get("permissions"))
-        if item not in {_SEARCH_PERMISSION, _FETCH_PERMISSION}
-    ]
-    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    tools.pop(_SEARCH_REF, None)
-    tools.pop(_FETCH_REF, None)
-    policy["tools"] = tools
-    secret_refs = (
-        deepcopy(policy.get("secret_refs")) if isinstance(policy.get("secret_refs"), dict) else {}
-    )
-    secret_refs.pop(_BRAVE_SECRET, None)
-    policy["secret_refs"] = secret_refs
-    return policy
-
-
-def _remove_agent_web_policy(value: Any) -> dict[str, Any]:
-    policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = [
-        item for item in _strings(policy.get("allow")) if item not in {_SEARCH_REF, _FETCH_REF}
-    ]
-    policy["permissions"] = [
-        item
-        for item in _strings(policy.get("permissions"))
-        if item not in {_SEARCH_PERMISSION, _FETCH_PERMISSION}
-    ]
-    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    tools.pop(_SEARCH_REF, None)
-    tools.pop(_FETCH_REF, None)
-    policy["tools"] = tools
-    policy["secrets"] = [item for item in _strings(policy.get("secrets")) if item != _BRAVE_SECRET]
-    return policy
-
-
-def _strings(value: Any) -> list[str]:
-    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
-
-
-def _preview_hash(probe_id: UUID, candidate_hash: str, projection: dict[str, Any]) -> str:
-    encoded = json.dumps(
-        {
-            "schema_version": 1,
-            "probe_id": str(probe_id),
-            "candidate_hash": candidate_hash,
-            "projection": projection,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _disable_preview_hash(projection: dict[str, Any]) -> str:
-    encoded = json.dumps(
-        {"schema_version": 1, "projection": projection},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return hashlib.sha256(encoded).hexdigest()

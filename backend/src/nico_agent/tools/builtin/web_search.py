@@ -164,7 +164,16 @@ class WebSearchExecutor:
                     config=provider_config,
                 )
             except SearchProviderError as exc:
-                raise ToolExecutorFailure(exc.code, exc.message) from exc
+                raise ToolExecutorFailure(
+                    exc.code,
+                    exc.message,
+                    retryable=exc.retryable,
+                    retry_after_seconds=(
+                        min(exc.retry_after_seconds, self.spec.timeout_seconds)
+                        if exc.retry_after_seconds is not None
+                        else None
+                    ),
+                ) from exc
             if page.provider != provider_key:
                 raise ToolExecutorFailure(
                     "WEB_PROVIDER_PROTOCOL_ERROR",
@@ -285,6 +294,7 @@ class WebSearchExecutor:
             raise ToolExecutorFailure(
                 "WEB_PROVIDER_RATE_LIMITED",
                 "Web search local rate limit was exceeded",
+                retryable=False,
             )
 
 

@@ -198,6 +198,7 @@ async def test_rate_and_provider_failures_map_to_stable_tool_errors() -> None:
             {"web_search_brave_api_key": "secret"},
         )
     assert rate_error.value.code == "WEB_PROVIDER_RATE_LIMITED"
+    assert rate_error.value.retryable is False
 
     provider = FakeProvider(
         "brave",
@@ -205,6 +206,7 @@ async def test_rate_and_provider_failures_map_to_stable_tool_errors() -> None:
             "WEB_PROVIDER_UNAVAILABLE",
             "Provider unavailable",
             retryable=True,
+            retry_after_seconds=7,
         ),
     )
     failed, _ = _executor(cache=FakeCache(), limiter=FakeLimiter(), provider=provider)
@@ -215,3 +217,5 @@ async def test_rate_and_provider_failures_map_to_stable_tool_errors() -> None:
             {"web_search_brave_api_key": "secret"},
         )
     assert provider_error.value.code == "WEB_PROVIDER_UNAVAILABLE"
+    assert provider_error.value.retryable is True
+    assert provider_error.value.retry_after_seconds == 7

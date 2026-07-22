@@ -10,6 +10,7 @@ from nico_agent.tools import (
     ToolDefinitionSpec,
     ToolExecutionContext,
     ToolExecutionResult,
+    ToolGateway,
     ToolIsolation,
     ToolRegistry,
     ToolRetryPolicy,
@@ -17,7 +18,12 @@ from nico_agent.tools import (
     executor_required_secret_names,
 )
 from nico_agent.tools.contracts import canonical_json
-from nico_agent.tools.errors import ToolNotFound, ToolRegistryConflict, ToolSchemaViolation
+from nico_agent.tools.errors import (
+    ToolExecutorFailure,
+    ToolNotFound,
+    ToolRegistryConflict,
+    ToolSchemaViolation,
+)
 
 
 def _spec(**overrides) -> ToolDefinitionSpec:
@@ -150,3 +156,31 @@ def test_canonical_json_rejects_non_finite_or_non_json_values() -> None:
         canonical_json({"value": float("nan")})
     with pytest.raises(TypeError):
         canonical_json({"value": {1, 2}})
+
+
+def test_executor_retry_override_can_fail_closed_without_widening_policy() -> None:
+    spec = _spec(
+        retry_policy=ToolRetryPolicy(
+            max_attempts=2,
+            backoff_seconds=0.2,
+            retryable_codes=frozenset({"TEMPORARY"}),
+        )
+    )
+    local_limit = ToolExecutorFailure("TEMPORARY", "limited", retryable=False)
+    provider_limit = ToolExecutorFailure(
+        "TEMPORARY",
+        "limited",
+        retryable=True,
+        retry_after_seconds=7,
+    )
+
+    assert (
+        ToolGateway._should_retry(spec, local_limit.code, 1, retryable=local_limit.retryable)
+        is False
+    )
+    assert (
+        ToolGateway._should_retry(spec, provider_limit.code, 1, retryable=provider_limit.retryable)
+        is True
+    )
+    assert provider_limit.retry_after_seconds == 7
+    assert ToolGateway._should_retry(spec, "NOT_DECLARED", 1, retryable=True) is False

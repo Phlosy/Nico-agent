@@ -27,7 +27,7 @@
 | Goal L full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-l/<UTC> scripts/verify-goal-l.sh` | Docs/Markdown/Compose checks, full suites, Goal G-L behavior regression, optional Adapter contract and evidence manifest |
 | CLI Goal C chat E2E | `scripts/e2e-cli-goal-c.sh` | Two durable turns, continue/resume/history, SSE, JSON/no-ANSI and real SIGINT server cancellation |
 | CLI Goal C full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-c/<UTC> scripts/verify-cli-goal-c.sh` | Source/docs/migration checks, all suites, CLI-B regression and CLI-C Compose E2E |
-| CLI Goal D full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-d/<UTC> scripts/verify-cli-goal-d.sh` | All suites, migration roundtrip, CLI-B/C regression, exec/detach/watch, PTY slash and coin-cat E2E |
+| CLI Goal D full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-d/<UTC> scripts/verify-cli-goal-d.sh` | All suites, migration roundtrip, CLI-B/C regression, exec/detach/watch, PTY slash and terminal-cat E2E |
 | CLI Goal E context E2E | `scripts/e2e-cli-goal-e.sh` | Real staged bytes, Turn-owned Artifact, download, compact Run, summary and ContextSnapshot facts |
 | CLI Goal E full gate | `NICO_EVIDENCE_DIR=artifacts/goals/cli-goal-e/<UTC> scripts/verify-cli-goal-e.sh` | All suites, migration roundtrip, CLI-B/C/D regression and Goal E security/E2E evidence |
 | CLI Goal F approval E2E | `scripts/e2e-cli-goal-f.sh` | Non-interactive disconnect at ApprovalRequested, PTY resume, once/run decisions, two sensitive tools, audit and exactly-once execution |
@@ -46,11 +46,12 @@ platform processing p95 below 100 ms and near-limit HTML extraction p95 below 25
 and remote network wait are intentionally excluded.
 
 GitHub 的 `Test` workflow 在面向 `main` 的 Pull Request 和进入 `main` 的
-push 上执行 `scripts/test.sh`、`scripts/test-install.sh` 与确定性的 Provider
-onboarding E2E，并以
-`workflow_call` 暴露同一测试门。`Release` workflow 只监听 `v*` Tag；它先
-复用测试门并校验 Tag 与 Python 包版本一致，随后才获得 GHCR/GitHub Release
-所需的写权限。普通 merge 不发布镜像或 Release。
+push 上执行 `scripts/test.sh`、`scripts/test-integration.sh`、
+`scripts/test-install.sh`、确定性的 Provider onboarding E2E 与离线 Web tools E2E，并以
+`workflow_call` 暴露同一测试门。`Release` workflow 只监听 `v*` Tag；它先校验
+annotated Tag、`main` 归属及 Python 包版本，再复用测试门，随后才获得
+GHCR/GitHub Release 所需的写权限。成功发布包含三个多架构镜像、独立 CLI
+wheel、安装器、bundle、镜像摘要和校验和；普通 merge 不发布这些内容。
 
 ## Security-sensitive coverage
 

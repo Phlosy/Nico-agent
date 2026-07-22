@@ -148,7 +148,20 @@ class ToolApprovalCheckpointRequired(ToolError):
 
 
 class ToolExecutorFailure(ToolError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         if not code or len(code) > 100:
             raise ValueError("tool executor error code must contain 1 to 100 characters")
+        if retryable is not None and not isinstance(retryable, bool):
+            raise ValueError("tool executor retryable override must be boolean")
+        if retry_after_seconds is not None and not 0 <= retry_after_seconds <= 300:
+            raise ValueError("tool executor retry delay must be between 0 and 300 seconds")
         super().__init__(code, message[:1000])
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
