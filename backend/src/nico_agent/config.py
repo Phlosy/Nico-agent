@@ -9,6 +9,8 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
+from nico_agent import __version__
+
 
 class Settings(BaseSettings):
     """Runtime settings shared by API, worker, migrations and health tooling."""
@@ -21,7 +23,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Nico Agent Platform"
-    app_version: str = "0.2.0"
+    app_version: str = __version__
     environment: Literal["development", "test", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 

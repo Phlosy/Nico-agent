@@ -33,7 +33,7 @@ make install
    `nico-agent-web:<tag>`；
 2. 从当前源码构建真实 CLI wheel；
 3. 调用 `scripts/package-release.sh` 生成 `dist/release/install.sh`、bundle、
-   `version.txt` 和 `SHA256SUMS`。
+   独立 CLI wheel、`version.txt` 和 `SHA256SUMS`。
 
 `make install` 会检查这四个资产、内部版本和三个本地镜像。它们缺失或不完整
 时先自动运行 `make release`，否则直接复用，然后调用：
@@ -253,14 +253,25 @@ Docker Engine、共享镜像缓存，或用户自行配置的外部 Secret。
 
 ## 从源码开发
 
-贡献者仍可从 checkout 构建本地镜像并以可编辑方式安装 CLI：
+贡献者可以让数据依赖运行在 Compose 中，其余服务和 CLI 直接从 checkout
+运行，不构建 Nico 应用镜像：
 
 ```bash
-cp .env.example .env
-scripts/dev.sh --detach
-python3 -m venv .venv
-.venv/bin/pip install -e 'backend[dev]'
+make run
 ```
+
+`make run` 会自动同步 editable CLI，并把 `nico` 链接到
+`NICO_BIN_DIR`（默认 `~/.local/bin`）。它还会在源码数据库中校验 development
+tenant/project，并使用 `.nico/dev` 保存独立的 CLI profile 和 Provider 密钥，
+不会复用 Release 安装的 `~/.nico`。另一个终端可直接运行：
+
+```bash
+nico chat
+nico --version
+```
+
+需要验证 Dockerfile 与完整 Compose 拓扑时再运行
+`scripts/bootstrap.sh && scripts/dev.sh --detach`。
 
 源码部署使用根目录 `.env`，Release 安装则使用
 `~/.nico/config/deployment.env`；不要把任一实际 Secret 文件提交到 Git。
@@ -268,9 +279,11 @@ python3 -m venv .venv
 ## 发布边界
 
 面向 `main` 的 Pull Request 和进入 `main` 的 push 只运行 Test workflow。
-只有与包版本一致的 `vX.Y.Z` Tag 才触发 Release workflow；它复用相同测试门，
-随后发布版本化的 backend、Hermes 和 web GHCR 镜像，再创建带校验和的 GitHub
-Release。首次公开发布前，维护者还必须确认三个 GHCR Package 允许匿名拉取。
+只有位于 `main`、与包版本一致的 annotated `vX.Y.Z` Tag 才触发 Release
+workflow；它先做低成本版本校验，再复用相同测试门，随后发布版本化的 backend、
+Hermes 和 web GHCR 镜像。GitHub Release 会独立包含 CLI wheel、安装器、bundle、
+版本文件、三个不可变镜像摘要和统一校验和，并可安全重跑。首次公开发布前，
+维护者还必须确认三个 GHCR Package 允许匿名拉取。
 
 这仍是 Alpha 的本机/受信网络部署路径。它没有增加生产身份认证、备份、
 Secret Manager、镜像签名、Kubernetes Manifest 或公网加固。

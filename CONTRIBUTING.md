@@ -14,23 +14,29 @@ The repository does not yet include an open-source license. Before making a subs
 ## Set up the repository
 
 ```bash
-cp .env.example .env
-scripts/bootstrap.sh
-scripts/dev.sh --detach
+make run
 ```
 
-The API container applies Alembic migrations before starting. Check the stack with:
+This synchronizes the editable backend and `nico` command, starts PostgreSQL,
+Redis, and MinIO with Compose, then runs migrations, API, Worker, Sandbox Runner,
+and Web directly from the source tree. It bootstraps an isolated development CLI
+profile under `.nico/dev` and does not build Nico application images.
+Check the stack with:
 
 ```bash
-curl http://localhost:18000/api/v1/health/ready
-docker compose ps
+curl http://localhost:8000/api/v1/health/ready
+nico --version
 ```
 
-Stop the stack without deleting data:
+Press `Ctrl-C` to stop source processes. Stop the data services without deleting
+their volumes:
 
 ```bash
-scripts/cleanup.sh
+make infra-down
 ```
+
+Use `scripts/bootstrap.sh` and `scripts/dev.sh --detach` when you specifically
+need to validate Dockerfiles and the full containerized topology.
 
 ## Tests and formatting
 

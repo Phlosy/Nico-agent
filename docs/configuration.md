@@ -55,7 +55,7 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | `OPENROUTER_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
 | `OPENAI_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
 | `ANTHROPIC_API_KEY` | unset | 仅显式传给 Hermes Worker 的可选 Provider 凭据 |
-| `NICO_MODEL_ENDPOINT_WRITES_ENABLED` | `false` | Enable trusted-control-plane model endpoint writes; Compose development defaults to `true` |
+| `NICO_MODEL_ENDPOINT_WRITES_ENABLED` | `false` | Enable trusted-control-plane model endpoint writes; Compose and `make run` development default to `true` unless explicitly disabled |
 | `NICO_MODEL_SECRETS_FILE` | `./config/model-secrets.env` | Owner-only env file mounted only into the Native Worker for guided Provider setup |
 
 交互式 Provider 向导不要求手工编辑这些变量。Release 安装会把

@@ -53,28 +53,8 @@ done
 
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || die \
   "--tag must use vX.Y.Z format"
-PACKAGE_VERSION="$(python3 - "$ROOT_DIR/backend/pyproject.toml" <<'PY'
-import sys
-import tomllib
-
-with open(sys.argv[1], "rb") as source:
-    print(tomllib.load(source)["project"]["version"])
-PY
-)"
-MODULE_VERSION="$(python3 - "$ROOT_DIR/backend/src/nico_agent/__init__.py" <<'PY'
-import re
-import sys
-
-match = re.search(r'__version__\s*=\s*["\']([^"\']+)', open(sys.argv[1]).read())
-if match is None:
-    raise SystemExit("could not read nico_agent.__version__")
-print(match.group(1))
-PY
-)"
-[[ "$PACKAGE_VERSION" == "$MODULE_VERSION" ]] || die \
-  "package version $PACKAGE_VERSION differs from module version $MODULE_VERSION"
-[[ "$TAG" == "v$PACKAGE_VERSION" ]] || die \
-  "tag $TAG differs from package version v$PACKAGE_VERSION"
+"$ROOT_DIR/scripts/version.sh" check-tag "$TAG" >/dev/null
+PACKAGE_VERSION="${TAG#v}"
 if [[ "$VALIDATE_ONLY" == true ]]; then
   printf '[nico-release] validated %s\n' "$TAG"
   exit 0
@@ -116,7 +96,8 @@ rm -f -- \
   "$OUTPUT/install.sh" \
   "$OUTPUT/nico-agent-bundle.tar.gz" \
   "$OUTPUT/version.txt" \
-  "$OUTPUT/SHA256SUMS"
+  "$OUTPUT/SHA256SUMS" \
+  "$OUTPUT"/nico_agent_platform-*.whl
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
   SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
   [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || die "SOURCE_DATE_EPOCH must be an integer"
@@ -127,14 +108,17 @@ else
   tar -czf "$OUTPUT/nico-agent-bundle.tar.gz" -C "$TEMPORARY" nico-agent
 fi
 cp "$ROOT_DIR/scripts/install.sh" "$OUTPUT/install.sh"
+cp "$WHEEL" "$OUTPUT/$(basename "$WHEEL")"
 chmod 755 "$OUTPUT/install.sh"
 printf '%s\n' "$TAG" > "$OUTPUT/version.txt"
 (
   cd "$OUTPUT"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum install.sh nico-agent-bundle.tar.gz version.txt > SHA256SUMS
+    sha256sum install.sh nico-agent-bundle.tar.gz version.txt \
+      "$(basename "$WHEEL")" > SHA256SUMS
   else
-    shasum -a 256 install.sh nico-agent-bundle.tar.gz version.txt > SHA256SUMS
+    shasum -a 256 install.sh nico-agent-bundle.tar.gz version.txt \
+      "$(basename "$WHEEL")" > SHA256SUMS
   fi
 )
 printf '[nico-release] packaged %s in %s\n' "$TAG" "$OUTPUT"

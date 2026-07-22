@@ -64,6 +64,8 @@ import json
 import sys
 from pathlib import Path
 
+from nico_agent import __version__
+
 root = Path(sys.argv[1])
 run_id = sys.argv[2]
 tenant_id = sys.argv[3]
@@ -73,8 +75,8 @@ def read(name):
 
 assert read("health.json")["status"] == "ready"
 assert read("version.json") == {
-    "client": "0.2.0",
-    "server": "0.2.0",
+    "client": __version__,
+    "server": __version__,
     "service": "Nico Agent Platform",
 }
 doctor = read("doctor.json")

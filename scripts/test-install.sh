@@ -224,10 +224,21 @@ printf 'operator file\n' > "$DIST_DIR/keep.txt"
 "$ROOT_DIR/scripts/package-release.sh" --tag v0.2.0 --wheel "$FAKE_WHEEL" --output "$DIST_DIR"
 [[ -f "$DIST_DIR/keep.txt" ]] || fail "release packaging removed unrelated output"
 
-for asset in install.sh nico-agent-bundle.tar.gz version.txt SHA256SUMS; do
+for asset in install.sh nico-agent-bundle.tar.gz version.txt SHA256SUMS \
+  "$(basename "$FAKE_WHEEL")"; do
   [[ -f "$DIST_DIR/$asset" ]] || fail "release packaging omitted $asset"
 done
 assert_eq "$(cat "$DIST_DIR/version.txt")" "v0.2.0" "release version metadata"
+EXPECTED_CHECKSUM_FILES="$TMP_DIR/expected-checksum-files.txt"
+printf '%s\n' \
+  install.sh \
+  nico-agent-bundle.tar.gz \
+  "$(basename "$FAKE_WHEEL")" \
+  version.txt | sort > "$EXPECTED_CHECKSUM_FILES"
+if ! diff -u "$EXPECTED_CHECKSUM_FILES" \
+  <(awk '{print $2}' "$DIST_DIR/SHA256SUMS" | sort); then
+  fail "release checksum manifest is incomplete"
+fi
 
 INSTALL_INPUT="$TMP_DIR/install-input"
 mkdir -p "$INSTALL_INPUT"
@@ -277,6 +288,31 @@ fi
   fi
 )
 
+FINALIZED_DIST="$TMP_DIR/finalized-dist"
+IMAGE_DIGESTS="$TMP_DIR/image-digests"
+cp -R "$DIST_DIR" "$FINALIZED_DIST"
+mkdir -p "$IMAGE_DIGESTS"
+printf 'ghcr.io/phlosy/nico-agent-backend:v0.2.0@sha256:%064d\n' 1 \
+  > "$IMAGE_DIGESTS/backend.txt"
+printf 'ghcr.io/phlosy/nico-agent-hermes:v0.2.0@sha256:%064d\n' 2 \
+  > "$IMAGE_DIGESTS/hermes.txt"
+printf 'ghcr.io/phlosy/nico-agent-web:v0.2.0@sha256:%064d\n' 3 \
+  > "$IMAGE_DIGESTS/web.txt"
+"$ROOT_DIR/scripts/finalize-release.sh" \
+  --assets "$FINALIZED_DIST" --digests "$IMAGE_DIGESTS" >/dev/null
+[[ "$(wc -l < "$FINALIZED_DIST/images.txt" | tr -d '[:space:]')" -eq 3 ]] || \
+  fail "release image manifest omitted a deployment image"
+printf '%s\n' \
+  images.txt \
+  install.sh \
+  nico-agent-bundle.tar.gz \
+  "$(basename "$FAKE_WHEEL")" \
+  version.txt | sort > "$EXPECTED_CHECKSUM_FILES"
+if ! diff -u "$EXPECTED_CHECKSUM_FILES" \
+  <(awk '{print $2}' "$FINALIZED_DIST/SHA256SUMS" | sort); then
+  fail "finalized checksum manifest is incomplete"
+fi
+
 tar -tzf "$DIST_DIR/nico-agent-bundle.tar.gz" > "$TMP_DIR/archive-members.txt"
 printf '%s\n' \
   nico-agent/ \
@@ -320,6 +356,53 @@ printf '%s\n' \
   > "$FAKE_BIN/docker"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$FAKE_BIN/curl"
 chmod 755 "$FAKE_BIN/docker" "$FAKE_BIN/curl"
+
+FAKE_GH_LOG="$TMP_DIR/fake-gh.log"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$FAKE_GH_LOG"' \
+  'if [[ "${1:-}" == api ]]; then' \
+  '  if [[ "${FAKE_GH_LOOKUP:-exists}" == missing ]]; then printf "HTTP/2 404 Not Found\n"; exit 1; fi' \
+  '  if [[ "${FAKE_GH_LOOKUP:-exists}" == error ]]; then printf "HTTP/2 503 Unavailable\n"; exit 1; fi' \
+  '  printf "HTTP/2 200 OK\n"' \
+  'fi' > "$FAKE_BIN/gh"
+chmod 755 "$FAKE_BIN/gh"
+
+: > "$FAKE_DOCKER_LOG"
+: > "$FAKE_GH_LOG"
+GH_REPO=Phlosy/Nico-agent GH_TOKEN=test-token FAKE_GH_LOG="$FAKE_GH_LOG" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+  "$ROOT_DIR/scripts/publish-release.sh" \
+    --tag v0.2.0 --assets "$FINALIZED_DIST" >/dev/null
+[[ "$(grep -c '^buildx imagetools create --tag ' "$FAKE_DOCKER_LOG")" -eq 3 ]] || \
+  fail "release publication did not promote all staged images"
+assert_contains "$(cat "$FAKE_GH_LOG")" \
+  'release upload v0.2.0' "existing release upload"
+assert_contains "$(cat "$FAKE_GH_LOG")" '--clobber --repo Phlosy/Nico-agent' \
+  "existing release repository selection"
+
+: > "$FAKE_GH_LOG"
+GH_REPO=Phlosy/Nico-agent GH_TOKEN=test-token FAKE_GH_LOOKUP=missing \
+FAKE_GH_LOG="$FAKE_GH_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+  "$ROOT_DIR/scripts/publish-release.sh" \
+    --tag v0.2.0 --assets "$FINALIZED_DIST" >/dev/null
+assert_contains "$(cat "$FAKE_GH_LOG")" \
+  'release create v0.2.0' "missing release creation"
+assert_contains "$(cat "$FAKE_GH_LOG")" '--verify-tag --repo Phlosy/Nico-agent' \
+  "new release repository selection"
+
+: > "$FAKE_GH_LOG"
+PROMOTIONS_BEFORE_LOOKUP_ERROR="$(grep -c '^buildx imagetools create --tag ' \
+  "$FAKE_DOCKER_LOG")"
+if GH_REPO=Phlosy/Nico-agent GH_TOKEN=test-token FAKE_GH_LOOKUP=error \
+  FAKE_GH_LOG="$FAKE_GH_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+    "$ROOT_DIR/scripts/publish-release.sh" \
+      --tag v0.2.0 --assets "$FINALIZED_DIST" >/dev/null 2>&1; then
+  fail "release publication treated a transient lookup error as a missing release"
+fi
+[[ "$(grep -c '^buildx imagetools create --tag ' "$FAKE_DOCKER_LOG")" -eq \
+  "$PROMOTIONS_BEFORE_LOOKUP_ERROR" ]] || \
+  fail "release publication promoted images after a failed release lookup"
 
 : > "$FAKE_DOCKER_LOG"
 if FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
@@ -377,8 +460,11 @@ printf '%s\n' \
   > "$MAKE_RELEASE_DIR/install.sh"
 chmod 755 "$MAKE_RELEASE_DIR/install.sh"
 printf 'bundle\n' > "$MAKE_RELEASE_DIR/nico-agent-bundle.tar.gz"
-printf 'checksums\n' > "$MAKE_RELEASE_DIR/SHA256SUMS"
 printf 'v0.2.0\n' > "$MAKE_RELEASE_DIR/version.txt"
+(
+  cd "$MAKE_RELEASE_DIR"
+  sha256sum install.sh nico-agent-bundle.tar.gz version.txt > SHA256SUMS
+)
 : > "$FAKE_DOCKER_LOG"
 MAKE_INSTALL_LOG="$MAKE_INSTALL_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
   PATH="$FAKE_BIN:$PATH" make --no-print-directory -C "$ROOT_DIR" install \
@@ -560,8 +646,21 @@ assert "uses: ./.github/workflows/ci.yml" in release
 assert "packages: write" in release
 assert "contents: write" in release
 assert "scripts/package-release.sh" in release
-assert "gh release" in release
-assert "--clobber" not in release
+assert "scripts/publish-release.sh" in release
+assert "scripts/finalize-release.sh" in release
+assert "actions/upload-artifact" in release
+assert "actions/download-artifact" in release
+assert "GH_REPO:" in release
+assert "staging-${{ github.run_id }}-${{ github.run_attempt }}" in release
+assert "Install and exercise the built CLI wheel" in release
+assert "git cat-file -t" in release
+assert "git merge-base --is-ancestor" in release
+publish = (root / "scripts/publish-release.sh").read_text()
+finalize = (root / "scripts/finalize-release.sh").read_text()
+assert "images.txt" in finalize
+assert "--clobber" in publish
+assert "--repo \"$GH_REPO\"" in publish
+assert "HTTP" not in publish or "404" in publish
 assert "actionlint/cmd/actionlint@v1.7.12" in ci
 assert "!reset null" in (root / "deploy/docker-compose.release.yml").read_text()
 assert "NICO_PULL_POLICY" in (root / "deploy/docker-compose.release.yml").read_text()

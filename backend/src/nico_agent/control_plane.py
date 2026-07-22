@@ -95,6 +95,13 @@ class ControlPlaneService:
             await session.flush()
             return tenant
 
+    async def get_tenant(self, context: TenantContext) -> Tenant:
+        async with self.database.tenant_transaction(context) as session:
+            tenant = await session.scalar(select(Tenant).where(Tenant.id == context.tenant_id))
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            return tenant
+
     async def update_tenant_settings(
         self, context: TenantContext, command: TenantSettingsPatch
     ) -> Tenant:

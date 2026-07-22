@@ -166,7 +166,7 @@ nico project status launch
 
 ### 发布前在本地运行同一安装链路
 
-无需先创建 GitHub Release。`make release` 会在本机构建三个版本化镜像、
+无需先创建 GitHub Release。`make release` 会显式构建三个版本化镜像、
 真实 CLI wheel、安装器、bundle 和 `SHA256SUMS`；`make install` 使用同一个
 `install.sh` 安装并启动它们：
 
@@ -175,7 +175,8 @@ make release
 make install
 ```
 
-也可以只运行 `make install`。如果当前版本的完整资产或本地镜像不存在，它会
+这条路径用于发布候选验证，不是日常开发入口。也可以只运行 `make install`。
+如果当前版本的完整资产或本地镜像不存在，它会
 先自动执行 `make release`；都存在时则直接复用。这个目标不会创建 Git Tag、
 不会上传 GitHub，也不会从 GHCR 拉取镜像。为了不接管正在运行的源码开发栈，
 本地安装使用独立的 `nico-agent-local-release` Compose 项目；API 和 Web 默认在
@@ -202,38 +203,62 @@ make uninstall
 ### 从源码启动（贡献者）
 
 ```bash
-cp .env.example .env
-scripts/dev.sh --detach
+make run
 ```
 
-API 启动前会自动执行 Alembic 数据库迁移。获得第一个持久化 Run 结果：
+`make run` 会同步 editable backend/CLI、把开发命令链接到
+`~/.local/bin/nico`，再通过 Compose 检查并补齐 PostgreSQL、Redis 和 MinIO，
+且明确使用 `--no-build`。Alembic、API、Worker、Sandbox Runner 与 Web 都直接
+从宿主机源码启动。修改代码后重新启动该命令即可验证，不会产生新的 Nico
+应用镜像。API 和 Web 分别使用 <http://localhost:8000> 与
+<http://localhost:5173>。
+如果旧的完整 Compose 栈仍在运行，`make run` 会停止其中的应用容器，但保留
+PostgreSQL、Redis、MinIO、数据卷及可选的 fake-model。
+
+在另一个终端运行本地 CLI：
 
 ```bash
-scripts/demo.sh
+nico chat
+nico --version
 ```
 
-停止源码部署并保留数据：
+启动完成前，`make run` 会在源码数据库中创建或校验 development tenant/project。
+开发 CLI 的 profile 与 Provider 密钥位于仓库内被忽略的 `.nico/dev`，和 Release
+安装使用的 `~/.nico` 完全隔离；通过 `nico setup` 添加密钥时只会重启源码 Worker。
+
+开发 CLI 的版本同时显示正式包版本和 `branch-commit[-dirty]` 标识。若
+`~/.local/bin` 尚未加入 `PATH`，可以继续使用 `make cli ARGS=chat`。
+
+获得第一个持久化 Run 结果：
 
 ```bash
-scripts/cleanup.sh
+make demo
 ```
+
+`Ctrl-C` 会停止所有本地源码进程，但保留数据依赖以便快速重启。需要同时停止
+这些依赖时运行：
+
+```bash
+make infra-down
+```
+
+需要验证容器构建和完整 Compose 拓扑时，仍使用
+`scripts/bootstrap.sh && scripts/dev.sh --detach`；这条较慢路径会构建应用镜像。
 
 完整首次运行流程参见[快速入门](docs/getting-started.md)，常见问题参见[故障排查](docs/troubleshooting.md)。
 
 ### Nico CLI 与持续对话
 
-Release 安装器已经同时安装 CLI。源码开发时可以单独安装当前仓库版本：
+Release 安装器已经同时安装 CLI。`make run` 会为源码开发同步可编辑版本：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install ./backend
-.venv/bin/nico health
+nico health
 ```
 
 配置 `scripts/demo.sh` 输出的 Tenant ID 后，可以查询真实的服务端资源和 Run：
 
 ```bash
-nico config set local --api-url http://localhost:18000 --tenant-id <tenant-id>
+make cli ARGS='config set local --api-url http://localhost:8000 --tenant-id <tenant-id>'
 nico config use local
 nico doctor
 nico agent list
@@ -333,7 +358,7 @@ nico provider add other \
 
 Nico CLI 是远程薄客户端：chat 和 exec 都由服务端原子创建 ConversationTurn、Task 和 Run，独立 Worker 执行，CLI 仅通过 REST/SSE 显示持久化事实。关闭终端不会删除会话或 detached Run；`--resume`、`--continue` 和 `run watch` 可重新连接。chat 执行期间按 `Ctrl+C` 会请求服务端取消当前 Run；watch 中按 `Ctrl+C` 只停止本地观察。
 
-当前已提供 health、doctor、profile、Project/Agent/Task/Run 查询、持久化 chat、`nico exec`、`nico run watch`、Rich 执行视图、终端 coin-cat、受控附件、Conversation summary、有界上下文压缩，以及敏感工具的持久化人工审批。完整说明见 [Nico CLI](docs/cli.md)。
+当前已提供 health、doctor、profile、Project/Agent/Task/Run 查询、持久化 chat、`nico exec`、`nico run watch`、Rich 执行视图、终端小猫标识、受控附件、Conversation summary、有界上下文压缩，以及敏感工具的持久化人工审批。完整说明见 [Nico CLI](docs/cli.md)。
 
 ## 工作原理
 
@@ -381,7 +406,7 @@ Runtime 负责执行 Agent 并返回规范化事件和结果。它不能导入�
 | Mock Runtime | Stable | 已覆盖无需凭据的成功、失败、取消、恢复合同与 Compose Run E2E |
 | Hermes Runtime | Experimental | 协议 v2 Adapter、禁用时失败关闭、0.18.2 版本检查、恢复/取消/MCP/脱敏及可选 Compose profile 已验证；未执行带凭据推理 |
 | PostgreSQL RLS | Beta | 已实现 `FORCE RLS`、复合约束、运行角色和跨租户测试 |
-| Nico CLI | Beta | chat、exec/detach/watch、resume/continue/history、summary/context snapshot、attach/download/compact、敏感工具审批与恢复、Rich/coin-cat、JSON/no-color 和 SIGINT 语义已通过真实服务测试 |
+| Nico CLI | Beta | chat、exec/detach/watch、resume/continue/history、summary/context snapshot、attach/download/compact、敏感工具审批与恢复、精简事件视图、Rich/终端小猫、JSON/no-color 和 SIGINT 语义已通过测试 |
 | Python Sandbox | Beta | 已通过真实一次性 Docker 隔离测试；Runner 仍持有 Docker Socket |
 | HTTP Read | Beta | 已实现 GET/HEAD、白名单、DNS/IP、重定向、大小控制和 SSRF 测试 |
 | Web Search / Fetch | Beta | Brave/SearXNG、持久化审批、同 Run 来源授权、抽取和引用检查已通过离线全链路；live Provider 需部署方凭据 |
@@ -461,15 +486,37 @@ GitHub Actions 将测试与发布分开，普通合并不会意外创建 Release
 | --- | --- |
 | 面向 `main` 的 Pull Request | 后端与前端测试、构建、安装/发布合同测试、Workflow 和 Markdown 检查 |
 | Push 或 merge 到 `main` | 执行同一套 `Test` CI，不发布镜像或 Release |
-| Push `v*` Tag | 复用 `Test` CI，校验 Tag 与 Python 包版本一致，构建多架构 GHCR 镜像并发布安装器、校验和及 Release bundle |
+| Push `v*` Tag | 先校验 annotated Tag、主分支归属和 Python 包版本，再复用 `Test` CI，构建多架构 GHCR 镜像并发布 CLI wheel、安装器、bundle、镜像摘要及校验和 |
 
-创建正式版本时，先确保对应提交已进入 `main`，并让 Tag 与
-`backend/pyproject.toml` 中的版本一致：
+`backend/pyproject.toml` 是平台与 CLI 的唯一版本源。查看版本、当前 commit、
+工作区状态和 HEAD 上的 Tag：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+make version
 ```
+
+准备正式版本时，先在普通变更中设置下一个 SemVer 并提交：
+
+```bash
+make version-set VERSION=0.3.0
+git add backend/pyproject.toml
+git commit -m "chore(release): prepare v0.3.0"
+```
+
+版本提交进入 `main` 后，在已同步且干净的 `main` 上创建 annotated Tag。该目标
+会拒绝脏工作区、非默认分支、与 `origin/main` 不一致的 HEAD 以及重复 Tag：
+
+```bash
+git switch main
+git pull --ff-only
+make tag
+git push origin v0.3.0
+```
+
+日常开发 commit 不递增正式版本。`make version` 同时显示
+`branch-commit[-dirty]` 开发标识；`make dev-images` 仅在显式需要时使用该标识
+构建三个开发镜像。`vX.Y.Z` 只表达可发布的 SemVer 边界，Tag push 会校验它与
+唯一版本源一致。
 
 首次 Release 完成后，还应确认三个 GHCR Package 允许匿名拉取，再公开推荐
 一键安装命令。工作流定义见 [Test](.github/workflows/ci.yml) 和

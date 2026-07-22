@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+die() {
+  printf '[nico-dev-service] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+case "${1:-}" in
+  provider-secret | credential-secret) ;;
+  *) die "only provider-secret or credential-secret is supported" ;;
+esac
+case "${2:-}" in
+  begin | renew | commit | rollback | recover | check) ;;
+  *) die "credential transaction requires begin, renew, commit, rollback, recover, or check" ;;
+esac
+
+DEV_ROOT="${NICO_DEV_ROOT:-}"
+[[ "$DEV_ROOT" == /* ]] || die "NICO_DEV_ROOT must identify the source checkout"
+[[ "${NICO_ENVIRONMENT:-}" == "development" ]] || die "development environment is required"
+[[ -x "$DEV_ROOT/.venv/bin/python" ]] || die "source Python environment is unavailable"
+
+exec "$DEV_ROOT/.venv/bin/python" -m nico_agent.local_secret_transaction "$2"

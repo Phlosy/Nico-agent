@@ -25,6 +25,34 @@ ensure_env_file() {
   fi
 }
 
+load_env_values() {
+  local file="$1"
+  [[ -f "$file" ]] || die "environment file not found: $file"
+  local python="${NICO_ENV_PYTHON:-python3}"
+  local assignments
+  assignments="$("$python" - "$file" <<'PY'
+import re
+import shlex
+import sys
+
+from dotenv import dotenv_values
+from dotenv.parser import parse_stream
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    bindings = list(parse_stream(source))
+if any(binding.error for binding in bindings):
+    raise SystemExit(f"invalid dotenv syntax: {path}")
+
+for key, value in dotenv_values(path).items():
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+        raise SystemExit(f"invalid environment key in {path}: {key}")
+    print(f"export {key}={shlex.quote(value or '')}")
+PY
+)" || die "could not parse environment file: $file"
+  eval "$assignments"
+}
+
 load_env_file() {
   ensure_env_file
   set -a
@@ -35,10 +63,22 @@ load_env_file() {
 
 ensure_python_environment() {
   require_command python3
+  local desired_python existing_python
+  desired_python="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  existing_python=""
+  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    existing_python="$("$ROOT_DIR/.venv/bin/python" -c \
+      'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' \
+      2>/dev/null || true)"
+  fi
+  if [[ -x "$ROOT_DIR/.venv/bin/python" && "$existing_python" != "$desired_python" ]]; then
+    log "recreating .venv for Python $desired_python (was ${existing_python:-unusable})"
+    rm -rf -- "$ROOT_DIR/.venv"
+  fi
   if [[ ! -x "$ROOT_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$ROOT_DIR/.venv"
   fi
-  "$ROOT_DIR/.venv/bin/pip" install -e "$ROOT_DIR/backend[dev]"
+  "$ROOT_DIR/.venv/bin/pip" install --quiet -e "$ROOT_DIR/backend[dev]"
 }
 
 ensure_frontend_environment() {

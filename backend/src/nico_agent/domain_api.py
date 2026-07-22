@@ -110,6 +110,11 @@ async def bootstrap_tenant(
     )
 
 
+@router.get("/tenant", response_model=TenantRead)
+async def get_tenant(service: Service, context: Context):
+    return await service.get_tenant(context)
+
+
 @router.patch("/tenant/settings", response_model=TenantRead)
 async def update_tenant_settings(
     command: TenantSettingsPatch,

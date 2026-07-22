@@ -4,10 +4,80 @@
 
 当前实现支持两条路径：
 
-1. 推荐的 Docker Compose 全栈路径；
-2. API/Web 在宿主机运行、数据依赖由 Compose 提供的本地开发路径。
+1. 推荐的本地开发路径：数据依赖由 Compose 提供，应用服务从源码运行；
+2. 用于容器与部署验证的 Docker Compose 全栈路径。
 
-## Compose 全栈
+## 推荐：本地开发
+
+直接运行：
+
+```bash
+make run
+```
+
+To include the optional loopback-only SearXNG dependency while keeping API, Worker, CLI and
+frontend on local source, run:
+
+```bash
+make run WEB_SEARCH=searxng
+```
+
+This uses the pinned `web-search-local` Compose profile and does not build an application
+image. The generated development configuration points Nico at the exact local SearXNG JSON
+endpoint; normal fetched pages still use strict public-network policy.
+
+`make run` 会按 Python/Node 版本及依赖清单变化同步 editable Python 包、CLI
+entrypoint 和前端依赖；首次运行时还会创建 `.venv`，并把开发 CLI 链接到
+`NICO_BIN_DIR`（默认 `~/.local/bin`）下的 `nico`。如果希望只准备依赖而不启动服务，可运行：
+
+```bash
+make dev-setup
+```
+
+这个目标执行以下有界流程：
+
+1. 同步 editable backend/CLI，并安装本地 `nico` 命令；
+2. 检查并使用 `docker compose up --detach --no-build` 补齐 PostgreSQL、Redis、MinIO；
+3. 停止仍在运行的 Compose 应用容器，同时保留基础服务、数据卷和可选 fake-model；
+4. 等待依赖健康并执行 Alembic migration；
+5. 从宿主机启动 Sandbox Runner、API、Worker 和 Vite Web；
+6. 创建或校验源码数据库中的 development tenant/project，并写入隔离的 CLI profile；
+7. 全部就绪后保持前台运行，`Ctrl-C` 一次停止所有源码进程。
+
+因此修改 Python 或前端代码时不会构建 `nico-agent-*` 镜像。API 和 Sandbox
+Runner 使用 Uvicorn reload；Worker 代码变化后重启 `make run`。基础数据容器会
+保留，后续启动可直接复用。
+
+另一个终端可直接运行可编辑安装的 CLI；它默认连接源码 API `:8000`：
+
+```bash
+nico chat
+nico --version
+```
+
+开发 CLI 固定使用 `.nico/dev/config/cli.toml` 和 `development` profile，不会读取或
+改写 Release 安装使用的全局 `local` profile。Provider Key 保存在权限为 `0600`
+的 `.nico/dev/config/model-secrets.env`；配置新 Provider 时，前台 supervisor 会
+自动重启源码 Worker 以加载密钥，不会重启已安装版本的容器。
+
+开发版输出同时包含正式包版本和 `branch-commit[-dirty]` 标识，例如
+`nico 0.2.0 (dev-bc21ef0-dirty)`。若 `~/.local/bin` 不在 `PATH`，按启动日志提示
+加入 `PATH`，或继续使用 `make cli ARGS=chat`。
+
+CLI 不是常驻服务，因此不放进 Compose。只启动或停止数据依赖：
+
+```bash
+make infra-up
+make infra-down
+```
+
+本地源码端口为 API `8000`、Web `5173`、Sandbox Runner `8090`；PostgreSQL、
+Redis、MinIO 继续使用下表中的 Compose 宿主端口。`make infra-down` 保留数据卷。
+
+源码模式不会产生应用镜像。需要显式构建开发镜像时使用 `make dev-images`；三个
+镜像共用 `branch-commit[-DTN_SUB][-dirty]` Tag。正式发布镜像仍只使用 `vX.Y.Z`。
+
+## Compose 全栈验证
 
 ```bash
 cp .env.example .env
@@ -15,7 +85,7 @@ scripts/bootstrap.sh
 scripts/dev.sh --detach
 ```
 
-`bootstrap.sh` 校验 Compose、拉取固定 Digest 的数据镜像与 Python sandbox 镜像，并构建 API、Worker、Sandbox Runner 和 Web。`worker-state-init` 只负责把两个专用状态卷设为 `nico` 用户的 `0700` 目录；Worker 仍以非 root 运行。`dev.sh --detach` 在返回前等待 API 与 Web 的 HTTP 及容器级健康检查。
+`bootstrap.sh` 校验 Compose、拉取固定 Digest 的数据镜像与 Python sandbox 镜像，并构建 API、Worker、Sandbox Runner 和 Web。它用于验证 Dockerfile、镜像和完整容器拓扑，不应作为每次代码修改后的开发内环。`worker-state-init` 只负责把两个专用状态卷设为 `nico` 用户的 `0700` 目录；Worker 仍以非 root 运行。`dev.sh --detach` 在返回前等待 API 与 Web 的 HTTP 及容器级健康检查。
 
 默认发布端口：
 
@@ -29,34 +99,6 @@ scripts/dev.sh --detach
 | Sandbox Runner | 仅 Compose 内网 `sandbox-runner:8090`，不发布宿主端口 |
 
 所有值都可在 `.env` 覆盖。`.env` 不进入 Git；`.env.example` 仅含开发默认值，生产环境必须更换密码并使用 Secret 管理。
-
-## 宿主机开发
-
-先启动依赖并安装环境：
-
-```bash
-docker compose up -d postgres redis minio minio-init
-python3 -m venv .venv
-.venv/bin/pip install -e 'backend[dev]'
-npm --prefix frontend ci
-```
-
-API 使用配置中的本地默认地址；若使用 `.env.example` 的发布端口，需要显式覆盖：
-
-```bash
-NICO_DATABASE_URL=postgresql+asyncpg://nico:nico-change-me@localhost:15432/nico_agent \
-NICO_REDIS_URL=redis://localhost:16379/0 \
-NICO_MINIO_URL=http://localhost:19010 \
-.venv/bin/uvicorn nico_agent.main:app --app-dir backend/src --reload
-```
-
-另一个终端运行 Web：
-
-```bash
-npm --prefix frontend run dev
-```
-
-Vite 的 `/api` 与 `/openapi.json` 开发代理默认指向 `localhost:8000`。
 
 ## 进程边界
 

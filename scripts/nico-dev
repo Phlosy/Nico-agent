@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" == /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
+done
+ROOT_DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+CLI="$ROOT_DIR/.venv/bin/nico"
+DEV_HOME="${NICO_DEV_HOME:-$ROOT_DIR/.nico/dev}"
+if [[ "$DEV_HOME" != /* ]]; then
+  DEV_HOME="$ROOT_DIR/${DEV_HOME#./}"
+fi
+
+if [[ ! -x "$CLI" ]]; then
+  printf '[nico-dev] ERROR: local CLI is missing; run make run or make dev-setup\n' >&2
+  exit 1
+fi
+
+export NICO_ENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+# shellcheck source=scripts/lib.sh
+source "$ROOT_DIR/scripts/lib.sh"
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  load_env_values "$ROOT_DIR/.env"
+fi
+
+export NICO_ENVIRONMENT=development
+export NICO_DEV_ROOT="$ROOT_DIR"
+export NICO_DEV_HOME="$DEV_HOME"
+export NICO_HOME="$DEV_HOME"
+export NICO_CONFIG_FILE="$DEV_HOME/config/cli.toml"
+export NICO_PROFILE=development
+export NICO_API_URL="${NICO_DEV_API_URL:-http://localhost:8000}"
+export NICO_DATABASE_HOST=127.0.0.1
+export NICO_DATABASE_PORT="${POSTGRES_PORT:-15432}"
+export NICO_DATABASE_NAME="${POSTGRES_DB:-nico_agent}"
+export NICO_DATABASE_USER="${POSTGRES_USER:-nico}"
+export NICO_DATABASE_PASSWORD="${POSTGRES_PASSWORD:-nico-change-me}"
+export NICO_REDIS_URL="redis://127.0.0.1:${REDIS_PORT:-16379}/0"
+export NICO_MODEL_SECRETS_FILE="$DEV_HOME/config/model-secrets.env"
+export PYTHONPATH="$ROOT_DIR/backend/src${PYTHONPATH:+:$PYTHONPATH}"
+unset NICO_TENANT_ID NICO_ACTOR_ID
+if [[ " ${*:-} " == *" --version "* ]]; then
+  export NICO_BUILD_VERSION="${NICO_BUILD_VERSION:-$("$ROOT_DIR/scripts/version.sh" development)}"
+fi
+exec "$CLI" "$@"

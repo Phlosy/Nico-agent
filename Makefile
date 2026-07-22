@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 PYTHON ?= python3
 DOCKER ?= docker
-VERSION := $(shell $(PYTHON) -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')
+VERSION = $(shell PYTHON="$(PYTHON)" "$(CURDIR)/scripts/version.sh" current)
 TAG ?= v$(VERSION)
 
 RELEASE_DIR ?= $(CURDIR)/dist/release
@@ -11,25 +11,84 @@ NICO_HOME ?= $(HOME)/.nico
 NICO_BIN_DIR ?= $(HOME)/.local/bin
 RUNTIME ?= native
 PROVIDER ?=
+WEB_SEARCH ?= brave
 INSTALL_ARGS ?=
 
-BACKEND_IMAGE := nico-agent-backend:$(TAG)
-HERMES_IMAGE := nico-agent-hermes:$(TAG)
-WEB_IMAGE := nico-agent-web:$(TAG)
+BACKEND_IMAGE = nico-agent-backend:$(TAG)
+HERMES_IMAGE = nico-agent-hermes:$(TAG)
+WEB_IMAGE = nico-agent-web:$(TAG)
 
 .DEFAULT_GOAL := help
-.PHONY: help validate-release release release-images release-assets install uninstall test-install
+.PHONY: help dev-setup infra-up run cli demo infra-down dev-images version version-set tag \
+	validate-release release release-images release-assets install uninstall test-install
 
 help:
 	@printf '%s\n' \
+	  'make dev-setup     Install editable backend and frontend dependencies' \
+	  'make infra-up      Start only PostgreSQL, Redis and MinIO with Compose' \
+	  'make run           Sync/install CLI, then run infrastructure and source services' \
+	  'make cli           Run the installed development CLI; pass ARGS="chat"' \
+	  'make demo          Run the credential-free demo against the source API' \
+	  'make infra-down    Stop development infrastructure and preserve data' \
+	  'make dev-images    Explicitly build branch-commit tagged development images' \
+	  '' \
+	  'make version       Show package, Git commit and release-tag state' \
+	  'make version-set   Set the next SemVer; requires VERSION=X.Y.Z' \
+	  'make tag           Create the package version annotated tag from clean main' \
+	  '' \
 	  'make release       Build local images and release installation assets' \
 	  'make install       Reuse or build local assets, then install and start Nico' \
 	  'make uninstall     Stop local services and remove program files' \
 	  'make test-install  Run installer and release contract tests' \
 	  '' \
 	  'Options: RUNTIME=native|hermes PROVIDER=openrouter|openai|anthropic' \
-	  '         INSTALL_ARGS="--no-start --non-interactive"' \
+	  '         WEB_SEARCH=brave|searxng INSTALL_ARGS="--no-start --non-interactive"' \
 	  'Local stack: nico-agent-local-release, API :28000, Web :28080'
+
+dev-setup:
+	@NICO_BIN_DIR="$(NICO_BIN_DIR)" "$(CURDIR)/scripts/local-dev.sh" setup
+
+infra-up:
+	@NICO_DEV_WEB_SEARCH="$(WEB_SEARCH)" "$(CURDIR)/scripts/local-dev.sh" infra-up
+
+run:
+	@NICO_BIN_DIR="$(NICO_BIN_DIR)" NICO_DEV_WEB_SEARCH="$(WEB_SEARCH)" \
+	  "$(CURDIR)/scripts/local-dev.sh" run
+
+cli:
+	@"$(CURDIR)/scripts/nico-dev" $(ARGS)
+
+demo:
+	@NICO_DEMO_API_BASE="$${NICO_DEMO_API_BASE:-http://localhost:8000}" \
+	NICO_DEMO_CONSOLE_BASE="$${NICO_DEMO_CONSOLE_BASE:-http://localhost:5173}" \
+	  "$(CURDIR)/scripts/demo.sh"
+
+infra-down:
+	@NICO_DEV_WEB_SEARCH="$(WEB_SEARCH)" "$(CURDIR)/scripts/local-dev.sh" infra-down
+
+dev-images:
+	@set -euo pipefail; \
+	  dev_tag="$$(DTN_SUB="$(DTN_SUB)" PYTHON="$(PYTHON)" \
+	    "$(CURDIR)/scripts/version.sh" development)"; \
+	  $(DOCKER) build --file "$(CURDIR)/backend/Dockerfile" \
+	    --tag "nico-agent-backend:$$dev_tag" "$(CURDIR)/backend"; \
+	  $(DOCKER) build --file "$(CURDIR)/backend/Dockerfile.hermes" \
+	    --tag "nico-agent-hermes:$$dev_tag" "$(CURDIR)/backend"; \
+	  $(DOCKER) build --file "$(CURDIR)/frontend/Dockerfile" \
+	    --tag "nico-agent-web:$$dev_tag" "$(CURDIR)/frontend"; \
+	  printf '[nico-make] development images tagged %s\n' "$$dev_tag"
+
+version:
+	@"$(CURDIR)/scripts/version.sh" status
+
+version-set:
+	@if [[ "$(origin VERSION)" != "command line" ]]; then \
+	  printf '[nico-make] usage: make version-set VERSION=X.Y.Z\n' >&2; exit 2; \
+	fi
+	@"$(CURDIR)/scripts/version.sh" set "$(VERSION)"
+
+tag:
+	@"$(CURDIR)/scripts/version.sh" create-tag
 
 release: release-images release-assets
 	@printf '[nico-make] local release %s is ready in %s\n' "$(TAG)" "$(RELEASE_DIR)"
@@ -64,6 +123,11 @@ install:
 	  done; \
 	  if [[ -f "$(RELEASE_DIR)/version.txt" ]] && \
 	     [[ "$$(tr -d '[:space:]' < "$(RELEASE_DIR)/version.txt")" != "$(TAG)" ]]; then \
+	    needs_release=true; \
+	  fi; \
+	  if [[ "$$needs_release" == false ]] && ! (cd "$(RELEASE_DIR)" && \
+	     { command -v sha256sum >/dev/null 2>&1 && sha256sum --check SHA256SUMS >/dev/null 2>&1 || \
+	       command -v shasum >/dev/null 2>&1 && shasum -a 256 --check SHA256SUMS >/dev/null 2>&1; }); then \
 	    needs_release=true; \
 	  fi; \
 	  $(DOCKER) image inspect "$(BACKEND_IMAGE)" "$(HERMES_IMAGE)" "$(WEB_IMAGE)" \
