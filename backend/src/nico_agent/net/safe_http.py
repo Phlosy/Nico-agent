@@ -8,11 +8,11 @@ import ipaddress
 import socket
 import ssl
 import unicodedata
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 
 class SafeHttpError(Exception):
@@ -212,6 +212,83 @@ class SocketHttpTransport:
             raise SafeHttpError("NETWORK_ERROR", "HTTP request failed") from exc
 
 
+class SafeHttpClient:
+    """Bounded request loop that reauthorizes and re-resolves every redirect hop."""
+
+    _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+    def __init__(
+        self,
+        *,
+        transport: HttpTransport | None = None,
+        resolver: Resolver | None = None,
+        connect_timeout: float = 5,
+        read_timeout: float = 10,
+    ) -> None:
+        self.transport = transport or SocketHttpTransport()
+        self.resolver = resolver or resolve_addresses
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        policy: SafeHttpPolicy,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, str] | None = None,
+        max_response_bytes: int = 1_048_576,
+        max_redirects: int = 0,
+    ) -> RawHttpResponse:
+        if method not in {"GET", "HEAD"}:
+            raise SafeHttpError("METHOD_DENIED", "HTTP method is not allowed")
+        if not 1 <= max_response_bytes <= 10_485_760:
+            raise ValueError("max_response_bytes is outside the platform range")
+        if not 0 <= max_redirects <= 10:
+            raise ValueError("max_redirects is outside the platform range")
+        current_url = _with_query_params(url, params)
+        redirect_from: str | None = None
+        redirects = 0
+        while True:
+            target = await resolve_http_target(
+                current_url,
+                policy=policy,
+                resolver=self.resolver,
+                redirect_from=redirect_from,
+            )
+            response = await self.transport.request(
+                PinnedRequest(
+                    method=method,
+                    scheme=target.scheme,
+                    hostname=target.hostname,
+                    port=target.port,
+                    target=target.path_and_query,
+                    ip_address=target.addresses[0],
+                    connect_timeout=self.connect_timeout,
+                    read_timeout=self.read_timeout,
+                    max_response_bytes=max_response_bytes,
+                    headers=tuple((headers or {}).items()),
+                )
+            )
+            if len(response.body) > max_response_bytes:
+                raise SafeHttpError("RESPONSE_TOO_LARGE", "HTTP response exceeded its byte limit")
+            response_headers = _headers(response.headers)
+            encoding = response_headers.get("content-encoding", "identity").strip().lower()
+            if encoding not in {"", "identity"}:
+                raise SafeHttpError("ENCODING_DENIED", "compressed HTTP responses are not accepted")
+            if response.status not in self._REDIRECT_STATUSES:
+                return response
+            location = response_headers.get("location")
+            if not location:
+                raise SafeHttpError("REDIRECT_INVALID", "HTTP redirect has no location")
+            if redirects >= max_redirects:
+                raise SafeHttpError("REDIRECT_LIMIT", "HTTP redirect limit was exceeded")
+            redirect_from = target.canonical_url
+            current_url = urljoin(target.canonical_url, location)
+            redirects += 1
+
+
 def canonicalize_http_url(value: str) -> CanonicalHttpUrl:
     if not isinstance(value, str) or not value or _contains_control(value):
         raise SafeHttpError("URL_INVALID", "HTTP URL is invalid")
@@ -393,6 +470,21 @@ def _address_scope(value: str) -> str:
 
 def _contains_control(value: str) -> bool:
     return any(unicodedata.category(character).startswith("C") for character in value)
+
+
+def _with_query_params(url: str, params: Mapping[str, str] | None) -> str:
+    if not params:
+        return url
+    parsed = urlsplit(url)
+    query = [*parse_qsl(parsed.query, keep_blank_values=True), *params.items()]
+    return urlunsplit(parsed._replace(query=urlencode(query)))
+
+
+def _headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name, value in values:
+        result.setdefault(name.lower(), value.strip())
+    return result
 
 
 def _netloc(hostname: str, port: int, scheme: str) -> str:

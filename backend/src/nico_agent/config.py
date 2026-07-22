@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     http_read_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     http_max_redirects: int = Field(default=3, ge=0, le=10)
     http_allow_loopback: bool = False
+    web_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    web_read_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    web_search_max_response_bytes: int = Field(default=524_288, ge=1024, le=2_097_152)
+    web_search_cache_ttl_seconds: int = Field(default=900, ge=1, le=86_400)
+    web_searxng_endpoint: str = Field(
+        default="http://127.0.0.1:18888/search", min_length=1, max_length=2000
+    )
+    web_searxng_allow_private: bool = False
     model_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     model_read_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
     model_max_response_bytes: int = Field(default=10_485_760, ge=1024, le=104_857_600)

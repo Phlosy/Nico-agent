@@ -3,10 +3,23 @@ from __future__ import annotations
 import pytest
 
 from nico_agent.net.safe_http import (
+    PinnedRequest,
+    RawHttpResponse,
+    SafeHttpClient,
     SafeHttpError,
     SafeHttpPolicy,
     resolve_http_target,
 )
+
+
+class FakeTransport:
+    def __init__(self, responses: list[RawHttpResponse]) -> None:
+        self.responses = responses
+        self.requests: list[PinnedRequest] = []
+
+    async def request(self, request: PinnedRequest) -> RawHttpResponse:
+        self.requests.append(request)
+        return self.responses.pop(0)
 
 
 @pytest.mark.asyncio
@@ -139,3 +152,67 @@ async def test_cross_origin_redirect_requires_explicit_policy() -> None:
         redirect_from="https://example.com/start",
     )
     assert target.canonical_url == "https://cdn.example.net/final"
+
+
+@pytest.mark.asyncio
+async def test_safe_client_encodes_params_and_passes_only_pinned_request_data() -> None:
+    transport = FakeTransport(
+        [RawHttpResponse(200, (("Content-Type", "application/json"),), b"{}")]
+    )
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+
+    response = await client.request(
+        "GET",
+        "https://search.example/api",
+        policy=SafeHttpPolicy.exact_endpoint("https://search.example/api"),
+        headers={"Authorization": "secret"},
+        params={"q": "nico search", "format": "json"},
+        max_response_bytes=100,
+    )
+
+    assert response.body == b"{}"
+    assert transport.requests == [
+        PinnedRequest(
+            method="GET",
+            scheme="https",
+            hostname="search.example",
+            port=443,
+            target="/api?q=nico+search&format=json",
+            ip_address="93.184.216.34",
+            connect_timeout=5,
+            read_timeout=10,
+            max_response_bytes=100,
+            headers=(("Authorization", "secret"),),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_safe_client_reauthorizes_redirect_before_second_request() -> None:
+    transport = FakeTransport(
+        [
+            RawHttpResponse(
+                302,
+                (("Location", "https://other.example/final"),),
+                b"",
+            )
+        ]
+    )
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+
+    with pytest.raises(SafeHttpError) as captured:
+        await client.request(
+            "GET",
+            "https://search.example/start",
+            policy=SafeHttpPolicy.strict_public(),
+            max_redirects=1,
+        )
+
+    assert captured.value.code == "REDIRECT_DENIED"
+    assert len(transport.requests) == 1
