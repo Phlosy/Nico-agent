@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import http.client
 import ipaddress
-import socket
-import ssl
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any, Protocol
-from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
+from typing import Any
+from urllib.parse import urljoin
 
+from nico_agent.net.safe_http import (
+    HttpTransport,
+    PinnedRequest,
+    RawHttpResponse,
+    ResolvedHttpTarget,
+    SafeHttpError,
+    SafeHttpPolicy,
+    SocketHttpTransport,
+    resolve_addresses,
+    resolve_http_target,
+)
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
     ToolExecutionContext,
@@ -32,88 +37,6 @@ _DEFAULT_CONTENT_TYPES = (
     "application/problem+json",
     "application/xml",
 )
-
-
-@dataclass(frozen=True)
-class PinnedRequest:
-    method: str
-    scheme: str
-    hostname: str
-    port: int
-    target: str
-    ip_address: str
-    connect_timeout: float
-    read_timeout: float
-    max_response_bytes: int
-
-
-@dataclass(frozen=True)
-class RawHttpResponse:
-    status: int
-    headers: tuple[tuple[str, str], ...]
-    body: bytes
-
-
-class HttpTransport(Protocol):
-    async def request(self, request: PinnedRequest) -> RawHttpResponse: ...
-
-
-Resolver = Callable[[str, int], Sequence[str]]
-
-
-class SocketHttpTransport:
-    """Connect directly to the validated IP while preserving HTTP Host and TLS SNI."""
-
-    async def request(self, request: PinnedRequest) -> RawHttpResponse:
-        return await asyncio.to_thread(self._request, request)
-
-    @staticmethod
-    def _request(request: PinnedRequest) -> RawHttpResponse:
-        try:
-            raw_socket = socket.create_connection(
-                (request.ip_address, request.port), timeout=request.connect_timeout
-            )
-            try:
-                raw_socket.settimeout(request.read_timeout)
-                if request.scheme == "https":
-                    raw_socket = ssl.create_default_context().wrap_socket(
-                        raw_socket, server_hostname=request.hostname
-                    )
-                connection = http.client.HTTPConnection(request.hostname, request.port)
-                connection.sock = raw_socket
-                connection.putrequest(
-                    request.method,
-                    request.target,
-                    skip_host=True,
-                    skip_accept_encoding=True,
-                )
-                host = request.hostname
-                if ":" in host:
-                    host = f"[{host}]"
-                default_port = 443 if request.scheme == "https" else 80
-                if request.port != default_port:
-                    host = f"{host}:{request.port}"
-                connection.putheader("Host", host)
-                connection.putheader("Accept", "text/*, application/json, application/xml")
-                connection.putheader("Accept-Encoding", "identity")
-                connection.putheader("User-Agent", "Nico-Agent-HTTP-Reader/1.0")
-                connection.putheader("Connection", "close")
-                connection.endheaders()
-                response = connection.getresponse()
-                body = (
-                    b""
-                    if request.method == "HEAD"
-                    else response.read(request.max_response_bytes + 1)
-                )
-                return RawHttpResponse(
-                    status=response.status,
-                    headers=tuple(response.getheaders()),
-                    body=body,
-                )
-            finally:
-                raw_socket.close()
-        except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
-            raise ToolExecutorFailure("HTTP_NETWORK_ERROR", "HTTP request failed") from exc
 
 
 class HttpReadExecutor:
@@ -155,13 +78,13 @@ class HttpReadExecutor:
         risk=ToolRisk.MEDIUM,
         max_output_bytes=1_100_000,
     )
-    implementation_hash = canonical_hash({"executor": "http.read", "revision": 1})
+    implementation_hash = canonical_hash({"executor": "http.read", "revision": 2})
 
     def __init__(
         self,
         *,
         transport: HttpTransport | None = None,
-        resolver: Resolver | None = None,
+        resolver=None,
         max_response_bytes: int = 1_048_576,
         connect_timeout: float = 5.0,
         read_timeout: float = 10.0,
@@ -170,7 +93,7 @@ class HttpReadExecutor:
         allowed_content_types: tuple[str, ...] = _DEFAULT_CONTENT_TYPES,
     ) -> None:
         self.transport = transport or SocketHttpTransport()
-        self.resolver = resolver or _resolve_addresses
+        self.resolver = resolver or resolve_addresses
         self.max_response_bytes = max_response_bytes
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
@@ -184,15 +107,20 @@ class HttpReadExecutor:
             raise ToolExecutorFailure("HTTP_METHOD_DENIED", "HTTP method is not allowed")
         current_url = arguments["url"]
         redirects = 0
+        redirect_from: str | None = None
         while True:
-            parsed, hostname, port, addresses = await self._validate_target(context, current_url)
+            target = await self._validate_target(
+                context,
+                current_url,
+                redirect_from=redirect_from,
+            )
             request = PinnedRequest(
                 method=method,
-                scheme=parsed.scheme,
-                hostname=hostname,
-                port=port,
-                target=urlunsplit(("", "", parsed.path or "/", parsed.query, "")),
-                ip_address=addresses[0],
+                scheme=target.scheme,
+                hostname=target.hostname,
+                port=target.port,
+                target=target.path_and_query,
+                ip_address=target.addresses[0],
                 connect_timeout=self._limit_float(
                     context.tool_config.get("connect_timeout_seconds"), self.connect_timeout
                 ),
@@ -203,7 +131,10 @@ class HttpReadExecutor:
                     context.tool_config.get("max_response_bytes"), self.max_response_bytes
                 ),
             )
-            response = await self.transport.request(request)
+            try:
+                response = await self.transport.request(request)
+            except SafeHttpError as exc:
+                raise _tool_http_error(exc) from exc
             headers = _headers(response.headers)
             if response.status in _REDIRECT_STATUSES:
                 location = headers.get("location")
@@ -218,73 +149,56 @@ class HttpReadExecutor:
                     raise ToolExecutorFailure(
                         "HTTP_REDIRECT_LIMIT", "HTTP redirect limit was exceeded"
                     )
-                current_url = urljoin(_safe_url(parsed), location)
+                redirect_from = target.canonical_url
+                current_url = urljoin(target.canonical_url, location)
                 redirects += 1
                 continue
             return ToolExecutionResult(
-                output=self._result(context, parsed, response, headers, redirects)
+                output=self._result(context, target, response, headers, redirects)
             )
 
     async def _validate_target(
-        self, context: ToolExecutionContext, url: str
-    ) -> tuple[SplitResult, str, int, tuple[str, ...]]:
-        try:
-            parsed = urlsplit(url)
-            hostname = parsed.hostname
-            port = parsed.port
-        except ValueError as exc:
-            raise ToolExecutorFailure("HTTP_URL_INVALID", "HTTP URL is invalid") from exc
-        if (
-            not hostname
-            or any(ord(character) < 32 or ord(character) == 127 for character in url)
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.fragment
-            or parsed.scheme not in {"http", "https"}
-        ):
-            raise ToolExecutorFailure("HTTP_URL_INVALID", "HTTP URL is invalid")
-        try:
-            hostname = hostname.rstrip(".").encode("idna").decode("ascii").lower()
-        except UnicodeError as exc:
-            raise ToolExecutorFailure("HTTP_URL_INVALID", "HTTP hostname is invalid") from exc
-        if (
-            not hostname
-            or len(hostname) > 253
-            or not _domain_allowed(hostname, context.tool_config.get("allowed_domains"))
-        ):
-            raise ToolExecutorFailure("HTTP_DOMAIN_DENIED", "HTTP hostname is not allowed")
-        port = port or (443 if parsed.scheme == "https" else 80)
-        if port not in {80, 443} and port not in _allowed_ports(context.tool_config):
-            raise ToolExecutorFailure("HTTP_PORT_DENIED", "HTTP port is not allowed")
-        try:
-            resolved = tuple(dict.fromkeys(await asyncio.to_thread(self.resolver, hostname, port)))
-        except OSError as exc:
-            raise ToolExecutorFailure("HTTP_DNS_ERROR", "HTTP hostname resolution failed") from exc
-        if not resolved:
-            raise ToolExecutorFailure(
-                "HTTP_DNS_ERROR", "HTTP hostname resolution returned no address"
-            )
+        self,
+        context: ToolExecutionContext,
+        url: str,
+        *,
+        redirect_from: str | None,
+    ) -> ResolvedHttpTarget:
         allow_loopback_http = self.allow_http_loopback and bool(
             context.tool_config.get("allow_http_loopback", False)
         )
-        addresses = tuple(
-            _validate_address(value, allow_loopback=allow_loopback_http and parsed.scheme == "http")
-            for value in resolved
+        domains = context.tool_config.get("allowed_domains")
+        configured_domains = (
+            tuple(item for item in domains if isinstance(item, str))
+            if isinstance(domains, list) and len(domains) <= 100
+            else ()
         )
-        if parsed.scheme != "https" and not (
-            allow_loopback_http
-            and all(ipaddress.ip_address(value).is_loopback for value in addresses)
+        policy = SafeHttpPolicy.allowlisted(
+            configured_domains,
+            allowed_ports=frozenset({80, 443, *_allowed_ports(context.tool_config)}),
+            allow_http=True,
+            allow_loopback=allow_loopback_http,
+            allow_cross_origin_redirects=True,
+        )
+        try:
+            target = await resolve_http_target(
+                url,
+                policy=policy,
+                resolver=self.resolver,
+                redirect_from=redirect_from,
+            )
+        except SafeHttpError as exc:
+            raise _tool_http_error(exc) from exc
+        if target.scheme == "http" and not all(
+            ipaddress.ip_address(value).is_loopback for value in target.addresses
         ):
             raise ToolExecutorFailure("HTTP_SCHEME_DENIED", "HTTP requires HTTPS")
-        normalized = parsed._replace(
-            scheme=parsed.scheme.lower(), netloc=_netloc(hostname, port, parsed.scheme)
-        )
-        return normalized, hostname, port, addresses
+        return target
 
     def _result(
         self,
         context: ToolExecutionContext,
-        parsed: SplitResult,
+        target: ResolvedHttpTarget,
         response: RawHttpResponse,
         headers: dict[str, str],
         redirects: int,
@@ -316,7 +230,7 @@ class HttpReadExecutor:
                 "HTTP_ENCODING_INVALID", "HTTP response is not UTF-8"
             ) from exc
         return {
-            "url": _safe_url(parsed),
+            "url": target.canonical_url,
             "status": response.status,
             "headers": {
                 name: value for name, value in headers.items() if name in _SAFE_RESPONSE_HEADERS
@@ -339,47 +253,6 @@ class HttpReadExecutor:
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
             return min(float(value), platform_limit)
         return platform_limit
-
-
-def _resolve_addresses(hostname: str, port: int) -> Sequence[str]:
-    return [item[4][0] for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)]
-
-
-def _validate_address(value: str, *, allow_loopback: bool) -> str:
-    try:
-        address = ipaddress.ip_address(value)
-    except ValueError as exc:
-        raise ToolExecutorFailure("HTTP_DNS_ERROR", "HTTP DNS returned an invalid address") from exc
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
-    denied = (
-        address.is_private
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-        or address.is_loopback
-        or not address.is_global
-    )
-    if denied and not (allow_loopback and address.is_loopback):
-        raise ToolExecutorFailure("HTTP_ADDRESS_DENIED", "HTTP target address is not public")
-    return str(address)
-
-
-def _domain_allowed(hostname: str, configured: Any) -> bool:
-    if not isinstance(configured, list) or not configured or len(configured) > 100:
-        return False
-    for raw_pattern in configured:
-        if not isinstance(raw_pattern, str):
-            continue
-        pattern = raw_pattern.rstrip(".").lower()
-        if pattern.startswith("*."):
-            suffix = pattern[2:]
-            if suffix and hostname != suffix and hostname.endswith(f".{suffix}"):
-                return True
-        elif hostname == pattern:
-            return True
-    return False
 
 
 def _allowed_ports(config: dict[str, Any]) -> set[int]:
@@ -416,11 +289,5 @@ def _headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
     return result
 
 
-def _netloc(hostname: str, port: int, scheme: str) -> str:
-    host = f"[{hostname}]" if ":" in hostname else hostname
-    default_port = 443 if scheme == "https" else 80
-    return host if port == default_port else f"{host}:{port}"
-
-
-def _safe_url(parsed: SplitResult) -> str:
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, ""))
+def _tool_http_error(exc: SafeHttpError) -> ToolExecutorFailure:
+    return ToolExecutorFailure(f"HTTP_{exc.code}", exc.message)
