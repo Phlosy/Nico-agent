@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from nico_agent.tools import ToolDefinitionSpec, ToolIsolation, ToolRetryPolicy
+from nico_agent.tools.contracts import canonical_hash
 from nico_agent.tools.errors import ToolAccessDenied, ToolSecretUnavailable
 from nico_agent.tools.policy import authorize_tool, build_tool_policy_snapshot
 from nico_agent.tools.secrets import EnvironmentSecretResolver, redact_value, resolve_secrets
@@ -118,6 +119,94 @@ def test_secret_refs_are_intersected_and_only_tool_prefixed_environment_is_resol
         EnvironmentSecretResolver({"PATH": "should-never-be-readable"}).resolve(
             "authorization", "env:PATH"
         )
+
+
+def test_secret_requirements_can_be_selected_from_frozen_tool_config() -> None:
+    spec = _spec(secrets=frozenset({"brave_api_key", "unused_provider_key"}))
+    snapshot = build_tool_policy_snapshot(
+        {
+            "tool_policy": {
+                "allow": [spec.reference],
+                "permissions": [spec.permission],
+                "secret_refs": {
+                    "brave_api_key": "env:NICO_TOOL_SECRET_BRAVE_API_KEY",
+                    "unused_provider_key": "env:NICO_TOOL_SECRET_UNUSED_PROVIDER_KEY",
+                },
+                "tools": {spec.reference: {"provider": "brave"}},
+            }
+        },
+        {
+            "allow": [spec.reference],
+            "permissions": [spec.permission],
+            "secrets": ["brave_api_key", "unused_provider_key"],
+        },
+    )
+
+    authorization = authorize_tool(
+        snapshot,
+        spec,
+        secret_name_selector=lambda config: (
+            frozenset({"brave_api_key"}) if config.get("provider") == "brave" else frozenset()
+        ),
+    )
+
+    assert authorization.tool_config == {"provider": "brave"}
+    assert authorization.secret_refs == {"brave_api_key": "env:NICO_TOOL_SECRET_BRAVE_API_KEY"}
+
+
+def test_secret_selector_cannot_expand_the_definition_secret_ceiling() -> None:
+    spec = _spec(secrets=frozenset({"brave_api_key"}))
+    snapshot = build_tool_policy_snapshot(
+        {
+            "tool_policy": {
+                "allow": [spec.reference],
+                "permissions": [spec.permission],
+                "secret_refs": {
+                    "brave_api_key": "env:NICO_TOOL_SECRET_BRAVE_API_KEY",
+                    "undeclared": "env:NICO_TOOL_SECRET_UNDECLARED",
+                },
+                "tools": {spec.reference: {"provider": "brave"}},
+            }
+        },
+        {
+            "allow": [spec.reference],
+            "permissions": [spec.permission],
+            "secrets": ["brave_api_key", "undeclared"],
+        },
+    )
+
+    with pytest.raises(ToolAccessDenied) as captured:
+        authorize_tool(
+            snapshot,
+            spec,
+            secret_name_selector=lambda _config: frozenset({"undeclared"}),
+        )
+
+    assert captured.value.code == "TOOL_ACCESS_DENIED"
+
+
+def test_provider_config_changes_policy_hash_but_not_definition_hash() -> None:
+    spec = _spec(secrets=frozenset({"brave_api_key"}))
+
+    def snapshot(provider: str) -> dict:
+        return build_tool_policy_snapshot(
+            {
+                "tool_policy": {
+                    "allow": [spec.reference],
+                    "permissions": [spec.permission],
+                    "tools": {spec.reference: {"provider": provider}},
+                }
+            },
+            {
+                "allow": [spec.reference],
+                "permissions": [spec.permission],
+            },
+        )
+
+    definition_hash = spec.content_hash
+
+    assert spec.content_hash == definition_hash
+    assert canonical_hash(snapshot("brave")) != canonical_hash(snapshot("searxng"))
 
 
 def test_redaction_covers_sensitive_keys_discovered_values_and_inline_patterns() -> None:

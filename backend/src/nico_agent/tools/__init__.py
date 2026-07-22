@@ -8,6 +8,8 @@ from nico_agent.tools.contracts import (
     ToolIsolation,
     ToolRetryPolicy,
     ToolRisk,
+    ToolSecretRequirements,
+    executor_required_secret_names,
 )
 from nico_agent.tools.gateway import ToolGateway, ToolGatewayRequest, ToolGatewayResult
 from nico_agent.tools.policy import ToolAuthorization, authorize_tool, build_tool_policy_snapshot
@@ -26,6 +28,8 @@ __all__ = [
     "ToolRegistry",
     "ToolRetryPolicy",
     "ToolRisk",
+    "ToolSecretRequirements",
     "authorize_tool",
     "build_tool_policy_snapshot",
+    "executor_required_secret_names",
 ]

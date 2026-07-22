@@ -14,6 +14,7 @@ from nico_agent.tools import (
     ToolRegistry,
     ToolRetryPolicy,
     ToolRisk,
+    executor_required_secret_names,
 )
 from nico_agent.tools.contracts import canonical_json
 from nico_agent.tools.errors import ToolNotFound, ToolRegistryConflict, ToolSchemaViolation
@@ -134,6 +135,14 @@ def test_executor_context_contains_only_scoped_identity() -> None:
 
     assert "database" not in ToolExecutionContext.model_fields
     assert "secret" not in ToolExecutionContext.model_fields
+
+
+def test_legacy_executor_defaults_to_all_declared_secrets() -> None:
+    executor = _Executor(_spec(secret_names=frozenset({"authorization"})))
+
+    assert executor_required_secret_names(executor, {"provider": "legacy"}) == frozenset(
+        {"authorization"}
+    )
 
 
 def test_canonical_json_rejects_non_finite_or_non_json_values() -> None:

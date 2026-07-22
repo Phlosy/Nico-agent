@@ -41,7 +41,12 @@ from nico_agent.tools import (
     ToolRegistry,
     ToolRetryPolicy,
 )
-from nico_agent.tools.errors import ToolExecutorFailure, ToolIdempotencyConflict, ToolLeaseLost
+from nico_agent.tools.errors import (
+    ToolAccessDenied,
+    ToolExecutorFailure,
+    ToolIdempotencyConflict,
+    ToolLeaseLost,
+)
 from nico_agent.tools.secrets import EnvironmentSecretResolver
 
 pytestmark = pytest.mark.skipif(
@@ -114,6 +119,32 @@ class _Executor:
         )
 
 
+@dataclass
+class _ProviderExecutor(_Executor):
+    seen_secrets: list[dict[str, str]] = field(default_factory=list)
+
+    def required_secret_names(self, tool_config):
+        provider = tool_config.get("provider")
+        if provider == "brave":
+            return frozenset({"authorization"})
+        if provider == "searxng":
+            return frozenset()
+        raise ToolAccessDenied(self.spec.name, self.spec.version, "unknown provider")
+
+    async def execute(self, context, arguments, secrets):
+        self.calls += 1
+        self.seen_contexts.append(context)
+        self.seen_secrets.append(secrets)
+        return ToolExecutionResult(
+            output={
+                "value": arguments.get("value", "ok"),
+                "secret_echo": secrets.get("authorization", "none"),
+                "executor_call": self.calls,
+            },
+            usage={"executor_calls": self.calls},
+        )
+
+
 async def _seed_gateway_run(
     database: Database,
     spec: ToolDefinitionSpec,
@@ -121,19 +152,27 @@ async def _seed_gateway_run(
     worker_id: str,
     authorize: bool = True,
     priority: int = 0,
+    tool_config: dict[str, Any] | None = None,
+    secret_refs: dict[str, str] | None = None,
+    agent_secret_names: list[str] | None = None,
 ):
     suffix = uuid4().hex[:10]
+    tool_config = {"scope": "tenant", "max_items": 5} if tool_config is None else tool_config
+    secret_refs = (
+        {"authorization": "env:NICO_TOOL_SECRET_TEST_AUTH"} if secret_refs is None else secret_refs
+    )
+    agent_secret_names = ["authorization"] if agent_secret_names is None else agent_secret_names
     tenant_policy = {
         "allow": [spec.reference],
         "permissions": [spec.permission],
-        "secret_refs": {"authorization": "env:NICO_TOOL_SECRET_TEST_AUTH"},
-        "tools": {spec.reference: {"scope": "tenant", "max_items": 10}},
+        "secret_refs": secret_refs,
+        "tools": {spec.reference: tool_config},
     }
     agent_policy = {
         "allow": [spec.reference],
         "permissions": [spec.permission],
-        "secrets": ["authorization"],
-        "tools": {spec.reference: {"scope": "tenant", "max_items": 5}},
+        "secrets": agent_secret_names,
+        "tools": {spec.reference: tool_config},
     }
     if not authorize:
         agent_policy = {}
@@ -198,12 +237,19 @@ async def _seed_gateway_run(
     return claim
 
 
-def _gateway(database: Database, executor: _Executor) -> ToolGateway:
+def _gateway(
+    database: Database,
+    executor: _Executor,
+    *,
+    environment: dict[str, str] | None = None,
+) -> ToolGateway:
     return ToolGateway(
         database,
         ToolRegistry([executor]),
         secret_resolver=EnvironmentSecretResolver(
             {"NICO_TOOL_SECRET_TEST_AUTH": "very-secret-value"}
+            if environment is None
+            else environment
         ),
     )
 
@@ -288,6 +334,85 @@ async def test_gateway_success_is_redacted_audited_and_idempotent() -> None:
         assert definition_count == 1
         assert event_count >= 3
         assert audit_count == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_uses_provider_selected_secret_subset_for_list_and_execute() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    spec = _spec()
+    executor = _ProviderExecutor(spec)
+    worker_id = f"gateway-conditional-secret-{uuid4()}"
+    try:
+        claim = await _seed_gateway_run(
+            database,
+            spec,
+            worker_id=worker_id,
+            tool_config={"provider": "searxng"},
+            secret_refs={},
+            agent_secret_names=[],
+        )
+        gateway = _gateway(database, executor, environment={})
+
+        authorized = await gateway.list_authorized(claim, worker_id=worker_id)
+        result = await gateway.execute(
+            claim,
+            worker_id=worker_id,
+            request=ToolGatewayRequest(
+                tool_name=spec.name,
+                tool_version=spec.version,
+                arguments={"mode": "success"},
+                idempotency_key="secretless-provider",
+                caller="runtime:mock",
+            ),
+        )
+
+        assert [item.reference for item in authorized] == [spec.reference]
+        assert result.status is ToolCallStatus.SUCCEEDED
+        assert result.output is not None and result.output["secret_echo"] == "[REDACTED]"
+        assert executor.seen_secrets == [{}]
+        assert executor.seen_contexts[0].tool_config == {"provider": "searxng"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_list_and_execute_fail_when_selected_secret_value_is_missing() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    spec = _spec()
+    executor = _ProviderExecutor(spec)
+    worker_id = f"gateway-missing-selected-secret-{uuid4()}"
+    try:
+        claim = await _seed_gateway_run(
+            database,
+            spec,
+            worker_id=worker_id,
+            tool_config={"provider": "brave"},
+        )
+        gateway = _gateway(database, executor, environment={})
+
+        assert await gateway.list_authorized(claim, worker_id=worker_id) == ()
+        result = await gateway.execute(
+            claim,
+            worker_id=worker_id,
+            request=ToolGatewayRequest(
+                tool_name=spec.name,
+                tool_version=spec.version,
+                arguments={"mode": "success"},
+                idempotency_key="missing-selected-secret",
+                caller="runtime:mock",
+            ),
+        )
+
+        assert result.status is ToolCallStatus.FAILED
+        assert result.error is not None
+        assert result.error["code"] == "TOOL_SECRET_UNAVAILABLE"
+        assert executor.calls == 0
     finally:
         await engine.dispose()
 

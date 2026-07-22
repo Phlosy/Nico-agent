@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
@@ -13,7 +14,12 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nico_agent.tools.errors import ToolDefinitionInvalid, ToolSchemaViolation
+from nico_agent.tools.errors import (
+    ToolAccessDenied,
+    ToolDefinitionInvalid,
+    ToolError,
+    ToolSchemaViolation,
+)
 
 _NAME = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _SEMVER = re.compile(
@@ -165,6 +171,42 @@ class ToolExecutor(Protocol):
         arguments: dict[str, Any],
         secrets: dict[str, str],
     ) -> ToolExecutionResult: ...
+
+
+@runtime_checkable
+class ToolSecretRequirements(Protocol):
+    """Optional executor capability for config-dependent Secret requirements."""
+
+    def required_secret_names(self, tool_config: dict[str, Any]) -> frozenset[str]: ...
+
+
+def executor_required_secret_names(
+    executor: ToolExecutor,
+    tool_config: dict[str, Any],
+) -> frozenset[str]:
+    """Return the selected Secret subset while preserving legacy executor behavior."""
+
+    if not isinstance(executor, ToolSecretRequirements):
+        return executor.spec.secret_names
+    try:
+        selected = executor.required_secret_names(deepcopy(tool_config))
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise ToolAccessDenied(
+            executor.spec.name,
+            executor.spec.version,
+            "tool Secret requirements are invalid for the frozen configuration",
+        ) from exc
+    if not isinstance(selected, frozenset) or any(
+        not isinstance(name, str) or not name for name in selected
+    ):
+        raise ToolAccessDenied(
+            executor.spec.name,
+            executor.spec.version,
+            "tool Secret requirements are invalid for the frozen configuration",
+        )
+    return selected
 
 
 def canonical_json(value: Any) -> str:

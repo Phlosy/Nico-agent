@@ -36,6 +36,7 @@ from nico_agent.tools.contracts import (
     ToolExecutor,
     canonical_hash,
     canonical_json,
+    executor_required_secret_names,
 )
 from nico_agent.tools.errors import (
     ToolAccessDenied,
@@ -158,14 +159,15 @@ class ToolGateway:
             if runtime_session is None:
                 return ()
             for spec in self.registry.definitions():
+                executor = self.registry.get(spec.name, spec.version)
                 try:
-                    authorize_tool(runtime_session.tool_policy_snapshot, spec)
+                    self._authorize_snapshot(runtime_session.tool_policy_snapshot, executor)
                 except ToolError:
                     continue
-                executor = self.registry.get(spec.name, spec.version)
                 definition = await self._definition(session, context, executor, run.id)
                 try:
-                    await self._authorization(session, claim, spec, definition)
+                    authorization = await self._authorization(session, claim, spec, definition)
+                    resolve_secrets(self.secret_resolver, authorization.secret_refs)
                 except ToolError:
                     continue
                 authorized.append(spec)
@@ -926,7 +928,20 @@ class ToolGateway:
         )
         if runtime_session is None:
             raise ToolAccessDenied(spec.name, spec.version, "runtime session is unavailable")
-        return authorize_tool(runtime_session.tool_policy_snapshot, spec)
+        return self._authorize_snapshot(runtime_session.tool_policy_snapshot, executor)
+
+    @staticmethod
+    def _authorize_snapshot(
+        snapshot: dict[str, Any],
+        executor: ToolExecutor,
+    ) -> ToolAuthorization:
+        return authorize_tool(
+            snapshot,
+            executor.spec,
+            secret_name_selector=lambda tool_config: executor_required_secret_names(
+                executor, tool_config
+            ),
+        )
 
     async def _owned_run(self, session: AsyncSession, claim: RunClaim, worker_id: str) -> Run:
         run = await session.scalar(

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from nico_agent.tools.contracts import ToolDefinitionSpec
-from nico_agent.tools.errors import ToolAccessDenied, ToolSecretUnavailable
+from nico_agent.tools.errors import ToolAccessDenied, ToolError, ToolSecretUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +77,12 @@ def build_tool_policy_snapshot(
     }
 
 
-def authorize_tool(snapshot: dict[str, Any], spec: ToolDefinitionSpec) -> ToolAuthorization:
+def authorize_tool(
+    snapshot: dict[str, Any],
+    spec: ToolDefinitionSpec,
+    *,
+    secret_name_selector: Callable[[dict[str, Any]], frozenset[str]] | None = None,
+) -> ToolAuthorization:
     reference = spec.reference
     allow = _string_set(snapshot.get("allow"))
     permissions = _string_set(snapshot.get("permissions"))
@@ -86,17 +93,45 @@ def authorize_tool(snapshot: dict[str, Any], spec: ToolDefinitionSpec) -> ToolAu
     if spec.permission not in permissions:
         raise ToolAccessDenied(spec.name, spec.version, "required permission is not granted")
 
+    configs = _mapping(snapshot.get("tools"))
+    tool_config = _mapping(configs.get(reference))
+    required_secret_names = spec.secret_names
+    if secret_name_selector is not None:
+        try:
+            required_secret_names = secret_name_selector(deepcopy(tool_config))
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise ToolAccessDenied(
+                spec.name,
+                spec.version,
+                "tool Secret requirements are invalid for the frozen configuration",
+            ) from exc
+        if not isinstance(required_secret_names, frozenset) or any(
+            not isinstance(name, str) or not name for name in required_secret_names
+        ):
+            raise ToolAccessDenied(
+                spec.name,
+                spec.version,
+                "tool Secret requirements are invalid for the frozen configuration",
+            )
+        if not required_secret_names <= spec.secret_names:
+            raise ToolAccessDenied(
+                spec.name,
+                spec.version,
+                "tool Secret requirements exceed the ToolDefinition declaration",
+            )
+
     all_secret_refs = _mapping(snapshot.get("secret_refs"))
     secret_refs: dict[str, str] = {}
-    for name in sorted(spec.secret_names):
+    for name in sorted(required_secret_names):
         reference_value = all_secret_refs.get(name)
         if not isinstance(reference_value, str) or not reference_value:
             raise ToolSecretUnavailable(name)
         secret_refs[name] = reference_value
 
-    configs = _mapping(snapshot.get("tools"))
     return ToolAuthorization(
-        tool_config=_mapping(configs.get(reference)),
+        tool_config=tool_config,
         secret_refs=secret_refs,
     )
 
