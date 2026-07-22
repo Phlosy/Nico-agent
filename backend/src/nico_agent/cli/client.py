@@ -41,6 +41,11 @@ class NicoApiClient:
     def close(self) -> None:
         self._client.close()
 
+    def fork(self) -> NicoApiClient:
+        """Create an independent connection lifecycle for blocking background streams."""
+
+        return NicoApiClient(self.profile)
+
     def request(
         self,
         method: str,

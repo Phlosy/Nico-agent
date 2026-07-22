@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import os
 import sys
@@ -16,12 +17,13 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 
 from nico_agent.cli.approvals import ApprovalCoordinator
+from nico_agent.cli.chat_session import InteractiveChatSession
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.execution import RunWatcher, write_binary_result
 from nico_agent.cli.output import Output
 from nico_agent.cli.renderers import ExecutionRenderer
-from nico_agent.cli.slash import COMMANDS, SlashCommand, help_rows, parse_slash
+from nico_agent.cli.slash import COMMANDS, SlashCommand, help_rows
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 _APPROVAL_MODES = ("ask", "auto-medium", "auto-all")
@@ -270,7 +272,8 @@ class ChatRunner:
                 title="Nico Chat",
             )
         else:
-            self.renderer.header(self._metadata(conversation))
+            metadata = self._metadata(conversation)
+            self.renderer.header(metadata)
         if read_only:
             self.output.table(
                 self.history(conversation["id"]),
@@ -284,33 +287,20 @@ class ChatRunner:
                 "interactive chat requires a terminal; pass MESSAGE for one-shot chat",
                 exit_code=2,
             )
-        self._resume_pending_approval(conversation)
         session = PromptSession(
             history=FileHistory(str(self._secure_history_file())),
             key_bindings=_key_bindings(),
             completer=WordCompleter([f"/{name}" for name in COMMANDS], sentence=True),
             multiline=False,
         )
-        current = conversation
-        while True:
-            try:
-                message = session.prompt("you › ")
-            except KeyboardInterrupt:
-                continue
-            except EOFError:
-                break
-            try:
-                command = parse_slash(message)
-                if command is not None:
-                    current, should_exit = self._slash(current, command)
-                    if should_exit:
-                        break
-                    continue
-                if self._dispatch_project_input(current, message):
-                    continue
-                self.submit(current, message)
-            except CliError as exc:
-                self.output.error(exc)
+        asyncio.run(
+            InteractiveChatSession(
+                self,
+                conversation,
+                session,
+                metadata=metadata,
+            ).run()
+        )
 
     def _slash(
         self,
@@ -486,8 +476,27 @@ class ChatRunner:
         turn = self._control_turn(conversation, queue)
         run_id = turn.get("run_id") if turn else None
         if name == "status":
+            metadata = self._metadata(conversation)
+            runtime: dict[str, Any] | None = None
+            if run_id:
+                try:
+                    runtime = self.client.get_runtime(str(run_id))
+                except CliError as exc:
+                    if exc.code != "RESOURCE_NOT_FOUND":
+                        raise
+            manifest = (runtime or {}).get("execution_manifest") or {}
+            approval_policy = manifest.get("tool_approval_policy") or {}
             self.output.emit(
-                {"conversation": conversation, "queue": queue, "turn": turn},
+                {
+                    "conversation": conversation,
+                    "queue": queue,
+                    "turn": turn,
+                    "session": {
+                        "model": manifest.get("model") or metadata["model"],
+                        "current_approval_mode": approval_policy.get("mode"),
+                        "next_approval_mode": conversation.get("approval_mode") or "ask",
+                    },
+                },
                 title="Status",
             )
         elif name == "agent":
@@ -916,6 +925,7 @@ class ChatRunner:
             "runtime": (
                 version.get("runtime_provider") or version.get("execution_mode") or "default"
             ),
+            "model": version.get("model_name") or "default",
             "tools": policy.get("allow") or policy.get("tools") or [],
         }
 

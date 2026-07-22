@@ -4,7 +4,12 @@ from contextlib import contextmanager
 from io import StringIO
 
 from nico_agent.cli.output import Output
-from nico_agent.cli.renderers import ExecutionRenderer, ProjectRenderer, ProviderSetupRenderer
+from nico_agent.cli.renderers import (
+    ExecutionRenderer,
+    ProjectRenderer,
+    ProviderSetupRenderer,
+    chat_footer_status,
+)
 
 
 def test_human_renderer_shows_user_actions_without_internal_lifecycle_events() -> None:
@@ -318,6 +323,48 @@ def test_execution_progress_status_is_width_bounded_and_prioritizes_connection()
     assert len(medium) <= 40
     assert len(narrow) <= 20
     assert "Running" in narrow
+
+
+def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None:
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
+    )
+    progress = renderer.progress(clock=lambda: 65.0)
+    progress.event(
+        {
+            "type": "RuntimeModelOutputDelta",
+            "payload": {"message": "private-model-delta-canary"},
+        }
+    )
+
+    wide = chat_footer_status(
+        model="deepseek-v4-pro-with-a-very-long-provider-prefix",
+        current_approval_mode="ask",
+        next_approval_mode="auto-all",
+        activity=progress.status_text(40),
+        queued_count=2,
+        queue_state="active",
+        pause_reason=None,
+        width=160,
+    )
+    narrow = chat_footer_status(
+        model="deepseek-v4-pro-with-a-very-long-provider-prefix",
+        current_approval_mode="ask",
+        next_approval_mode="auto-all",
+        activity=progress.status_text(20),
+        queued_count=2,
+        queue_state="paused",
+        pause_reason="run_failed",
+        width=36,
+    )
+
+    assert "deepseek-v4-pro" in wide
+    assert "ask → auto-all" in wide
+    assert "Thinking" in wide
+    assert "queued 2" in wide
+    assert len(narrow) <= 36
+    assert "q:paused" in narrow
+    assert "private-model-delta-canary" not in wide + narrow
 
 
 def test_execution_progress_pause_resume_and_stop_are_idempotent() -> None:

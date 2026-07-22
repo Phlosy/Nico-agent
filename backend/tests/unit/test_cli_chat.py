@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import stat
+import threading
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -8,6 +10,7 @@ from typing import Any
 import pytest
 
 from nico_agent.cli.chat import ChatRunner
+from nico_agent.cli.chat_session import InteractiveChatSession
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.output import Output
 from nico_agent.cli.slash import parse_slash
@@ -29,6 +32,24 @@ class FakeChatClient:
 
     def list_agents(self) -> list[dict[str, Any]]:
         return self.agents
+
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        return {"id": project_id, "name": "Test Project"}
+
+    def get_agent(self, agent_id: str) -> dict[str, Any]:
+        return next(agent for agent in self.agents if agent["id"] == agent_id)
+
+    def list_agent_versions(self, agent_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "version-1",
+                "agent_id": agent_id,
+                "version": 1,
+                "runtime_provider": "nico_native",
+                "model_name": "deepseek-v4-pro",
+                "tool_policy": {},
+            }
+        ]
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any]:
         return {**_conversation(conversation_id), "approval_mode": self.approval_mode}
@@ -372,6 +393,62 @@ class FakeQueueChatClient(FakeChatClient):
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         return {"id": run_id, "task_id": f"task-{run_id}"}
+
+
+class FakeInteractiveChatClient(FakeQueueChatClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.approval_mode = "auto-all"
+        self.submitted_messages: list[str] = []
+        self.decisions: list[dict[str, Any]] = []
+
+    def get_runtime(self, run_id: str) -> dict[str, Any]:
+        assert run_id == "run-1"
+        return {
+            "execution_manifest": {
+                "model": "deepseek-v4-pro",
+                "tool_approval_policy": {"mode": "ask"},
+            }
+        }
+
+    def list_tool_approvals(self, **_kwargs) -> list[dict[str, Any]]:
+        return []
+
+    def create_conversation_turn(
+        self, _conversation_id: str, message: str, **_kwargs
+    ) -> dict[str, Any]:
+        self.submitted_messages.append(message)
+        sequence = 3 + len(self.submitted_messages)
+        return {
+            "id": f"turn-{sequence}",
+            "run_id": f"run-{sequence}",
+            "run_status": "pending",
+            "run_revision": 0,
+            "sequence": sequence,
+            "user_input": message,
+        }
+
+    def decide_tool_approval(self, approval_id: str, **kwargs) -> dict[str, Any]:
+        self.decisions.append({"approval_id": approval_id, **kwargs})
+        return {"id": approval_id, "status": kwargs["decision"], "revision": 2}
+
+
+class BlockingWatchClient:
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.closed = False
+
+    def stream_run_events(self, _run_id: str, *, on_connection=None):
+        del on_connection
+        self.started.set()
+        self.release.wait(timeout=5)
+        if False:
+            yield {}
+
+    def close(self) -> None:
+        self.closed = True
+        self.release.set()
 
 
 def _conversation(value: str) -> dict[str, Any]:
@@ -913,6 +990,23 @@ def test_queue_controls_and_current_commands_use_server_targets(tmp_path: Path) 
     assert client.cancelled[-1] == ("turn-1", 4)
 
 
+def test_status_shows_full_model_and_current_next_permissions(tmp_path: Path) -> None:
+    client = FakeInteractiveChatClient()
+    runner = _runner(client, tmp_path, json_mode=False)
+    command = parse_slash("/status")
+    assert command is not None
+
+    runner._slash(
+        {**_conversation("conversation-1"), "approval_mode": "auto-all"},
+        command,
+    )
+
+    rendered = runner.output.stdout.getvalue()
+    assert "deepseek-v4-pro" in rendered
+    assert "ask" in rendered
+    assert "auto-all" in rendered
+
+
 def test_active_project_plain_input_is_a_normal_queued_turn(tmp_path: Path) -> None:
     client = FakeProjectChatClient()
     runner = _runner(client, tmp_path, json_mode=False)
@@ -926,3 +1020,157 @@ def test_active_project_plain_input_is_a_normal_queued_turn(tmp_path: Path) -> N
     assert runner._dispatch_project_input(conversation, "next message") is False
     assert client.guidance == []
     assert client.escalations == []
+
+
+async def _run_in_terminal_immediately(callback):
+    return callback()
+
+
+class FakePromptApp:
+    def __init__(self, *, text: str = "", cursor_position: int = 0) -> None:
+        self.is_running = bool(text)
+        self.current_buffer = type(
+            "Buffer",
+            (),
+            {"text": text, "cursor_position": cursor_position},
+        )()
+        self.result: str | None = None
+
+    def exit(self, *, result: str) -> None:
+        self.result = result
+
+    def invalidate(self) -> None:
+        return None
+
+
+class FakePromptSession:
+    def __init__(self, app: FakePromptApp | None = None) -> None:
+        self.app = app or FakePromptApp()
+
+
+def _interactive_session(
+    client: FakeInteractiveChatClient,
+    watcher: BlockingWatchClient,
+    tmp_path: Path,
+    *,
+    prompt_session: FakePromptSession | None = None,
+) -> InteractiveChatSession:
+    runner = _runner(client, tmp_path, json_mode=False)
+    return InteractiveChatSession(
+        runner,
+        {**_conversation("conversation-1"), "approval_mode": "auto-all"},
+        prompt_session or FakePromptSession(),  # type: ignore[arg-type]
+        metadata={"model": "configured-model"},
+        client_factory=lambda: watcher,  # type: ignore[arg-type,return-value]
+    )
+
+
+async def test_interactive_session_queues_messages_without_waiting_for_active_sse(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+
+    await session.initialize()
+    assert await asyncio.to_thread(watcher.started.wait, 1)
+    first = await session.submit_message("second message")
+    second = await session.submit_message("third message")
+
+    assert watcher.release.is_set() is False
+    assert [first["sequence"], second["sequence"]] == [4, 5]
+    assert client.submitted_messages == ["second message", "third message"]
+    assert "deepseek-v4-pro" in session.footer()
+    assert "ask → auto-all" in session.footer()
+    await session.close()
+    assert watcher.closed is True
+    assert client.cancelled == []
+
+
+async def test_interactive_approval_preserves_exact_draft_and_rejects_invalid_choice(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    prompt = FakePromptSession(FakePromptApp(text="unfinished 草稿", cursor_position=5))
+    session = _interactive_session(client, watcher, tmp_path, prompt_session=prompt)
+    approval = {"id": "approval-1", "revision": 7}
+
+    session._interrupt_for_approval()
+    assert session.saved_draft is not None
+    assert session.saved_draft.text == "unfinished 草稿"
+    assert session.saved_draft.cursor_position == 5
+    assert await session.decide_approval(approval, "not-a-choice") is False
+    assert client.decisions == []
+    assert await session.decide_approval(approval, "2") is True
+    assert client.decisions[0]["decision"] == "approve"
+    assert client.decisions[0]["allowed_scope"] == "run"
+    assert session.saved_draft.text == "unfinished 草稿"
+    assert session.saved_draft.cursor_position == 5
+    await session.close()
+
+
+async def test_interactive_ctrl_c_targets_only_active_head_and_detach_does_not_cancel_queue(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+
+    await session.initialize()
+    await session.cancel_active_turn()
+
+    assert client.cancelled == [("turn-1", 4)]
+    rendered = session.runner.output.stdout.getvalue()
+    assert "Run cancelled" in rendered
+    assert "turn-1" not in rendered
+    assert "run-1" not in rendered
+    await session.close()
+    assert client.cancelled == [("turn-1", 4)]
+
+
+def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Path) -> None:
+    runner = _runner(FakeChatClient(), tmp_path, json_mode=False)
+    called: dict[str, Any] = {}
+
+    class RecordingSessionController:
+        def __init__(self, selected_runner, conversation, prompt_session, *, metadata) -> None:
+            called.update(
+                {
+                    "runner": selected_runner,
+                    "conversation": conversation,
+                    "prompt_session": prompt_session,
+                    "metadata": metadata,
+                }
+            )
+
+        async def run(self) -> None:
+            called["ran"] = True
+
+    monkeypatch.setattr("nico_agent.cli.chat.InteractiveChatSession", RecordingSessionController)
+    monkeypatch.setattr("nico_agent.cli.chat.PromptSession", lambda **_kwargs: FakePromptSession())
+    monkeypatch.setattr(
+        runner,
+        "_metadata",
+        lambda _conversation: {
+            "agent": "Researcher",
+            "version": 1,
+            "runtime": "nico_native",
+            "model": "deepseek-v4-pro",
+            "tools": [],
+        },
+    )
+    monkeypatch.setattr(
+        "nico_agent.cli.chat.sys.stdin",
+        type("InteractiveInput", (), {"isatty": lambda self: True})(),
+    )
+
+    conversation = _conversation("conversation-1")
+    runner.run_interactive(conversation, read_only=False)
+
+    assert called["ran"] is True
+    assert called["conversation"] == conversation
+    assert called["metadata"]["model"] == "deepseek-v4-pro"

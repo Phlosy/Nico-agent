@@ -599,6 +599,52 @@ class ExecutionProgress:
         return Spinner("dots", status, style="#7895ac")
 
 
+def chat_footer_status(
+    *,
+    model: str,
+    current_approval_mode: str | None,
+    next_approval_mode: str,
+    activity: str,
+    queued_count: int,
+    queue_state: str,
+    pause_reason: str | None,
+    width: int,
+) -> str:
+    """Compose a width-bounded footer from already-curated session facts."""
+
+    available = max(1, width)
+    safe_model = _safe_value(model, limit=200) or "default"
+    safe_activity = _safe_value(activity, limit=100) or "Idle"
+    permission = (
+        f"{current_approval_mode} → {next_approval_mode}"
+        if current_approval_mode and current_approval_mode != next_approval_mode
+        else (current_approval_mode or next_approval_mode)
+    )
+    queue = (
+        f"paused ({pause_reason or 'attention required'})"
+        if queue_state == "paused"
+        else f"queued {max(0, queued_count)}"
+    )
+    verbose = f"model {safe_model} · permission {permission} · {safe_activity} · {queue}"
+    if len(verbose) <= available:
+        return verbose
+
+    modes = {"ask": "a", "auto-medium": "am", "auto-all": "aa"}
+    current_short = modes.get(current_approval_mode or "", "-")
+    next_short = modes.get(next_approval_mode, "-")
+    permission_short = (
+        f"{current_short}→{next_short}"
+        if current_approval_mode and current_approval_mode != next_approval_mode
+        else modes.get(current_approval_mode or next_approval_mode, "-")
+    )
+    phase = safe_activity.split(" ", 1)[0]
+    queue_short = "q:paused" if queue_state == "paused" else f"q:{max(0, queued_count)}"
+    suffix = f" p:{permission_short} {phase} {queue_short}"
+    model_width = max(1, available - len(suffix) - 2)
+    compact = f"m:{_ellipsize(safe_model, model_width)}{suffix}"
+    return _ellipsize(compact, available)
+
+
 def _safe_tool_detail(payload: Mapping[str, Any]) -> str:
     value = _safe_value(payload.get("tool") or payload.get("tool_name") or payload.get("name"))
     reference = value.lower()
