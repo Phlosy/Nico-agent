@@ -24,6 +24,7 @@ from nico_agent.cli.project import ProjectCli
 from nico_agent.cli.provider import ProviderInput, ProviderOnboardingCoordinator
 from nico_agent.cli.renderers import ProjectRenderer
 from nico_agent.cli.service_bridge import ServiceBridge
+from nico_agent.cli.web import WebConfigureInput, WebCoordinator
 
 T = TypeVar("T")
 
@@ -40,6 +41,7 @@ task_app = typer.Typer(help="查询 Task。", no_args_is_help=True)
 run_app = typer.Typer(help="查询 Run、Runtime 和持久化事件。", no_args_is_help=True)
 conversation_app = typer.Typer(help="查询持久化 Conversation。", no_args_is_help=True)
 provider_app = typer.Typer(help="交互式配置和验证 AI Provider。", no_args_is_help=True)
+web_app = typer.Typer(help="配置、测试和关闭 Web 搜索能力。", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
 app.add_typer(project_app, name="project")
@@ -48,6 +50,7 @@ app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(conversation_app, name="conversation")
 app.add_typer(provider_app, name="provider")
+app.add_typer(web_app, name="web")
 
 
 @dataclass(slots=True)
@@ -443,6 +446,144 @@ def provider_test(ctx: typer.Context, provider_key: str) -> None:
 
     result = _guard(state, operation)
     state.output().emit(result, title="Provider Test")
+
+
+def _web_coordinator(state: AppState, client: NicoApiClient) -> WebCoordinator:
+    profile = state.resolved_profile()
+    return WebCoordinator(
+        client,
+        state.output(),
+        service_bridge=ServiceBridge(profile),
+        interactive=sys.stdin.isatty() and not state.json_mode,
+        prompt=typer.prompt,
+        confirm=typer.confirm,
+    )
+
+
+@web_app.command("configure")
+def web_configure(
+    ctx: typer.Context,
+    provider: str | None = typer.Argument(None, help="brave 或 searxng。"),
+    endpoint: str | None = typer.Option(None, "--endpoint"),
+    credential_ref: str | None = typer.Option(None, "--credential-ref"),
+    project_id: UUID | None = typer.Option(None, "--project"),
+    agent_id: UUID | None = typer.Option(None, "--agent"),
+    expected_agent_revision: int | None = typer.Option(None, "--agent-revision", min=1),
+    starter_agent_name: str | None = typer.Option(None, "--starter-name"),
+    starter_agent_display_name: str | None = typer.Option(None, "--starter-display-name"),
+    safe_search: str = typer.Option("moderate", "--safe-search"),
+    cache_ttl_seconds: int = typer.Option(900, "--cache-ttl", min=1, max=86_400),
+    rate_limit_per_minute: int = typer.Option(20, "--rate-limit", min=1, max=10_000),
+    allowed_domain: list[str] | None = typer.Option(None, "--allow-domain"),
+    yes: bool = typer.Option(False, "--yes", help="确认发布新的 AgentVersion。"),
+) -> None:
+    """验证 Web Provider 并原子发布到一个 Agent。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            return _web_coordinator(state, client).configure(
+                WebConfigureInput(
+                    provider=provider,
+                    endpoint_key=endpoint,
+                    credential_ref=credential_ref,
+                    project_id=str(project_id) if project_id else None,
+                    agent_id=str(agent_id) if agent_id else None,
+                    expected_agent_revision=expected_agent_revision,
+                    starter_agent_name=starter_agent_name,
+                    starter_agent_display_name=starter_agent_display_name,
+                    safe_search=safe_search,
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    rate_limit_per_minute=rate_limit_per_minute,
+                    allowed_domains=allowed_domain or [],
+                    confirmed=yes,
+                )
+            )
+
+    result = _guard(state, operation)
+    state.output().emit(result, title="Nico Web")
+
+
+@web_app.command("status")
+def web_status(ctx: typer.Context) -> None:
+    """显示 Web 授权、配置、凭据和最近探测状态。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            return _web_coordinator(state, client).status()
+
+    result = _guard(state, operation)
+    if state.json_mode:
+        state.output().emit(result)
+        return
+    probe = result.get("latest_probe") or {}
+    state.output().table(
+        [
+            {
+                "provider": result.get("provider") or "—",
+                "state": result.get("diagnosis"),
+                "authorized": result.get("authorized"),
+                "credential": _web_credential_label(result),
+                "probe": probe.get("status") or "not run",
+                "agents": len(result.get("agents") or []),
+            }
+        ],
+        title="Nico Web Status",
+        columns=["provider", "state", "authorized", "credential", "probe", "agents"],
+    )
+
+
+def _web_credential_label(status: dict[str, Any]) -> str:
+    if not status.get("secret_required"):
+        return "not required"
+    available = status.get("secret_available")
+    if available is True:
+        return "available"
+    if available is False:
+        return "unavailable"
+    return "unknown"
+
+
+@web_app.command("test")
+def web_test(ctx: typer.Context) -> None:
+    """探测当前 Web Provider；不会发布新版本。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            return _web_coordinator(state, client).test()
+
+    result = _guard(state, operation)
+    state.output().emit(result, title="Nico Web Test")
+
+
+@web_app.command("disable")
+def web_disable(
+    ctx: typer.Context,
+    agent_id: UUID | None = typer.Option(None, "--agent"),
+    yes: bool = typer.Option(False, "--yes", help="确认发布移除 Web 权限的新版本。"),
+) -> None:
+    """发布一个移除 Web 权限的新 AgentVersion。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        profile = state.resolved_profile()
+        with NicoApiClient(profile) as client:
+            return _web_coordinator(state, client).disable(
+                agent_id=str(agent_id) if agent_id else None,
+                confirmed=yes,
+            )
+
+    result = _guard(state, operation)
+    state.output().emit(result, title="Nico Web")
 
 
 @app.command("chat")

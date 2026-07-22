@@ -15,10 +15,16 @@ from nico_agent.web_onboarding.contracts import (
     WebActivationCreate,
     WebActivationPreview,
     WebActivationRead,
+    WebConfigurationTestCreate,
+    WebDisableCreate,
+    WebDisablePreview,
+    WebDisablePreviewCreate,
+    WebDisableRead,
     WebPreviewCreate,
     WebProbeCreate,
     WebProbeRead,
     WebProviderCatalog,
+    WebProviderStatus,
     WebSetupReadiness,
 )
 from nico_agent.web_onboarding.service import WebOnboardingService
@@ -53,6 +59,26 @@ async def web_provider_catalog(request: Request) -> WebProviderCatalog:
 @router.get("/setup-readiness", response_model=WebSetupReadiness)
 async def web_setup_readiness(service: Service, context: Context):
     return await service.setup_readiness(context)
+
+
+@router.get("/status", response_model=WebProviderStatus)
+async def web_provider_status(service: Service, context: Context):
+    return await service.status(context)
+
+
+@router.post(
+    "/test",
+    response_model=WebProbeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def test_web_provider(
+    request: Request,
+    command: WebConfigurationTestCreate,
+    service: Service,
+    context: Context,
+):
+    _require_web_writes(request)
+    return await service.test_configuration(context, command)
 
 
 @router.post(
@@ -103,3 +129,25 @@ async def activate_web_provider(
 ):
     _require_web_writes(request)
     return await service.activate(context, command)
+
+
+@router.post("/disable/preview", response_model=WebDisablePreview)
+async def preview_web_disable(
+    request: Request,
+    command: WebDisablePreviewCreate,
+    service: Service,
+    context: Context,
+):
+    _require_web_writes(request)
+    return await service.preview_disable(context, command)
+
+
+@router.post("/disable", response_model=WebDisableRead)
+async def disable_web_provider(
+    request: Request,
+    command: WebDisableCreate,
+    service: Service,
+    context: Context,
+):
+    _require_web_writes(request)
+    return await service.disable(context, command)

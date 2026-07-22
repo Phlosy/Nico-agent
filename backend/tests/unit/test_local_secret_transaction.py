@@ -173,6 +173,33 @@ def test_tool_credential_uses_same_recoverable_owner_only_store(
     assert "brave-canary" in transaction.secret_file.read_text()
 
 
+def test_credential_check_reports_reference_availability_without_returning_value(
+    transaction: FakeTransaction,
+) -> None:
+    transaction.secret_file.write_text(
+        "NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST=brave-canary\n",
+        encoding="utf-8",
+    )
+    transaction.secret_file.chmod(0o600)
+
+    available = transaction.execute(
+        "check",
+        {"credential_ref": "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST"},
+    )
+    missing = transaction.execute(
+        "check",
+        {"credential_ref": "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_MISSING"},
+    )
+
+    assert available == {
+        "ok": True,
+        "credential_ref": "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST",
+        "available": True,
+    }
+    assert missing["available"] is False
+    assert "brave-canary" not in str(available)
+
+
 def test_secret_transaction_rejects_writable_configuration_directory(
     transaction: FakeTransaction,
 ) -> None:

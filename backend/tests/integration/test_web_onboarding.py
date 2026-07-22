@@ -27,6 +27,10 @@ from nico_agent.web_onboarding.catalog import get_web_provider_catalog
 from nico_agent.web_onboarding.contracts import (
     WebActivationCreate,
     WebActivationTarget,
+    WebConfigurationTestCreate,
+    WebDisableCreate,
+    WebDisablePreviewCreate,
+    WebDisableTarget,
     WebPreviewCreate,
     WebProbeCreate,
     WebProviderCandidate,
@@ -433,5 +437,119 @@ async def test_durable_worker_verifies_searxng_without_a_fake_secret() -> None:
         assert completed.verified_at is not None
         assert completed.result["provider"] == "searxng"
         assert completed.result["result_count"] == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_web_status_test_and_disable_preserve_immutable_versions() -> None:
+    settings = Settings(
+        environment="test",
+        web_provider_writes_enabled=True,
+        _env_file=None,
+    )
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    service = WebOnboardingService(database, settings)
+    try:
+        tenant_id, tenant_revision, project_id, agent_id, agent_revision, old_version_id = (
+            await _seed_existing_agent(database)
+        )
+        context = TenantContext(tenant_id, "web-disable-test", uuid4())
+        candidate = WebProviderCandidate(
+            provider="searxng",
+            endpoint_key="configured",
+            catalog_revision=get_web_provider_catalog(settings).catalog_revision,
+        )
+        probe = await _verified_web_probe(database, service, context, candidate)
+        target = WebActivationTarget(
+            project_id=project_id,
+            expected_tenant_revision=tenant_revision,
+            agent_id=agent_id,
+            expected_agent_revision=agent_revision,
+        )
+        activation_preview = await service.preview_activation(
+            context,
+            WebPreviewCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                target=target,
+            ),
+        )
+        activated = await service.activate(
+            context,
+            WebActivationCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                target=target,
+                preview_hash=activation_preview.preview_hash,
+            ),
+        )
+
+        ready = await service.status(context)
+        assert ready.diagnosis == "ready"
+        assert ready.authorized is True
+        assert ready.provider == "searxng"
+        assert [agent.id for agent in ready.agents] == [agent_id]
+
+        test_probe = await service.test_configuration(
+            context,
+            WebConfigurationTestCreate(idempotency_key=f"web-test-{uuid4().hex}"),
+        )
+        assert test_probe.status == "pending"
+        async with database.tenant_transaction(context) as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(AgentVersion)
+                    .where(
+                        AgentVersion.tenant_id == tenant_id,
+                        AgentVersion.agent_id == agent_id,
+                    )
+                )
+                == 2
+            )
+
+        disable_target = WebDisableTarget(
+            agent_id=agent_id,
+            expected_tenant_revision=activated.tenant_revision,
+            expected_agent_revision=activated.agent_revision,
+        )
+        disable_preview = await service.preview_disable(
+            context,
+            WebDisablePreviewCreate(target=disable_target),
+        )
+        disabled = await service.disable(
+            context,
+            WebDisableCreate(
+                target=disable_target,
+                preview_hash=disable_preview.preview_hash,
+            ),
+        )
+
+        assert disabled.agent_version == 3
+        after = await service.status(context)
+        assert after.configured is True
+        assert after.enabled is False
+        assert after.authorized is False
+        assert after.diagnosis == "unauthorized"
+        async with database.tenant_transaction(context) as session:
+            tenant = await session.get(Tenant, tenant_id)
+            agent = await session.get(Agent, agent_id)
+            original = await session.get(AgentVersion, old_version_id)
+            web_version = await session.get(AgentVersion, activated.agent_version_id)
+            disabled_version = await session.get(AgentVersion, disabled.agent_version_id)
+            assert tenant is not None
+            assert tenant.settings["web_provider"]["enabled"] is False
+            assert tenant.settings["tool_policy"]["allow"] == ["file.read@1.0.0"]
+            assert agent is not None and agent.current_version_id == disabled_version.id
+            assert original is not None and original.tool_policy["allow"] == [
+                "file.read@1.0.0"
+            ]
+            assert web_version is not None
+            assert "web.search@1.0.0" in web_version.tool_policy["allow"]
+            assert disabled_version is not None
+            assert disabled_version.tool_policy["allow"] == ["file.read@1.0.0"]
+            assert disabled_version.status == "published"
     finally:
         await engine.dispose()

@@ -198,8 +198,8 @@ doctor() {
 provider_secret() {
   local action="${1:-}"
   case "$action" in
-    begin | renew | commit | rollback | recover) ;;
-    *) die "provider-secret requires begin, renew, commit, rollback, or recover" ;;
+    begin | renew | commit | rollback | recover | check) ;;
+    *) die "provider-secret requires begin, renew, commit, rollback, recover, or check" ;;
   esac
   [[ "$(runtime)" == "native" ]] || die \
     "Provider secret transactions require the native Runtime"
@@ -223,9 +223,9 @@ Commands:
   status          Show service status
   logs [SERVICE]  Follow logs, optionally for one service
   doctor          Validate Compose and check API/Web readiness
-  provider-secret begin|renew|commit|rollback|recover
+  provider-secret begin|renew|commit|rollback|recover|check
                   Manage one recoverable Native Provider secret transaction
-  credential-secret begin|renew|commit|rollback|recover
+  credential-secret begin|renew|commit|rollback|recover|check
                   Manage one recoverable Native model/tool credential transaction
   purge --yes     Stop containers and permanently remove data volumes
   version         Show the installed release version

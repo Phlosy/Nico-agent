@@ -51,7 +51,28 @@ class LocalSecretTransaction:
             return self._rollback(request)
         if action == "recover":
             return self._recover()
-        raise LocalSecretError("LOCAL_SECRET_INVALID", "unknown Provider secret action")
+        if action == "check":
+            return self._check(request)
+        raise LocalSecretError("LOCAL_SECRET_INVALID", "unknown credential secret action")
+
+    def _check(self, request: dict[str, Any]) -> dict[str, Any]:
+        credential_ref = request.get("credential_ref")
+        if not isinstance(credential_ref, str) or not credential_ref.startswith("env:"):
+            raise LocalSecretError(
+                "LOCAL_SECRET_INVALID",
+                "local credential checks require an environment reference",
+            )
+        env_name = credential_ref.removeprefix("env:")
+        if _ENV_NAME.fullmatch(env_name) is None:
+            raise LocalSecretError(
+                "LOCAL_SECRET_INVALID",
+                "credential environment name is invalid",
+            )
+        return {
+            "ok": True,
+            "credential_ref": credential_ref,
+            "available": env_name in self._read_env(self.secret_file),
+        }
 
     def _begin(self, request: dict[str, Any]) -> dict[str, Any]:
         if self.journal_file.exists():

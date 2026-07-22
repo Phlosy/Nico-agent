@@ -31,10 +31,18 @@ from nico_agent.web_onboarding.contracts import (
     WebActivationCreate,
     WebActivationPreview,
     WebActivationRead,
+    WebAuthorizedAgent,
+    WebConfigurationTestCreate,
+    WebDisableCreate,
+    WebDisablePreview,
+    WebDisablePreviewCreate,
+    WebDisableRead,
     WebPreviewCreate,
     WebProbeCreate,
     WebProbeRead,
     WebProviderCandidate,
+    WebProviderStatus,
+    WebSearchPolicy,
     WebSetupReadiness,
     canonical_candidate_hash,
 )
@@ -63,6 +71,197 @@ class WebOnboardingService:
                 reason="ready" if enabled else "deployment_policy_disabled",
                 tenant_revision=tenant.revision,
             )
+
+    async def status(self, context: TenantContext) -> WebProviderStatus:
+        async with self.database.tenant_transaction(context) as session:
+            tenant = await session.scalar(select(Tenant).where(Tenant.id == context.tenant_id))
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            settings = tenant.settings if isinstance(tenant.settings, dict) else {}
+            configured_value = settings.get("web_provider")
+            configured_web = configured_value if isinstance(configured_value, dict) else {}
+            provider_value = configured_web.get("provider")
+            provider = provider_value if provider_value in {"brave", "searxng"} else None
+            configured = provider is not None and bool(configured_web.get("endpoint_key"))
+            enabled = configured and configured_web.get("enabled") is True
+
+            tenant_policy_value = settings.get("tool_policy")
+            tenant_policy = tenant_policy_value if isinstance(tenant_policy_value, dict) else {}
+            tenant_allow = set(_strings(tenant_policy.get("allow")))
+            tenant_authorized = {_SEARCH_REF, _FETCH_REF} <= tenant_allow
+
+            agent_rows = (
+                await session.execute(
+                    select(Agent, AgentVersion)
+                    .join(AgentVersion, Agent.current_version_id == AgentVersion.id)
+                    .where(
+                        Agent.tenant_id == context.tenant_id,
+                        Agent.status != "archived",
+                    )
+                    .order_by(Agent.name)
+                )
+            ).all()
+            agents = tuple(
+                WebAuthorizedAgent(
+                    id=agent.id,
+                    name=agent.name,
+                    revision=agent.revision,
+                    current_version_id=version.id,
+                    current_version=version.version,
+                )
+                for agent, version in agent_rows
+                if {_SEARCH_REF, _FETCH_REF} <= set(_strings(version.tool_policy.get("allow")))
+            )
+            authorized = enabled and tenant_authorized and bool(agents)
+
+            probe = await session.scalar(
+                select(ProviderProbe)
+                .where(
+                    ProviderProbe.tenant_id == context.tenant_id,
+                    ProviderProbe.kind == "verify_web",
+                )
+                .order_by(ProviderProbe.created_at.desc())
+                .limit(1)
+            )
+            latest_probe = self._probe_read(probe) if probe is not None else None
+            diagnosis = "ready"
+            if not configured:
+                diagnosis = "unconfigured"
+            elif not authorized:
+                diagnosis = "unauthorized"
+            elif probe is not None and probe.status == "failed":
+                diagnosis = (
+                    "provider_unreachable"
+                    if probe.error_code == "WEB_PROVIDER_UNAVAILABLE"
+                    else "recent_probe_failed"
+                )
+            return WebProviderStatus(
+                writes_enabled=self.settings.web_provider_writes_enabled,
+                tenant_revision=tenant.revision,
+                configured=configured,
+                authorized=authorized,
+                enabled=enabled,
+                provider=provider,
+                endpoint_key=(
+                    str(configured_web["endpoint_key"])
+                    if configured and configured_web.get("endpoint_key")
+                    else None
+                ),
+                credential_ref=(
+                    str(configured_web["credential_ref"])
+                    if configured_web.get("credential_ref")
+                    else None
+                ),
+                secret_required=provider == "brave",
+                diagnosis=diagnosis,
+                latest_probe=latest_probe,
+                agents=agents,
+            )
+
+    async def test_configuration(
+        self,
+        context: TenantContext,
+        command: WebConfigurationTestCreate,
+    ) -> WebProbeRead:
+        async with self.database.tenant_transaction(context) as session:
+            tenant = await session.scalar(select(Tenant).where(Tenant.id == context.tenant_id))
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            candidate = self._candidate_from_settings(tenant.settings)
+        return await self.create_probe(
+            context,
+            WebProbeCreate(candidate=candidate, idempotency_key=command.idempotency_key),
+        )
+
+    async def preview_disable(
+        self,
+        context: TenantContext,
+        command: WebDisablePreviewCreate,
+    ) -> WebDisablePreview:
+        async with self.database.tenant_transaction(context) as session:
+            return await self._build_disable_preview(session, context, command)
+
+    async def disable(
+        self,
+        context: TenantContext,
+        command: WebDisableCreate,
+    ) -> WebDisableRead:
+        async with self.database.tenant_transaction(context) as session:
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(
+                        func.hashtextextended(f"{context.tenant_id}:web-provider:disable", 0)
+                    )
+                )
+            )
+            preview = await self._build_disable_preview(
+                session,
+                context,
+                command,
+                lock_target=True,
+            )
+            if preview.preview_hash != command.preview_hash:
+                raise DomainConflict(
+                    "WEB_DISABLE_PREVIEW_STALE",
+                    "the Web disable preview changed; review it again",
+                )
+            projection = preview.projection
+            tenant = await session.scalar(
+                select(Tenant).where(Tenant.id == context.tenant_id).with_for_update()
+            )
+            if tenant is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
+            tenant.settings = deepcopy(projection["tenant"]["settings"])
+            tenant.revision += 1
+            agent = await session.scalar(
+                select(Agent)
+                .where(
+                    Agent.tenant_id == context.tenant_id,
+                    Agent.id == command.target.agent_id,
+                )
+                .with_for_update()
+            )
+            if agent is None:
+                raise ResourceNotFound("agent", str(command.target.agent_id))
+            lifecycle = AgentVersionLifecycle(session, context)
+            version_projection = projection["agent_version"]
+            version = await lifecycle.create(
+                agent,
+                AgentVersionCreate.model_validate(version_projection["command"]),
+                version_id=UUID(str(version_projection["id"])),
+            )
+            await lifecycle.publish(
+                agent,
+                version.id,
+                expected_revision=command.target.expected_agent_revision,
+            )
+            disabled_at = datetime.now(UTC)
+            result = WebDisableRead(
+                provider=str(projection["provider"]),
+                tenant_revision=tenant.revision,
+                agent_id=agent.id,
+                agent_revision=agent.revision,
+                agent_version_id=version.id,
+                agent_version=version.version,
+                disabled_at=disabled_at,
+            )
+            session.add(
+                AuditRecord(
+                    tenant_id=context.tenant_id,
+                    action="web_provider_disable.complete",
+                    resource_type="agent",
+                    resource_id=agent.id,
+                    actor_id=context.actor_id,
+                    details={
+                        "provider": result.provider,
+                        "preview_hash": preview.preview_hash,
+                        "agent_version_id": str(result.agent_version_id),
+                    },
+                    correlation_id=context.correlation_id,
+                )
+            )
+            await session.flush()
+            return result
 
     async def create_probe(
         self,
@@ -450,6 +649,175 @@ class WebOnboardingService:
             "expected_revision": 1,
         }, None
 
+    def _candidate_from_settings(self, value: Any) -> WebProviderCandidate:
+        settings = value if isinstance(value, dict) else {}
+        configured_value = settings.get("web_provider")
+        configured = configured_value if isinstance(configured_value, dict) else {}
+        provider = configured.get("provider")
+        endpoint_key = configured.get("endpoint_key")
+        if (
+            configured.get("enabled") is not True
+            or provider not in {"brave", "searxng"}
+            or not isinstance(endpoint_key, str)
+        ):
+            raise DomainConflict(
+                "WEB_SEARCH_NOT_CONFIGURED",
+                "configure and enable a Web Provider before testing it",
+            )
+        tenant_policy_value = settings.get("tool_policy")
+        tenant_policy = tenant_policy_value if isinstance(tenant_policy_value, dict) else {}
+        tools_value = tenant_policy.get("tools")
+        tools = tools_value if isinstance(tools_value, dict) else {}
+        search_value = tools.get(_SEARCH_REF)
+        search = search_value if isinstance(search_value, dict) else {}
+        fetch_value = tools.get(_FETCH_REF)
+        fetch = fetch_value if isinstance(fetch_value, dict) else {}
+        credential_ref = configured.get("credential_ref")
+        return WebProviderCandidate(
+            provider=provider,
+            endpoint_key=endpoint_key,
+            credential_ref=credential_ref if isinstance(credential_ref, str) else None,
+            policy=WebSearchPolicy(
+                safe_search=search.get("safe_search", "moderate"),
+                cache_ttl_seconds=search.get("cache_ttl_seconds", 900),
+                rate_limit_per_minute=search.get("rate_limit_per_minute", 20),
+                allowed_domains=tuple(
+                    item
+                    for item in fetch.get("allowed_domains", [])
+                    if isinstance(item, str)
+                ),
+            ),
+            catalog_revision=get_web_provider_catalog(self.settings).catalog_revision,
+        )
+
+    async def _build_disable_preview(
+        self,
+        session: AsyncSession,
+        context: TenantContext,
+        command: WebDisablePreviewCreate,
+        *,
+        lock_target: bool = False,
+    ) -> WebDisablePreview:
+        tenant_statement = select(Tenant).where(Tenant.id == context.tenant_id)
+        agent_statement = select(Agent).where(
+            Agent.tenant_id == context.tenant_id,
+            Agent.id == command.target.agent_id,
+        )
+        if lock_target:
+            tenant_statement = tenant_statement.with_for_update()
+            agent_statement = agent_statement.with_for_update()
+        tenant = await session.scalar(tenant_statement)
+        if tenant is None:
+            raise ResourceNotFound("tenant", str(context.tenant_id))
+        if tenant.revision != command.target.expected_tenant_revision:
+            raise DomainConflict(
+                "REVISION_CONFLICT",
+                f"tenant revision is {tenant.revision}, expected "
+                f"{command.target.expected_tenant_revision}",
+            )
+        agent = await session.scalar(agent_statement)
+        if agent is None:
+            raise ResourceNotFound("agent", str(command.target.agent_id))
+        if agent.revision != command.target.expected_agent_revision:
+            raise DomainConflict(
+                "REVISION_CONFLICT",
+                f"agent revision is {agent.revision}, expected "
+                f"{command.target.expected_agent_revision}",
+            )
+        if agent.current_version_id is None:
+            raise DomainConflict(
+                "WEB_AGENT_VERSION_REQUIRED",
+                "the selected Agent has no published version",
+            )
+        current = await session.scalar(
+            select(AgentVersion).where(
+                AgentVersion.tenant_id == context.tenant_id,
+                AgentVersion.agent_id == agent.id,
+                AgentVersion.id == agent.current_version_id,
+            )
+        )
+        if current is None:
+            raise DomainConflict(
+                "WEB_AGENT_VERSION_REQUIRED",
+                "the selected Agent published version is unavailable",
+            )
+        settings = tenant.settings if isinstance(tenant.settings, dict) else {}
+        configured_value = settings.get("web_provider")
+        configured = configured_value if isinstance(configured_value, dict) else {}
+        provider = configured.get("provider")
+        if configured.get("enabled") is not True or provider not in {"brave", "searxng"}:
+            raise DomainConflict("WEB_ALREADY_DISABLED", "Web access is not currently enabled")
+        current_allow = set(_strings(current.tool_policy.get("allow")))
+        if not current_allow.intersection({_SEARCH_REF, _FETCH_REF}):
+            raise DomainConflict(
+                "WEB_AGENT_NOT_AUTHORIZED",
+                "the selected Agent does not currently have Web access",
+            )
+
+        tenant_settings = deepcopy(settings)
+        tenant_settings["tool_policy"] = _remove_tenant_web_policy(
+            tenant_settings.get("tool_policy")
+        )
+        disabled_config = deepcopy(configured)
+        disabled_config["enabled"] = False
+        tenant_settings["web_provider"] = disabled_config
+        lifecycle = AgentVersionLifecycle(session, context)
+        version_command = lifecycle.command_from_version(
+            current,
+            model_endpoint_id=current.model_endpoint_id,
+            model_name=current.model_name,
+            runtime_provider=current.runtime_provider,
+            tool_policy=_remove_agent_web_policy(current.tool_policy),
+        )
+        latest_version = await session.scalar(
+            select(func.max(AgentVersion.version)).where(
+                AgentVersion.tenant_id == context.tenant_id,
+                AgentVersion.agent_id == agent.id,
+            )
+        )
+        version_id = uuid5(
+            NAMESPACE_URL,
+            f"nico:web-disable:{context.tenant_id}:{tenant.revision}:{agent.id}:"
+            f"{agent.revision}:{current.id}",
+        )
+        runtime_provider = lifecycle.runtime_provider(version_command)
+        projection: dict[str, Any] = {
+            "schema_version": 1,
+            "provider": provider,
+            "tenant": {
+                "id": str(tenant.id),
+                "expected_revision": tenant.revision,
+                "settings": tenant_settings,
+            },
+            "agent": {
+                "id": str(agent.id),
+                "name": agent.name,
+                "expected_revision": agent.revision,
+                "current_version_id": str(current.id),
+            },
+            "agent_version": {
+                "id": str(version_id),
+                "version": (latest_version or 0) + 1,
+                "content_hash": lifecycle.content_hash(
+                    version_command,
+                    runtime_provider=runtime_provider,
+                ),
+                "command": version_command.model_dump(mode="json", by_alias=True),
+            },
+        }
+        return WebDisablePreview(
+            preview_hash=_disable_preview_hash(projection),
+            changed_fields=(
+                "tenant.settings.tool_policy",
+                "tenant.settings.web_provider.enabled",
+                "tenant.revision",
+                "agent_version",
+                "agent.current_version_id",
+                "agent.revision",
+            ),
+            projection=projection,
+        )
+
     def _validate_candidate(self, candidate: WebProviderCandidate) -> str:
         catalog = get_web_provider_catalog(self.settings)
         if candidate.catalog_revision != catalog.catalog_revision:
@@ -667,6 +1035,50 @@ def _tool_configs(candidate: WebProviderCandidate) -> tuple[dict[str, Any], dict
     )
 
 
+def _remove_tenant_web_policy(value: Any) -> dict[str, Any]:
+    policy = deepcopy(value) if isinstance(value, dict) else {}
+    policy["allow"] = [
+        item for item in _strings(policy.get("allow")) if item not in {_SEARCH_REF, _FETCH_REF}
+    ]
+    policy["permissions"] = [
+        item
+        for item in _strings(policy.get("permissions"))
+        if item not in {_SEARCH_PERMISSION, _FETCH_PERMISSION}
+    ]
+    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
+    tools.pop(_SEARCH_REF, None)
+    tools.pop(_FETCH_REF, None)
+    policy["tools"] = tools
+    secret_refs = (
+        deepcopy(policy.get("secret_refs"))
+        if isinstance(policy.get("secret_refs"), dict)
+        else {}
+    )
+    secret_refs.pop(_BRAVE_SECRET, None)
+    policy["secret_refs"] = secret_refs
+    return policy
+
+
+def _remove_agent_web_policy(value: Any) -> dict[str, Any]:
+    policy = deepcopy(value) if isinstance(value, dict) else {}
+    policy["allow"] = [
+        item for item in _strings(policy.get("allow")) if item not in {_SEARCH_REF, _FETCH_REF}
+    ]
+    policy["permissions"] = [
+        item
+        for item in _strings(policy.get("permissions"))
+        if item not in {_SEARCH_PERMISSION, _FETCH_PERMISSION}
+    ]
+    tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
+    tools.pop(_SEARCH_REF, None)
+    tools.pop(_FETCH_REF, None)
+    policy["tools"] = tools
+    policy["secrets"] = [
+        item for item in _strings(policy.get("secrets")) if item != _BRAVE_SECRET
+    ]
+    return policy
+
+
 def _strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
@@ -679,6 +1091,15 @@ def _preview_hash(probe_id: UUID, candidate_hash: str, projection: dict[str, Any
             "candidate_hash": candidate_hash,
             "projection": projection,
         },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _disable_preview_hash(projection: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        {"schema_version": 1, "projection": projection},
         sort_keys=True,
         separators=(",", ":"),
     ).encode()

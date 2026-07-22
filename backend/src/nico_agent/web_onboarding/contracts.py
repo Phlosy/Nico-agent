@@ -176,6 +176,76 @@ class WebSetupReadiness(FrozenContract):
     tenant_revision: int
 
 
+class WebAuthorizedAgent(FrozenContract):
+    id: UUID
+    name: str
+    revision: int
+    current_version_id: UUID
+    current_version: int
+
+
+class WebProviderStatus(FrozenContract):
+    schema_version: int = 1
+    writes_enabled: bool
+    tenant_revision: int
+    configured: bool
+    authorized: bool
+    enabled: bool
+    provider: WebProviderKey | None = None
+    endpoint_key: str | None = None
+    credential_ref: str | None = None
+    secret_required: bool = False
+    diagnosis: Literal[
+        "ready",
+        "unconfigured",
+        "unauthorized",
+        "provider_unreachable",
+        "recent_probe_failed",
+    ]
+    latest_probe: WebProbeRead | None = None
+    agents: tuple[WebAuthorizedAgent, ...] = ()
+
+
+class WebConfigurationTestCreate(FrozenContract):
+    idempotency_key: str = Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+    )
+
+
+class WebDisableTarget(FrozenContract):
+    agent_id: UUID
+    expected_tenant_revision: int = Field(ge=1)
+    expected_agent_revision: int = Field(ge=1)
+
+
+class WebDisablePreviewCreate(FrozenContract):
+    target: WebDisableTarget
+
+
+class WebDisableCreate(WebDisablePreviewCreate):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WebDisablePreview(FrozenContract):
+    schema_version: int = 1
+    preview_hash: str
+    changed_fields: tuple[str, ...]
+    projection: dict[str, object]
+
+
+class WebDisableRead(FrozenContract):
+    schema_version: int = 1
+    provider: WebProviderKey
+    tenant_revision: int
+    agent_id: UUID
+    agent_revision: int
+    agent_version_id: UUID
+    agent_version: int
+    disabled_at: datetime
+
+
 def canonical_candidate_hash(candidate: WebProviderCandidate) -> str:
     encoded = json.dumps(
         candidate.model_dump(mode="json"),

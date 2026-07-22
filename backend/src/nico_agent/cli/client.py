@@ -401,6 +401,87 @@ class NicoApiClient:
             json_body=body,
         )
 
+    def web_catalog(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/web/catalog", require_tenant=False)
+
+    def web_setup_readiness(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/web/setup-readiness")
+
+    def web_status(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/web/status")
+
+    def create_web_probe(
+        self,
+        *,
+        candidate: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/web/provider-probes",
+            json_body={"candidate": candidate, "idempotency_key": idempotency_key},
+        )
+
+    def get_web_probe(self, probe_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/web/provider-probes/{probe_id}")
+
+    def test_web_configuration(self, *, idempotency_key: str) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/web/test",
+            json_body={"idempotency_key": idempotency_key},
+        )
+
+    def preview_web_activation(
+        self,
+        *,
+        probe_id: str,
+        candidate_hash: str,
+        target: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/web/activation/preview",
+            json_body={
+                "probe_id": probe_id,
+                "candidate_hash": candidate_hash,
+                "target": target,
+            },
+        )
+
+    def activate_web(
+        self,
+        *,
+        probe_id: str,
+        candidate_hash: str,
+        target: dict[str, Any],
+        preview_hash: str,
+        maintenance_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "probe_id": probe_id,
+            "candidate_hash": candidate_hash,
+            "target": target,
+            "preview_hash": preview_hash,
+        }
+        if maintenance_attempt_id is not None:
+            body["maintenance_attempt_id"] = maintenance_attempt_id
+        return self.request("POST", "/api/v1/web/activation", json_body=body)
+
+    def preview_web_disable(self, *, target: dict[str, Any]) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/web/disable/preview",
+            json_body={"target": target},
+        )
+
+    def disable_web(self, *, target: dict[str, Any], preview_hash: str) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/web/disable",
+            json_body={"target": target, "preview_hash": preview_hash},
+        )
+
     def get_task(self, task_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/tasks/{task_id}")
 

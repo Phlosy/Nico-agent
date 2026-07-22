@@ -50,6 +50,10 @@ async def test_web_api_exposes_policy_preflight_before_accepting_probe() -> None
             assert readiness.status_code == 200
             assert readiness.json()["writes_enabled"] is False
             assert readiness.json()["reason"] == "deployment_policy_disabled"
+            web_status = await client.get("/api/v1/web/status", headers=headers)
+            assert web_status.status_code == 200
+            assert web_status.json()["diagnosis"] == "unconfigured"
+            assert web_status.json()["writes_enabled"] is False
 
             denied = await client.post(
                 "/api/v1/web/provider-probes",
@@ -68,6 +72,13 @@ async def test_web_api_exposes_policy_preflight_before_accepting_probe() -> None
             assert denied.status_code == 403
             assert denied.json()["code"] == "WEB_PROVIDER_WRITES_DISABLED"
             assert "BRAVE_TEST" not in denied.text
+            denied_test = await client.post(
+                "/api/v1/web/test",
+                headers=headers,
+                json={"idempotency_key": f"web-test-denied-{uuid4().hex}"},
+            )
+            assert denied_test.status_code == 403
+            assert denied_test.json()["code"] == "WEB_PROVIDER_WRITES_DISABLED"
 
 
 @pytest.mark.asyncio

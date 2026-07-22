@@ -33,6 +33,28 @@ services:
       retries: 12
     restart: unless-stopped
 
+  searxng:
+    profiles: ["web-search-local"]
+    image: ghcr.io/searxng/searxng:2026.7.15-5cb4cb2bc@sha256:10fe5cbcacfdc68c4312f44f0f945bf7f5b857b30308972cae8ad128e8ca263c
+    environment:
+      FORCE_OWNERSHIP: "false"
+      SEARXNG_BASE_URL: http://127.0.0.1:${SEARXNG_PORT:-18888}/
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-18888}:8080"
+    volumes:
+      - ./deploy/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
   minio:
     image: quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: ["server", "/data", "--console-address", ":9001"]

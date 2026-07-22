@@ -39,6 +39,14 @@ class ServiceBridge:
     def begin_credential(self, env_name: str, secret: str) -> SecretAttempt:
         return self._begin("credential-secret", env_name, secret)
 
+    def credential_available(self, credential_ref: str) -> bool:
+        response = self._invoke(
+            "check",
+            {"credential_ref": credential_ref},
+            command="credential-secret",
+        )
+        return response.get("available") is True
+
     def _begin(self, command: str, env_name: str, secret: str) -> SecretAttempt:
         attempt_id = str(uuid4())
         response = self._invoke(
