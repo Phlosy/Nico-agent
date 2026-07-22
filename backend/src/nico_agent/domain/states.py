@@ -67,6 +67,14 @@ class ConversationApprovalMode(StrEnum):
     AUTO_ALL = "auto-all"
 
 
+def conversation_auto_approved_risks(mode: ConversationApprovalMode) -> frozenset[str]:
+    return {
+        ConversationApprovalMode.ASK: frozenset(),
+        ConversationApprovalMode.AUTO_MEDIUM: frozenset({"medium"}),
+        ConversationApprovalMode.AUTO_ALL: frozenset({"medium", "high"}),
+    }[mode]
+
+
 class ConversationQueueState(StrEnum):
     ACTIVE = "active"
     PAUSED = "paused"

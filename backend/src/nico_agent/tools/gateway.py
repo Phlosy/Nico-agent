@@ -25,10 +25,12 @@ from nico_agent.domain.models import (
     ToolDefinition,
 )
 from nico_agent.domain.states import (
+    ConversationApprovalMode,
     RunStatus,
     RunStepStatus,
     ToolApprovalStatus,
     ToolCallStatus,
+    conversation_auto_approved_risks,
 )
 from nico_agent.tool_approvals.service import ToolApprovalService
 from nico_agent.tools.contracts import (
@@ -701,11 +703,15 @@ class ToolGateway:
                 "conversation_id": None,
             }
         candidate = runtime_session.execution_manifest.get("tool_approval_policy")
-        if not isinstance(candidate, dict) or candidate.get("mode") not in {
-            "ask",
-            "auto-medium",
-            "auto-all",
-        }:
+        if not isinstance(candidate, dict):
+            return {
+                "mode": "ask",
+                "source": "deployment_default",
+                "conversation_id": None,
+            }
+        try:
+            mode = ConversationApprovalMode(candidate.get("mode"))
+        except (TypeError, ValueError):
             return {
                 "mode": "ask",
                 "source": "deployment_default",
@@ -713,7 +719,7 @@ class ToolGateway:
             }
         source = candidate.get("source")
         return {
-            "mode": candidate["mode"],
+            "mode": mode.value,
             "source": source
             if source in {"conversation", "deployment_default"}
             else "deployment_default",
@@ -722,9 +728,8 @@ class ToolGateway:
 
     @staticmethod
     def _policy_auto_approves(policy: dict[str, Any], risk_level: str) -> bool:
-        return policy["mode"] == "auto-all" or (
-            policy["mode"] == "auto-medium" and risk_level == "medium"
-        )
+        mode = ConversationApprovalMode(policy["mode"])
+        return risk_level in conversation_auto_approved_risks(mode)
 
     @staticmethod
     async def _run_scope_grant(

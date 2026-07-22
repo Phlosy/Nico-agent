@@ -52,6 +52,7 @@ from nico_agent.domain.states import (
     RunStatus,
     RunStepStatus,
     TaskStatus,
+    conversation_auto_approved_risks,
 )
 from nico_agent.projects.interventions import ProjectInterventionService
 from nico_agent.projects.metadata import is_managed_project
@@ -1564,12 +1565,7 @@ class RuntimeExecutionService:
             if conversation is not None
             else ConversationApprovalMode.ASK
         )
-        auto_approved = {
-            ConversationApprovalMode.ASK: frozenset(),
-            ConversationApprovalMode.AUTO_MEDIUM: frozenset({"medium"}),
-            ConversationApprovalMode.AUTO_ALL: frozenset({"medium", "high"}),
-        }[mode]
-        conflicts = auto_approved & self.approval_locked_risks
+        conflicts = conversation_auto_approved_risks(mode) & self.approval_locked_risks
         if conflicts:
             raise ValueError(
                 "conversation approval mode conflicts with deployment-locked risks: "

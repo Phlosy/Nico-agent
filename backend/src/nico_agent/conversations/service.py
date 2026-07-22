@@ -49,6 +49,7 @@ from nico_agent.domain.states import (
     ConversationTurnStatus,
     RunStatus,
     TaskStatus,
+    conversation_auto_approved_risks,
     require_revision,
 )
 
@@ -298,12 +299,7 @@ class ConversationService:
             return conversation
 
     def _locked_mode_risks(self, mode: ConversationApprovalMode) -> frozenset[str]:
-        auto_approved = {
-            ConversationApprovalMode.ASK: frozenset(),
-            ConversationApprovalMode.AUTO_MEDIUM: frozenset({"medium"}),
-            ConversationApprovalMode.AUTO_ALL: frozenset({"medium", "high"}),
-        }[mode]
-        return auto_approved & self.approval_locked_risks
+        return conversation_auto_approved_risks(mode) & self.approval_locked_risks
 
     async def create_turn(
         self,
@@ -1074,6 +1070,10 @@ class ConversationService:
                 .where(
                     ConversationTurn.tenant_id == conversation.tenant_id,
                     ConversationTurn.conversation_id == conversation.id,
+                    or_(
+                        Run.status.not_in(_TERMINAL_RUN_STATUSES),
+                        ConversationTurn.id == conversation.queue_pause_turn_id,
+                    ),
                 )
                 .order_by(ConversationTurn.sequence)
             )
