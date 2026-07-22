@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from nico_agent.net.safe_http import SafeHttpClient, SafeHttpError, SafeHttpPolicy
@@ -41,16 +42,23 @@ class BraveSearchProvider:
         request: SearchRequest,
         *,
         secret: str | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> SearchPage:
         if not isinstance(secret, str) or not secret:
             raise SearchProviderError(
                 "WEB_SEARCH_SECRET_UNAVAILABLE",
                 "Brave Web Search credential is unavailable",
             )
+        safe_search = (config or {}).get("safe_search", self.safe_search)
+        if safe_search not in _SAFE_SEARCH:
+            raise SearchProviderError(
+                "WEB_SEARCH_NOT_CONFIGURED",
+                "Brave SafeSearch policy is invalid",
+            )
         params = {
             "q": query_with_domains(request),
             "count": str(request.count),
-            "safesearch": self.safe_search,
+            "safesearch": safe_search,
         }
         if request.language:
             params["search_lang"] = request.language

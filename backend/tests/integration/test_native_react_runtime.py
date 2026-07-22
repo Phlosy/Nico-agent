@@ -41,7 +41,14 @@ from nico_agent.models.registry import ModelProviderRegistry
 from nico_agent.runtime import NicoNativeRuntimeProvider, RuntimeProviderRegistry
 from nico_agent.runtime.executor import RuntimeWorker
 from nico_agent.tools import ToolGateway, ToolRegistry
-from nico_agent.tools.builtin import FileReadExecutor, FileWriteExecutor, WorkspaceManager
+from nico_agent.tools.builtin import (
+    FileReadExecutor,
+    FileWriteExecutor,
+    WebSearchExecutor,
+    WorkspaceManager,
+)
+from nico_agent.web.contracts import SearchPage, SearchResult
+from nico_agent.web.registry import WebProviderRegistry
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -97,6 +104,57 @@ class SequencedToolModelProvider:
             finish_reason="tool_calls",
             usage=ModelUsage(input_tokens=8, output_tokens=4, total_tokens=12, status="exact"),
             provider_request_id=f"react-{call_id}",
+        )
+
+
+class WebSearchModelProvider:
+    name = "openai_compatible"
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def describe_capabilities(self):
+        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+
+    async def stream(self, request):
+        self.requests.append(request)
+        observations = [message for message in request.messages if message.role == "tool"]
+        if not observations:
+            async for event in SequencedToolModelProvider._tool(
+                "model-web-call",
+                "web.search",
+                {"query": "current Nico documentation", "count": 1},
+            ):
+                yield event
+            return
+        yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
+        yield ModelStreamEvent(
+            type=ModelStreamEventType.TEXT_DELTA,
+            text_delta="Found current documentation.",
+        )
+        yield ModelStreamEvent(
+            type=ModelStreamEventType.RESPONSE_COMPLETED,
+            finish_reason="stop",
+            usage=ModelUsage(input_tokens=10, output_tokens=3, total_tokens=13, status="exact"),
+            provider_request_id="web-final",
+        )
+
+
+class FakeNativeSearchProvider:
+    key = "searxng"
+
+    async def search(self, request, *, secret=None, config=None):
+        assert request.query == "current Nico documentation"
+        assert secret is None
+        return SearchPage(
+            provider="searxng",
+            results=(
+                SearchResult(
+                    title="Nico documentation",
+                    url="https://docs.example/nico",
+                    snippet="Current platform documentation",
+                ),
+            ),
         )
 
 
@@ -256,6 +314,143 @@ async def test_native_react_persists_multi_round_tool_and_checkpoint_graph(tmp_p
             assert step.iteration is not None
             assert step.context_snapshot_id == context_by_version[step.iteration]
             assert step.model_call_id == call_by_iteration[step.iteration]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_native_react_observes_web_search_with_platform_tool_call_id() -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    tool_config = {
+        "provider": "searxng",
+        "safe_search": "moderate",
+        "cache_ttl_seconds": 60,
+        "rate_limit_per_minute": 20,
+    }
+    policy = {
+        "allow": ["web.search@1.0.0"],
+        "permissions": ["network.web.search"],
+        "tools": {"web.search@1.0.0": tool_config},
+    }
+    try:
+        suffix = uuid4().hex[:10]
+        async with database.admin_transaction() as session:
+            tenant = Tenant(
+                name=f"Native Web {suffix}",
+                slug=f"native-web-{suffix}",
+                settings={"tool_policy": policy},
+            )
+            session.add(tenant)
+            await session.flush()
+            project = Project(tenant_id=tenant.id, name=f"project-{suffix}")
+            agent = Agent(
+                tenant_id=tenant.id,
+                name=f"agent-{suffix}",
+                display_name="Native Web Agent",
+            )
+            endpoint = ModelEndpoint(
+                tenant_id=tenant.id,
+                stable_key=f"native-web-{suffix}",
+                revision=1,
+                display_name="Native Web fake model",
+                base_url="https://models.example/v1",
+                credential_ref="env:NICO_MODEL_SECRET_TEST",
+                allowed_models=["web-model"],
+                capabilities={"streaming": True, "tools": True},
+            )
+            session.add_all([project, agent, endpoint])
+            await session.flush()
+            version = AgentVersion(
+                tenant_id=tenant.id,
+                agent_id=agent.id,
+                version=1,
+                status="published",
+                role="web researcher",
+                mandate="Search current public information",
+                runtime_provider="nico_native",
+                execution_mode="react",
+                model_endpoint_id=endpoint.id,
+                model_name="web-model",
+                tool_policy=policy,
+                budgets={"max_iterations": 3, "max_tool_calls": 1},
+                content_hash="e" * 64,
+            )
+            session.add(version)
+            await session.flush()
+            agent.current_version_id = version.id
+            agent.status = "ready"
+            task = Task(
+                tenant_id=tenant.id,
+                project_id=project.id,
+                assignee_agent_id=agent.id,
+                title="Current Nico docs",
+                input={"prompt": "Find current Nico documentation"},
+                status="running",
+                priority=2_147_483_647,
+            )
+            session.add(task)
+            await session.flush()
+            run = Run(
+                tenant_id=tenant.id,
+                task_id=task.id,
+                agent_id=agent.id,
+                agent_version_id=version.id,
+                attempt=1,
+                max_steps=3,
+                token_budget=1000,
+            )
+            session.add(run)
+            await session.flush()
+            run_id = run.id
+
+        model = WebSearchModelProvider()
+        search = WebSearchExecutor(
+            WebProviderRegistry([FakeNativeSearchProvider()]),
+            environment="test",
+        )
+        worker = RuntimeWorker(
+            database,
+            RuntimeProviderRegistry(
+                [NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))]
+            ),
+            worker_id=f"native-web-{suffix}",
+            lease_seconds=10,
+            heartbeat_seconds=1,
+            tool_gateway=ToolGateway(
+                database,
+                ToolRegistry([search]),
+                approval_required_risks=frozenset(),
+            ),
+        )
+
+        assert await worker.execute_once() is True
+
+        async with database.admin_transaction() as session:
+            completed = await session.get(Run, run_id)
+            tool_calls = list(
+                await session.scalars(select(ToolCall).where(ToolCall.run_id == run_id))
+            )
+        assert completed is not None and completed.status == "completed"
+        assert len(tool_calls) == 1 and tool_calls[0].status == "succeeded"
+        assert len(model.requests) == 2
+        assert [tool.name for tool in model.requests[0].tools] == ["web.search"]
+        observation = model.requests[1].messages[-1]
+        assert observation.role == "tool"
+        assert observation.tool_call_id == "model-web-call"
+        payload = json.loads(observation.content or "{}")
+        assert payload["tool_call_id"] == str(tool_calls[0].id)
+        assert payload["output"]["provider"] == "searxng"
+        assert payload["output"]["results"] == [
+            {
+                "published_at": None,
+                "site_name": None,
+                "snippet": "Current platform documentation",
+                "title": "Nico documentation",
+                "url": "https://docs.example/nico",
+            }
+        ]
     finally:
         await engine.dispose()
 

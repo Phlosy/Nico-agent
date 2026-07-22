@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -121,4 +122,5 @@ class SearchProvider(Protocol):
         request: SearchRequest,
         *,
         secret: str | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> SearchPage: ...

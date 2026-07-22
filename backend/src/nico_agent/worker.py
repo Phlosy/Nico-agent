@@ -27,6 +27,7 @@ from nico_agent.models.providers import (
     GoogleGeminiProvider,
     OpenAICompatibleProvider,
 )
+from nico_agent.net.safe_http import SafeHttpClient
 from nico_agent.projects.worker import ProjectSupervisionWorker
 from nico_agent.provider_onboarding.worker import ProviderProbeWorker
 from nico_agent.runtime import (
@@ -45,8 +46,13 @@ from nico_agent.tools.builtin import (
     PythonSandboxExecutor,
     ReportWriteExecutor,
     SandboxRunnerClient,
+    WebSearchExecutor,
     WorkspaceManager,
 )
+from nico_agent.web.cache import RedisWebSearchCache
+from nico_agent.web.providers import BraveSearchProvider, SearxngSearchProvider
+from nico_agent.web.rate_limit import RedisWebRateLimiter
+from nico_agent.web.registry import WebProviderRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +187,24 @@ async def worker_main(settings: Settings | None = None) -> None:
         runtime_settings.sandbox_runner_url,
         runtime_settings.sandbox_runner_token,
     )
+    web_http = SafeHttpClient(
+        connect_timeout=runtime_settings.web_connect_timeout_seconds,
+        read_timeout=runtime_settings.web_read_timeout_seconds,
+    )
+    web_providers = WebProviderRegistry(
+        [
+            BraveSearchProvider(
+                http=web_http,
+                max_response_bytes=runtime_settings.web_search_max_response_bytes,
+            ),
+            SearxngSearchProvider(
+                http=web_http,
+                endpoint=runtime_settings.web_searxng_endpoint,
+                allow_private=runtime_settings.web_searxng_allow_private,
+                max_response_bytes=runtime_settings.web_search_max_response_bytes,
+            ),
+        ]
+    )
     tool_registry = ToolRegistry(
         [
             FileReadExecutor(workspace),
@@ -206,6 +230,12 @@ async def worker_main(settings: Settings | None = None) -> None:
                 nano_cpus=runtime_settings.sandbox_nano_cpus,
                 pids_limit=runtime_settings.sandbox_pids_limit,
                 output_bytes=runtime_settings.sandbox_output_bytes,
+            ),
+            WebSearchExecutor(
+                web_providers,
+                cache=RedisWebSearchCache(resources.redis),
+                rate_limiter=RedisWebRateLimiter(resources.redis),
+                environment=runtime_settings.environment,
             ),
         ]
     )

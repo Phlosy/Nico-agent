@@ -17,6 +17,7 @@ from nico_agent.tools.builtin.python_sandbox import (
     PythonSandboxExecutor,
     SandboxRunnerClient,
 )
+from nico_agent.tools.builtin.web_search import WebSearchExecutor
 
 __all__ = [
     "FileReadExecutor",
@@ -30,5 +31,6 @@ __all__ = [
     "SocketHttpTransport",
     "SandboxRunnerClient",
     "WorkspaceManager",
+    "WebSearchExecutor",
     "validate_read_query",
 ]

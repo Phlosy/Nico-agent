@@ -1076,7 +1076,7 @@ class ToolGateway:
             "run_step_id": str(call.run_step_id),
             "tool": f"{call.tool_name}@{call.tool_version}",
             "risk_level": approval.risk_level,
-            "arguments": approval.arguments_redacted,
+            "argument_keys": sorted(approval.arguments_redacted),
             "expires_at": approval.expires_at.isoformat(),
             "allowed_scopes": ["once", "run"],
             "status": approval.status,

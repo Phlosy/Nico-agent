@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from nico_agent.net.safe_http import SafeHttpClient, SafeHttpError, SafeHttpPolicy
@@ -48,12 +49,19 @@ class SearxngSearchProvider:
         request: SearchRequest,
         *,
         secret: str | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> SearchPage:
+        safe_search = (config or {}).get("safe_search", self.safe_search)
+        if safe_search not in _SAFE_SEARCH:
+            raise SearchProviderError(
+                "WEB_SEARCH_NOT_CONFIGURED",
+                "SearXNG SafeSearch policy is invalid",
+            )
         params = {
             "q": query_with_domains(request),
             "format": "json",
             "pageno": "1",
-            "safesearch": _SAFE_SEARCH[self.safe_search],
+            "safesearch": _SAFE_SEARCH[safe_search],
         }
         if request.language:
             params["language"] = request.language
