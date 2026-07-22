@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -249,8 +250,10 @@ class AgentVersionLifecycle:
     def command_from_version(
         source: AgentVersion,
         *,
-        model_endpoint_id: UUID,
-        model_name: str,
+        model_endpoint_id: UUID | None,
+        model_name: str | None,
+        runtime_provider: str | None = "nico_native",
+        tool_policy: dict[str, Any] | None = None,
     ) -> AgentVersionCreate:
         return AgentVersionCreate(
             role=source.role,
@@ -258,12 +261,12 @@ class AgentVersionLifecycle:
             boundaries=list(source.boundaries),
             long_term_goal=source.long_term_goal,
             current_goal=source.current_goal,
-            runtime_provider="nico_native",
+            runtime_provider=runtime_provider,
             execution_mode=source.execution_mode or "direct",
             model_endpoint_id=model_endpoint_id,
             model_name=model_name,
             model_config=source.model_config_json,
-            tool_policy=source.tool_policy,
+            tool_policy=source.tool_policy if tool_policy is None else tool_policy,
             memory_policy=source.memory_policy,
             skill_policy=source.skill_policy,
             plugin_refs=source.plugin_refs,

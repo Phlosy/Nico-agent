@@ -16,6 +16,8 @@ from nico_agent.domain.models import AuditRecord, ProviderProbe
 from nico_agent.models import ModelDiscoveryRequest, ModelGateway, ModelMessage, ModelRequest
 from nico_agent.models.errors import ModelProviderError
 from nico_agent.models.http_safety import clean_external_text
+from nico_agent.tools.secrets import EnvironmentSecretResolver, SecretResolver
+from nico_agent.web import SearchProviderError, SearchRequest, WebProviderRegistry
 
 
 class ProviderProbeWorker:
@@ -27,6 +29,8 @@ class ProviderProbeWorker:
         worker_id: str,
         lease_seconds: int = 90,
         execution_timeout_seconds: float | None = None,
+        web_providers: WebProviderRegistry | None = None,
+        tool_secret_resolver: SecretResolver | None = None,
     ) -> None:
         if not worker_id or len(worker_id) > 200:
             raise ValueError("worker_id must contain between 1 and 200 characters")
@@ -44,6 +48,8 @@ class ProviderProbeWorker:
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.execution_timeout_seconds = timeout
+        self.web_providers = web_providers
+        self.tool_secret_resolver = tool_secret_resolver or EnvironmentSecretResolver()
 
     async def execute_once(self) -> bool:
         claim = await self.database.claim_next_provider_probe(
@@ -114,6 +120,7 @@ class ProviderProbeWorker:
                 return None
             return {
                 "kind": probe.kind,
+                "provider_key": probe.provider_key,
                 "model": probe.model_name,
                 "endpoint": {
                     "id": str(probe.id),
@@ -129,6 +136,8 @@ class ProviderProbeWorker:
 
     async def _execute(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         endpoint = snapshot["endpoint"]
+        if snapshot["kind"] == "verify_web":
+            return await self._execute_web(snapshot)
         if snapshot["kind"] == "discover_models":
             discovered = await self.model_gateway.discover(
                 ModelDiscoveryRequest(endpoint=endpoint, limit=1000)
@@ -174,6 +183,37 @@ class ProviderProbeWorker:
             "usage": response.usage.model_dump(mode="json"),
             "provider_request_id": request_id,
             "protocol": endpoint["protocol"],
+        }, True
+
+    async def _execute_web(self, snapshot: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        if self.web_providers is None:
+            raise SearchProviderError(
+                "WEB_SEARCH_NOT_CONFIGURED",
+                "Web Provider registry is unavailable",
+            )
+        provider_key = str(snapshot["provider_key"])
+        provider = self.web_providers.get(provider_key)
+        options = snapshot["endpoint"].get("provider_options")
+        if not isinstance(options, dict):
+            raise ValueError("Web Provider probe options are invalid")
+        policy = options.get("policy")
+        if not isinstance(policy, dict):
+            raise ValueError("Web Provider probe policy is invalid")
+        secret = None
+        if provider_key == "brave":
+            secret = self.tool_secret_resolver.resolve(
+                "web_search_brave_api_key",
+                str(snapshot["endpoint"].get("credential_ref") or ""),
+            )
+        page = await provider.search(
+            SearchRequest(query="Nico Web Provider connectivity check", count=1),
+            secret=secret,
+            config=policy,
+        )
+        return {
+            "response_present": True,
+            "provider": page.provider,
+            "result_count": len(page.results),
         }, True
 
     async def _finish(
@@ -235,6 +275,8 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _provider_error_code(exc: Exception) -> str:
+    if isinstance(exc, SearchProviderError):
+        return exc.code
     code = exc.code if isinstance(exc, DomainError) else ""
     mapping = {
         "MODEL_AUTH_FAILED": "PROVIDER_AUTH_FAILED",
@@ -248,11 +290,14 @@ def _provider_error_code(exc: Exception) -> str:
         "MODEL_ENDPOINT_DENIED": "PROVIDER_ENDPOINT_DENIED",
         "MODEL_PROTOCOL_ERROR": "PROVIDER_PROTOCOL_ERROR",
         "MODEL_DISCOVERY_UNAVAILABLE": "PROVIDER_DISCOVERY_UNAVAILABLE",
+        "TOOL_SECRET_UNAVAILABLE": "WEB_SEARCH_SECRET_UNAVAILABLE",
     }
     return mapping.get(code, "PROVIDER_PROTOCOL_ERROR")
 
 
 def _safe_error_detail(exc: Exception) -> str:
+    if isinstance(exc, SearchProviderError):
+        return clean_external_text(exc.message, 500) or "Web Provider probe failed"
     if isinstance(exc, DomainError):
         details = {
             "PROVIDER_AUTH_FAILED": "Provider authentication failed.",
@@ -264,8 +309,9 @@ def _safe_error_detail(exc: Exception) -> str:
             "PROVIDER_ENDPOINT_DENIED": "The Provider endpoint was denied by policy.",
             "PROVIDER_PROTOCOL_ERROR": "The Provider returned an invalid response.",
             "PROVIDER_DISCOVERY_UNAVAILABLE": "Model discovery is unavailable.",
+            "WEB_SEARCH_SECRET_UNAVAILABLE": "Web Search credential is unavailable.",
         }
-        return details[_provider_error_code(exc)]
+        return details.get(_provider_error_code(exc), "Provider probe failed.")
     if isinstance(exc, ValueError):
         return clean_external_text(str(exc), 500) or "provider probe failed"
     return "provider probe failed"

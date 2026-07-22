@@ -71,6 +71,44 @@ def test_bridge_uses_stdin_and_fixed_argv_without_rendering_secret(tmp_path, mon
     assert "sk-canary-value" not in repr(attempt)
 
 
+def test_bridge_routes_tool_credentials_through_generic_transaction(
+    tmp_path, monkeypatch
+) -> None:
+    root = _installation(tmp_path)
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update({"argv": argv, **kwargs})
+        request = json.loads(kwargs["input"])
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "attempt_id": request["attempt_id"],
+                    "token": "token-" + "x" * 32,
+                    "credential_ref": f"env:{request['env_name']}",
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    attempt = ServiceBridge(_profile(root)).begin_credential(
+        "NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST",
+        "brave-canary",
+    )
+
+    assert captured["argv"] == [
+        str(root / "bin/nico-service"),
+        "credential-secret",
+        "begin",
+    ]
+    assert attempt.command == "credential-secret"
+    assert "brave-canary" not in " ".join(captured["argv"])
+    assert "brave-canary" not in repr(attempt)
+
+
 def test_bridge_rejects_symlink_and_writable_install_paths(tmp_path: Path) -> None:
     root = _installation(tmp_path)
     command = root / "bin/nico-service"

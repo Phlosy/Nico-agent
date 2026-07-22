@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     model_max_attempts: int = Field(default=3, ge=1, le=10)
     model_retry_base_seconds: float = Field(default=0.2, ge=0, le=30)
     model_endpoint_writes_enabled: bool = False
+    web_provider_writes_enabled: bool = False
     native_post_tool_delay_seconds: float = Field(default=0, ge=0, le=300)
     tool_approval_required_risks: list[Literal["medium", "high"]] = ["medium", "high"]
     tool_approval_ttl_seconds: int = Field(default=900, ge=30, le=86_400)

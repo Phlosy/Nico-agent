@@ -1570,7 +1570,7 @@ class ProviderProbe(Base, TimestampMixin):
     __tablename__ = "provider_probes"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('discover_models', 'verify_completion')",
+            "kind IN ('discover_models', 'verify_completion', 'verify_web')",
             name="ck_provider_probes_kind",
         ),
         CheckConstraint(
@@ -1578,7 +1578,8 @@ class ProviderProbe(Base, TimestampMixin):
             name="ck_provider_probes_status",
         ),
         CheckConstraint(
-            "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini')",
+            "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini', "
+            "'web_search')",
             name="ck_provider_probes_protocol",
         ),
         CheckConstraint("length(candidate_hash) = 64", name="ck_provider_probes_hash"),

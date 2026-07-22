@@ -20,6 +20,7 @@ class SecretAttempt:
     attempt_id: str
     token: str = field(repr=False)
     credential_ref: str
+    command: str = "provider-secret"
 
 
 class ServiceBridge:
@@ -30,16 +31,27 @@ class ServiceBridge:
         return self._invoke("recover", {})
 
     def begin(self, env_name: str, secret: str) -> SecretAttempt:
+        return self._begin("provider-secret", env_name, secret)
+
+    def recover_credentials(self) -> dict[str, Any]:
+        return self._invoke("recover", {}, command="credential-secret")
+
+    def begin_credential(self, env_name: str, secret: str) -> SecretAttempt:
+        return self._begin("credential-secret", env_name, secret)
+
+    def _begin(self, command: str, env_name: str, secret: str) -> SecretAttempt:
         attempt_id = str(uuid4())
         response = self._invoke(
             "begin",
             {"attempt_id": attempt_id, "env_name": env_name, "secret": secret},
+            command=command,
         )
         try:
             return SecretAttempt(
                 attempt_id=str(response["attempt_id"]),
                 token=str(response["token"]),
                 credential_ref=str(response["credential_ref"]),
+                command=command,
             )
         except KeyError as exc:
             raise CliError(
@@ -49,25 +61,31 @@ class ServiceBridge:
             ) from exc
 
     def renew(self, attempt: SecretAttempt) -> None:
-        self._invoke("renew", self._capability(attempt))
+        self._invoke("renew", self._capability(attempt), command=attempt.command)
 
     def commit(self, attempt: SecretAttempt) -> None:
-        self._invoke("commit", self._capability(attempt))
+        self._invoke("commit", self._capability(attempt), command=attempt.command)
 
     def rollback(self, attempt: SecretAttempt) -> None:
-        self._invoke("rollback", self._capability(attempt))
+        self._invoke("rollback", self._capability(attempt), command=attempt.command)
 
     @staticmethod
     def _capability(attempt: SecretAttempt) -> dict[str, str]:
         return {"attempt_id": attempt.attempt_id, "token": attempt.token}
 
-    def _invoke(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        command, install_root = self._attested_command()
+    def _invoke(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        command: str = "provider-secret",
+    ) -> dict[str, Any]:
+        executable, install_root = self._attested_command()
         environment = dict(os.environ)
         environment["NICO_HOME"] = str(install_root)
         try:
             completed = subprocess.run(
-                [str(command), "provider-secret", action],
+                [str(executable), command, action],
                 input=json.dumps(payload, separators=(",", ":")),
                 text=True,
                 capture_output=True,

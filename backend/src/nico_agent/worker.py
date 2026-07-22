@@ -305,6 +305,7 @@ async def worker_main(settings: Settings | None = None) -> None:
                     provider_probe_gateway,
                     worker_id=(f"{runtime_settings.worker_id}-provider-probe-{index + 1}"),
                     lease_seconds=runtime_settings.provider_probe_lease_seconds,
+                    web_providers=web_providers,
                 ),
                 stopping,
                 poll_interval_seconds=(runtime_settings.provider_probe_poll_interval_seconds),

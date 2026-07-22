@@ -208,6 +208,10 @@ provider_secret() {
     -m nico_agent.local_secret_transaction "$action"
 }
 
+credential_secret() {
+  provider_secret "$@"
+}
+
 usage() {
   cat <<'EOF'
 Usage: nico-service <command>
@@ -221,6 +225,8 @@ Commands:
   doctor          Validate Compose and check API/Web readiness
   provider-secret begin|renew|commit|rollback|recover
                   Manage one recoverable Native Provider secret transaction
+  credential-secret begin|renew|commit|rollback|recover
+                  Manage one recoverable Native model/tool credential transaction
   purge --yes     Stop containers and permanently remove data volumes
   version         Show the installed release version
 EOF
@@ -252,6 +258,7 @@ main() {
     logs) compose --profile "$(runtime)" logs --follow --tail=100 "$@" ;;
     doctor) doctor ;;
     provider-secret) provider_secret "${1:-}" ;;
+    credential-secret) credential_secret "${1:-}" ;;
     purge)
       [[ "${1:-}" == "--yes" ]] || die "purge permanently deletes data; pass --yes"
       compose --profile native --profile hermes down --remove-orphans --volumes

@@ -1,4 +1,4 @@
-"""Recoverable host-side model secret transaction used by nico-service."""
+"""Recoverable host-side model/tool credential transaction used by nico-service."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-_ENV_NAME = re.compile(r"^NICO_MODEL_SECRET_[A-Z0-9_]{1,100}$")
+_ENV_NAME = re.compile(r"^NICO_(?:MODEL|TOOL)_SECRET_[A-Z0-9_]{1,100}$")
 _MAINTENANCE_LEASE_SECONDS = 300
 _MAINTENANCE_RENEW_INTERVAL_SECONDS = 30
 _WORKER_RESTART_TIMEOUT_SECONDS = 120
@@ -65,7 +65,7 @@ class LocalSecretTransaction:
         if not isinstance(env_name, str) or _ENV_NAME.fullmatch(env_name) is None:
             raise LocalSecretError(
                 "LOCAL_SECRET_INVALID",
-                "model secret environment name is invalid",
+                "credential environment name is invalid",
             )
         if (
             not isinstance(secret, str)
@@ -77,7 +77,7 @@ class LocalSecretTransaction:
         ):
             raise LocalSecretError(
                 "LOCAL_SECRET_INVALID",
-                "model secret must be a non-empty single-line value up to 8192 characters",
+                "credential must be a non-empty single-line value up to 8192 characters",
             )
         if env_name in self._read_env(self.secret_file):
             raise LocalSecretError(
@@ -105,6 +105,7 @@ class LocalSecretTransaction:
             "attempt_id": str(attempt_id),
             "token": token,
             "env_name": env_name,
+            "kind": "tool" if env_name.startswith("NICO_TOOL_SECRET_") else "model",
             "phase": "acquired",
         }
         self._write_json(self.journal_file, journal)

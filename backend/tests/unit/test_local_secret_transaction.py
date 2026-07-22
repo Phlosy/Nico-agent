@@ -141,7 +141,36 @@ def test_journal_contains_only_expected_safe_fields(transaction: FakeTransaction
         },
     )
     journal = json.loads(transaction.journal_file.read_text())
-    assert set(journal) == {"schema_version", "attempt_id", "token", "env_name", "phase"}
+    assert set(journal) == {
+        "schema_version",
+        "attempt_id",
+        "token",
+        "env_name",
+        "kind",
+        "phase",
+    }
+    assert journal["kind"] == "model"
+
+
+def test_tool_credential_uses_same_recoverable_owner_only_store(
+    transaction: FakeTransaction,
+) -> None:
+    response = transaction.execute(
+        "begin",
+        {
+            "attempt_id": str(uuid4()),
+            "env_name": "NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST",
+            "secret": "brave-canary",
+        },
+    )
+
+    journal = json.loads(transaction.journal_file.read_text())
+    assert response["credential_ref"] == (
+        "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST"
+    )
+    assert journal["kind"] == "tool"
+    assert "brave-canary" not in transaction.journal_file.read_text()
+    assert "brave-canary" in transaction.secret_file.read_text()
 
 
 def test_secret_transaction_rejects_writable_configuration_directory(

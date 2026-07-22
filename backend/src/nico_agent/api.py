@@ -38,6 +38,7 @@ from nico_agent.plan_api import router as plan_router
 from nico_agent.projects.api import router as project_collaboration_router
 from nico_agent.provider_onboarding.api import router as provider_onboarding_router
 from nico_agent.tool_approvals.api import router as tool_approval_router
+from nico_agent.web_onboarding.api import router as web_onboarding_router
 
 logger = logging.getLogger(__name__)
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -192,10 +193,10 @@ def create_app(
             "TOOL_APPROVAL_ALREADY_DECIDED",
         }:
             status_code = 409
-        elif exc.code.startswith("PROVIDER_"):
-            status_code = 409
         elif isinstance(exc, AccessDenied):
             status_code = 403
+        elif exc.code.startswith(("PROVIDER_", "WEB_")):
+            status_code = 409
         elif exc.code == "DATABASE_UNAVAILABLE":
             status_code = 503
         return JSONResponse(
@@ -253,5 +254,6 @@ def create_app(
     app.include_router(plan_router)
     app.include_router(provider_onboarding_router)
     app.include_router(tool_approval_router)
+    app.include_router(web_onboarding_router)
 
     return app
