@@ -1014,21 +1014,6 @@ def test_status_shows_full_model_and_current_next_permissions(tmp_path: Path) ->
     assert "auto-all" in rendered
 
 
-def test_active_project_plain_input_is_a_normal_queued_turn(tmp_path: Path) -> None:
-    client = FakeProjectChatClient()
-    runner = _runner(client, tmp_path, json_mode=False)
-    conversation = {
-        **_conversation("conversation-1"),
-        "_cli_mode": "project",
-        "_cli_project_id": "project-1",
-        "_cli_project_session_id": "session-1",
-    }
-
-    assert runner._dispatch_project_input(conversation, "next message") is False
-    assert client.guidance == []
-    assert client.escalations == []
-
-
 async def _run_in_terminal_immediately(callback):
     return callback()
 
@@ -1061,11 +1046,12 @@ def _interactive_session(
     tmp_path: Path,
     *,
     prompt_session: FakePromptSession | None = None,
+    conversation: dict[str, Any] | None = None,
 ) -> InteractiveChatSession:
     runner = _runner(client, tmp_path, json_mode=False)
     return InteractiveChatSession(
         runner,
-        {**_conversation("conversation-1"), "approval_mode": "auto-all"},
+        conversation or {**_conversation("conversation-1"), "approval_mode": "auto-all"},
         prompt_session or FakePromptSession(),  # type: ignore[arg-type]
         metadata={"model": "configured-model"},
         client_factory=lambda: watcher,  # type: ignore[arg-type,return-value]
@@ -1078,7 +1064,18 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
     client = FakeInteractiveChatClient()
     watcher = BlockingWatchClient()
-    session = _interactive_session(client, watcher, tmp_path)
+    session = _interactive_session(
+        client,
+        watcher,
+        tmp_path,
+        conversation={
+            **_conversation("conversation-1"),
+            "approval_mode": "auto-all",
+            "_cli_mode": "project",
+            "_cli_project_id": "project-1",
+            "_cli_project_session_id": "session-1",
+        },
+    )
 
     await session.initialize()
     assert await asyncio.to_thread(watcher.started.wait, 1)
@@ -1119,6 +1116,55 @@ async def test_interactive_approval_preserves_exact_draft_and_rejects_invalid_ch
     await session.close()
 
 
+async def test_approval_discovered_during_refresh_interrupts_the_active_composer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    monkeypatch.setattr(
+        client,
+        "list_tool_approvals",
+        lambda **_kwargs: [{"id": "approval-2", "revision": 1}],
+    )
+    prompt = FakePromptSession(FakePromptApp(text="queued draft", cursor_position=6))
+    session = _interactive_session(
+        client,
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+
+    await session._refresh_state(include_approvals=True)
+
+    assert prompt.app.result == "\0nico-approval-interrupt"
+    assert session.saved_draft is not None
+    assert session.saved_draft.text == "queued draft"
+    assert session.saved_draft.cursor_position == 6
+    assert [approval["id"] for approval in session._approvals] == ["approval-2"]
+    await session.close()
+
+
+async def test_pending_approval_interrupt_waits_for_composer_start(tmp_path: Path) -> None:
+    client = FakeInteractiveChatClient()
+    prompt = FakePromptSession(FakePromptApp())
+    session = _interactive_session(
+        client,
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+    waiter = asyncio.create_task(session._interrupt_composer_on_approval())
+
+    session._offer_approval({"id": "approval-race", "revision": 1})
+    await asyncio.sleep(0)
+    assert prompt.app.result is None
+
+    prompt.app.is_running = True
+    await asyncio.wait_for(waiter, timeout=1)
+    assert prompt.app.result == "\0nico-approval-interrupt"
+    await session.close()
+
+
 async def test_interactive_ctrl_c_targets_only_active_head_and_detach_does_not_cancel_queue(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1137,6 +1183,94 @@ async def test_interactive_ctrl_c_targets_only_active_head_and_detach_does_not_c
     assert "run-1" not in rendered
     await session.close()
     assert client.cancelled == [("turn-1", 4)]
+
+
+async def test_interactive_ctrl_c_cancels_unclaimed_head_but_not_paused_successor(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    pending = client._turn(1, "pending")
+    queue = {
+        "conversation_id": "conversation-1",
+        "revision": 8,
+        "state": "active",
+        "pause_reason": None,
+        "head_turn": pending,
+        "active_turn": None,
+        "pause_turn": None,
+        "queued_turns": [pending],
+        "queued_count": 1,
+        "capacity": 20,
+    }
+    monkeypatch.setattr(client, "get_conversation_queue", lambda _conversation_id: queue)
+    session = _interactive_session(client, watcher, tmp_path)
+
+    await session.initialize()
+    await session.cancel_active_turn()
+
+    assert client.cancelled == [("turn-1", 4)]
+    await session.close()
+
+    paused_client = FakeInteractiveChatClient()
+    paused_client.paused = True
+    monkeypatch.setattr(
+        paused_client,
+        "get_runtime",
+        lambda _run_id: {"execution_manifest": {}},
+    )
+    paused_session = _interactive_session(paused_client, BlockingWatchClient(), tmp_path)
+    await paused_session.initialize()
+    await paused_session.cancel_active_turn()
+    assert paused_client.cancelled == []
+    await paused_session.close()
+
+
+async def test_approval_detail_failure_does_not_stop_background_consumer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    monkeypatch.setattr("nico_agent.cli.chat_session._APPROVAL_FETCH_RETRY_SECONDS", 0)
+
+    class FailingApprovalClient(FakeInteractiveChatClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.approval_fetches = 0
+
+        def get_tool_approval(self, _approval_id: str) -> dict[str, Any]:
+            self.approval_fetches += 1
+            raise CliError(
+                "APPROVAL_DETAIL_UNAVAILABLE",
+                "approval details are temporarily unavailable",
+            )
+
+    client = FailingApprovalClient()
+    session = _interactive_session(client, BlockingWatchClient(), tmp_path)
+    session._watch_run_id = "run-1"
+    session._consumer_task = asyncio.create_task(session._consume_background())
+    await session._background.put(
+        (
+            "event",
+            (
+                "run-1",
+                {
+                    "type": "ApprovalRequested",
+                    "payload": {"approval_id": "approval-1"},
+                },
+            ),
+        )
+    )
+    for _ in range(100):
+        if session.runner.output.stderr.getvalue():
+            break
+        await asyncio.sleep(0)
+
+    assert client.approval_fetches == 3
+    assert session._consumer_task.done() is False
+    assert "APPROVAL_DETAIL_UNAVAILABLE" in session.runner.output.stderr.getvalue()
+    assert not session._approvals
+    await session.close()
 
 
 async def test_interactive_watcher_converts_transport_races_to_safe_cli_errors(

@@ -14,6 +14,7 @@ cli/output.py    Rich human、JSON、no-color 和 stderr 错误输出
 cli/errors.py    稳定 CLI 错误合同与退出码
 cli/sse.py       增量 SSE 分片解析、续读游标和事件合同
 cli/chat.py      Conversation 选择、slash command、附件、compact 和下载
+cli/chat_controls.py Conversation 权限模式和持久队列控制
 cli/chat_session.py 交互 TTY 的异步 composer、后台 SSE、审批草稿和 footer
 cli/execution.py exec/watch 与私有原子结果文件写入
 ```

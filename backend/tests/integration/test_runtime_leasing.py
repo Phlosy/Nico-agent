@@ -354,7 +354,7 @@ async def test_abnormal_head_pauses_queue_but_future_cancel_does_not() -> None:
             await session.execute(
                 text(
                     "UPDATE runs SET status = 'failed', "
-                    "error = '{\"code\": \"TEST_FAILURE\"}'::jsonb, "
+                    'error = \'{"code": "TEST_FAILURE"}\'::jsonb, '
                     "revision = revision + 1 WHERE id = :run_id"
                 ),
                 {"run_id": seeded["run_ids"][0]},
@@ -427,8 +427,7 @@ async def test_paused_queue_allows_only_pause_cause_retry() -> None:
         async with database.admin_transaction() as session:
             await session.execute(
                 text(
-                    "UPDATE runs SET status = 'failed', revision = revision + 1 "
-                    "WHERE id = :run_id"
+                    "UPDATE runs SET status = 'failed', revision = revision + 1 WHERE id = :run_id"
                 ),
                 {"run_id": seeded["run_ids"][0]},
             )

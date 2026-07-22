@@ -30,8 +30,16 @@ run_key="$(date -u +%Y%m%d%H%M%S)-$$"
 config_file="$tmp_dir/config.toml"
 cli="$ROOT_DIR/.venv/bin/nico"
 python="$ROOT_DIR/.venv/bin/python"
+approval_pid=""
+approval_fifo=""
 
 archive_and_cleanup() {
+  if [[ -n "$approval_pid" ]] && kill -0 "$approval_pid" 2>/dev/null; then
+    kill "$approval_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$approval_fifo" && -p "$approval_fifo" ]]; then
+    unlink "$approval_fifo"
+  fi
   if [[ -n "${NICO_EVIDENCE_DIR:-}" ]]; then
     mkdir -p "$NICO_EVIDENCE_DIR/cli-e2e"
     cp "$tmp_dir"/* "$NICO_EVIDENCE_DIR/cli-e2e/" 2>/dev/null || true
@@ -60,6 +68,21 @@ for key in sys.argv[2:]:
     value = value[int(key)] if isinstance(value, list) else value[key]
 print(value)
 PY
+}
+
+wait_for_transcript() {
+  local transcript="$1" pattern="$2" expected="$3" description="$4"
+  for attempt in $(seq 1 180); do
+    local count=0
+    if [[ -f "$transcript" ]]; then
+      count="$(grep -aocF "$pattern" "$transcript" || true)"
+    fi
+    if [[ "$count" -ge "$expected" ]]; then
+      return
+    fi
+    [[ "$attempt" -lt 180 ]] || die "timed out waiting for $description"
+    sleep 0.5
+  done
 }
 
 policy='{"allow":["file.write@1.0.0","python.execute@1.0.0"],"permissions":["filesystem.write","code.python.execute"],"tools":{"python.execute@1.0.0":{"wall_time_seconds":5,"memory_bytes":67108864,"pids_limit":8,"output_bytes":4096}}}'
@@ -116,9 +139,28 @@ log "starting non-interactively, disconnecting at approval, then resuming in a P
   --project "$project_id" --agent "$agent_id" \
   "执行需要审批的两个工具并给出结论" >"$tmp_dir/reconnect-start.json"
 conversation_id="$(json_path "$tmp_dir/reconnect-start.json" conversation id)"
-printf '1\r2\r/exit\r' | timeout 90 script -qefc \
-  "TERM=dumb $cli --config-file $config_file --no-color chat --resume $conversation_id" \
-  "$tmp_dir/approval-session.txt" >"$tmp_dir/approval-stdout.txt"
+approval_fifo="$tmp_dir/approval-input"
+mkfifo "$approval_fifo"
+timeout 90 script -qefc \
+  "TERM=xterm-256color $cli --config-file $config_file --no-color chat --resume $conversation_id" \
+  "$tmp_dir/approval-session.txt" <"$approval_fifo" >"$tmp_dir/approval-stdout.txt" &
+approval_pid="$!"
+exec 3>"$approval_fifo"
+wait_for_transcript \
+  "$tmp_dir/approval-session.txt" "Sensitive tool approval" 1 "the first approval prompt"
+printf '1\r' >&3
+wait_for_transcript \
+  "$tmp_dir/approval-session.txt" "Sensitive tool approval" 2 "the second approval prompt"
+printf '2\r' >&3
+wait_for_transcript \
+  "$tmp_dir/approval-session.txt" \
+  "Nico ReAct recovered safely after two tool observations." 1 "the final answer"
+printf '/exit\r' >&3
+exec 3>&-
+wait "$approval_pid"
+approval_pid=""
+unlink "$approval_fifo"
+approval_fifo=""
 
 request GET "/api/v1/conversations/$conversation_id/turns?limit=10" '' \
   "$tmp_dir/turns.json" "${headers[@]}"

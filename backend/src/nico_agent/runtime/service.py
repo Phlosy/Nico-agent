@@ -224,6 +224,8 @@ class RuntimeExecutionService:
                 )
                 .with_for_update()
             )
+            if runtime_session is not None:
+                self._validate_runtime_tool_approval_policy(runtime_session)
             provider_name = (
                 runtime_session.provider_name if runtime_session is not None else resolution.name
             )
@@ -1565,17 +1567,32 @@ class RuntimeExecutionService:
             if conversation is not None
             else ConversationApprovalMode.ASK
         )
+        self._validate_tool_approval_mode(mode)
+        return {
+            "mode": mode.value,
+            "source": "conversation" if conversation is not None else "deployment_default",
+            "conversation_id": str(conversation.id) if conversation is not None else None,
+        }
+
+    def _validate_runtime_tool_approval_policy(
+        self,
+        runtime_session: RuntimeSession,
+    ) -> None:
+        policy = runtime_session.execution_manifest.get("tool_approval_policy")
+        raw_mode = policy.get("mode") if isinstance(policy, dict) else None
+        try:
+            mode = ConversationApprovalMode(raw_mode or ConversationApprovalMode.ASK.value)
+        except ValueError:
+            mode = ConversationApprovalMode.ASK
+        self._validate_tool_approval_mode(mode)
+
+    def _validate_tool_approval_mode(self, mode: ConversationApprovalMode) -> None:
         conflicts = conversation_auto_approved_risks(mode) & self.approval_locked_risks
         if conflicts:
             raise ValueError(
                 "conversation approval mode conflicts with deployment-locked risks: "
                 + ", ".join(sorted(conflicts))
             )
-        return {
-            "mode": mode.value,
-            "source": "conversation" if conversation is not None else "deployment_default",
-            "conversation_id": str(conversation.id) if conversation is not None else None,
-        }
 
     @staticmethod
     def _model_endpoint_snapshot(

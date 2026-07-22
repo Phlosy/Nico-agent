@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 _APPROVAL_INTERRUPT = "\0nico-approval-interrupt"
+_APPROVAL_FETCH_ATTEMPTS = 3
+_APPROVAL_FETCH_RETRY_SECONDS = 0.2
 
 
 class InteractiveChatSession:
@@ -66,6 +68,7 @@ class InteractiveChatSession:
         self._watch_run_id: str | None = None
         self._stop = threading.Event()
         self._approvals: deque[dict[str, Any]] = deque()
+        self._approval_ready = asyncio.Event()
         self._seen_approvals: set[str] = set()
         self._rendered_turns: set[str] = set()
         self._draft: Document | None = None
@@ -84,6 +87,7 @@ class InteractiveChatSession:
                         break
                     default = self._draft or Document("")
                     self._draft = None
+                    approval_interrupt = asyncio.create_task(self._interrupt_composer_on_approval())
                     try:
                         message = await self.prompt_session.prompt_async(
                             "you › ",
@@ -96,6 +100,9 @@ class InteractiveChatSession:
                         continue
                     except EOFError:
                         break
+                    finally:
+                        approval_interrupt.cancel()
+                        await asyncio.gather(approval_interrupt, return_exceptions=True)
                     if message == _APPROVAL_INTERRUPT:
                         continue
                     command = parse_slash(message)
@@ -171,6 +178,8 @@ class InteractiveChatSession:
     async def cancel_active_turn(self) -> None:
         await self._refresh_state()
         turn = self.queue.get("active_turn")
+        if not isinstance(turn, dict) and self.queue.get("state") == "active":
+            turn = self.queue.get("head_turn")
         if not isinstance(turn, dict):
             return
         try:
@@ -267,12 +276,12 @@ class InteractiveChatSession:
                 )
             except KeyboardInterrupt:
                 await self.cancel_active_turn()
-                self._approvals.popleft()
+                self._discard_current_approval()
                 return True
             except EOFError:
                 return False
             if await self.decide_approval(approval, answer):
-                self._approvals.popleft()
+                self._discard_current_approval()
                 await self._refresh_state()
                 self._invalidate()
                 return True
@@ -308,8 +317,11 @@ class InteractiveChatSession:
         )
         if manifest.get("model"):
             self.model = str(manifest["model"])
+        offered_approval = False
         for approval in approvals:
-            self._offer_approval(approval)
+            offered_approval = self._offer_approval(approval) or offered_approval
+        if offered_approval:
+            self._interrupt_for_approval()
         self._invalidate()
 
     async def _api_call(self, operation: Callable[[], Any]) -> Any:
@@ -409,13 +421,13 @@ class InteractiveChatSession:
                 if event.get("type") == "ApprovalRequested":
                     approval_id = (event.get("payload") or {}).get("approval_id")
                     if approval_id and str(approval_id) not in self._seen_approvals:
-                        approval = await self._api_call(
-                            lambda approval_id=approval_id: self.client.get_tool_approval(
-                                str(approval_id)
-                            )
-                        )
-                        self._offer_approval(approval)
-                        self._interrupt_for_approval()
+                        try:
+                            approval = await self._fetch_approval(str(approval_id))
+                        except CliError as exc:
+                            await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
+                        else:
+                            if self._offer_approval(approval):
+                                self._interrupt_for_approval()
             elif kind == "connection":
                 run_id, state, attempt, maximum = value
                 if run_id != self._watch_run_id:
@@ -431,7 +443,10 @@ class InteractiveChatSession:
                 if turn_id and turn_id not in self._rendered_turns:
                     self._rendered_turns.add(turn_id)
                     await run_in_terminal(lambda turn=turn: self.runner.renderer.final(turn))
-                await self._refresh_state(include_approvals=True)
+                try:
+                    await self._refresh_state(include_approvals=True)
+                except CliError as exc:
+                    await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
                 await self._ensure_watch()
             elif kind == "error":
                 run_id, error = value
@@ -441,12 +456,39 @@ class InteractiveChatSession:
                 await run_in_terminal(lambda error=error: self.runner.output.error(error))
             self._invalidate()
 
-    def _offer_approval(self, approval: dict[str, Any]) -> None:
+    async def _fetch_approval(self, approval_id: str) -> dict[str, Any]:
+        last_error: CliError | None = None
+        for attempt in range(_APPROVAL_FETCH_ATTEMPTS):
+            try:
+                return await self._api_call(lambda: self.client.get_tool_approval(approval_id))
+            except CliError as exc:
+                last_error = exc
+                if attempt + 1 < _APPROVAL_FETCH_ATTEMPTS:
+                    await asyncio.sleep(_APPROVAL_FETCH_RETRY_SECONDS * (2**attempt))
+        assert last_error is not None
+        raise last_error
+
+    def _offer_approval(self, approval: dict[str, Any]) -> bool:
         approval_id = str(approval.get("id") or "")
         if not approval_id or approval_id in self._seen_approvals:
-            return
+            return False
         self._seen_approvals.add(approval_id)
         self._approvals.append(approval)
+        self._approval_ready.set()
+        return True
+
+    def _discard_current_approval(self) -> None:
+        self._approvals.popleft()
+        if not self._approvals:
+            self._approval_ready.clear()
+
+    async def _interrupt_composer_on_approval(self) -> None:
+        await self._approval_ready.wait()
+        while self._approvals and not self._stop.is_set():
+            if self.prompt_session.app.is_running:
+                self._interrupt_for_approval()
+                return
+            await asyncio.sleep(0.01)
 
     def _stop_current_watch(self) -> None:
         self._watch_run_id = None

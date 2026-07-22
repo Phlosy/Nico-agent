@@ -4,6 +4,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 required_files=(
   backend/migrations/versions/20260722_0026_chat_session_controls.py
+  backend/src/nico_agent/cli/chat_controls.py
   backend/src/nico_agent/cli/chat_session.py
   backend/src/nico_agent/conversations/api.py
   backend/src/nico_agent/tool_approvals/service.py
@@ -39,7 +40,8 @@ fi
 python3 "$ROOT_DIR/scripts/check-docs.py"
 (
   cd "$ROOT_DIR"
-  npx --yes markdownlint-cli2@0.22.1 "*.md" "backend/*.md" "docs/*.md" ".github/*.md"
+  npx --yes markdownlint-cli2@0.22.1 \
+    "*.md" "backend/*.md" "docs/*.md" "docs/progress/feature-matrix.md" ".github/*.md"
 )
 bash -n "$ROOT_DIR"/scripts/*.sh
 git -C "$ROOT_DIR" diff --check

@@ -467,10 +467,38 @@ async def test_runtime_session_freezes_conversation_approval_mode(app_client) ->
 
     assert first_session.execution_manifest["tool_approval_policy"]["mode"] == "ask"
     assert second_session.execution_manifest["tool_approval_policy"]["mode"] == "auto-all"
+
+    second_run_id = UUID(second_response.json()["run_id"])
+    recovery_token = uuid4()
+    async with app.state.database.tenant_transaction(context) as session:
+        second_run = await session.scalar(
+            select(Run).where(Run.id == second_run_id).with_for_update()
+        )
+        assert second_run is not None
+        second_run.lease_token = recovery_token
+        second_run.lease_owner = worker_id
+        second_run.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
+        previous_status = second_run.status
+    recovery_claim = RunClaim(
+        run_id=second_run_id,
+        tenant_id=tenant_id,
+        lease_token=recovery_token,
+        previous_status=previous_status,
+    )
+    with pytest.raises(ValueError, match="deployment-locked risks: high"):
+        await RuntimeExecutionService(
+            app.state.database,
+            approval_locked_risks=frozenset({"high"}),
+        ).prepare_claim(
+            recovery_claim,
+            worker_id=worker_id,
+            registry=RuntimeProviderRegistry([MockRuntimeProvider()]),
+        )
+
     async with app.state.database.tenant_transaction(context) as session:
         await session.execute(
             update(Run)
-            .where(Run.id == UUID(second_response.json()["run_id"]))
+            .where(Run.id == second_run_id)
             .values(
                 status="cancelled",
                 ended_at=datetime.now(UTC),

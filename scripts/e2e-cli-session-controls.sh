@@ -243,7 +243,24 @@ done
 printf '/retry\r/exit\r' | timeout 30 script -qefc \
   "TERM=dumb $cli --config-file $config_file --no-color chat --resume $failure_conversation_id" \
   "$tmp_dir/failure-retry.txt" >"$tmp_dir/failure-retry-stdout.txt"
-sleep 4
+for attempt in $(seq 1 60); do
+  request GET "/api/v1/conversations/$failure_conversation_id/queue" '' \
+    "$tmp_dir/failure-retry-terminal.json" "${headers[@]}"
+  if "$python" - "$tmp_dir/failure-retry-terminal.json" <<'PY'
+import json
+import sys
+
+queue = json.load(open(sys.argv[1]))
+pause_turn = queue.get("pause_turn") or {}
+terminal = pause_turn.get("run_status") in {"failed", "cancelled", "timed_out"}
+raise SystemExit(0 if queue["state"] == "paused" and queue["queued_count"] == 1 and terminal else 1)
+PY
+  then
+    break
+  fi
+  [[ "$attempt" -lt 60 ]] || die "retried pause Turn did not reach a terminal state"
+  sleep 0.5
+done
 printf '/queue resume\r/exit\r' | timeout 30 script -qefc \
   "TERM=dumb $cli --config-file $config_file --no-color chat --resume $failure_conversation_id" \
   "$tmp_dir/failure-resume.txt" >"$tmp_dir/failure-resume-stdout.txt"
