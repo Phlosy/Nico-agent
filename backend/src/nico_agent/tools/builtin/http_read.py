@@ -15,6 +15,7 @@ from nico_agent.net.safe_http import (
     SafeHttpError,
     SafeHttpPolicy,
     SocketHttpTransport,
+    normalize_response_headers,
     resolve_addresses,
     resolve_http_target,
 )
@@ -135,7 +136,7 @@ class HttpReadExecutor:
                 response = await self.transport.request(request)
             except SafeHttpError as exc:
                 raise _tool_http_error(exc) from exc
-            headers = _headers(response.headers)
+            headers = normalize_response_headers(response.headers)
             if response.status in _REDIRECT_STATUSES:
                 location = headers.get("location")
                 if not location:
@@ -278,15 +279,6 @@ def _content_type_allowed(media_type: str, configured: Any) -> bool:
         if media_type == pattern:
             return True
     return False
-
-
-def _headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for name, value in values:
-        lowered = name.lower()
-        if lowered not in result:
-            result[lowered] = value.strip()
-    return result
 
 
 def _tool_http_error(exc: SafeHttpError) -> ToolExecutorFailure:

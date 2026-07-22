@@ -12,6 +12,7 @@ from nico_agent.net.safe_http import (
     SocketHttpTransport,
     canonicalize_http_url,
     domain_allowed,
+    normalize_response_headers,
     resolve_http_target,
 )
 
@@ -27,5 +28,6 @@ __all__ = [
     "SocketHttpTransport",
     "canonicalize_http_url",
     "domain_allowed",
+    "normalize_response_headers",
     "resolve_http_target",
 ]

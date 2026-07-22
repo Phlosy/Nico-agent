@@ -321,7 +321,7 @@ class SafeHttpClient:
             )
             if len(response.body) > max_response_bytes:
                 raise SafeHttpError("RESPONSE_TOO_LARGE", "HTTP response exceeded its byte limit")
-            response_headers = _headers(response.headers)
+            response_headers = normalize_response_headers(response.headers)
             encoding = response_headers.get("content-encoding", "identity").strip().lower()
             if encoding not in {"", "identity"}:
                 raise SafeHttpError("ENCODING_DENIED", "compressed HTTP responses are not accepted")
@@ -528,7 +528,9 @@ def _with_query_params(url: str, params: Mapping[str, str] | None) -> str:
     return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
-def _headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
+def normalize_response_headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    """Lowercase response header names and retain the first value received."""
+
     result: dict[str, str] = {}
     for name, value in values:
         result.setdefault(name.lower(), value.strip())

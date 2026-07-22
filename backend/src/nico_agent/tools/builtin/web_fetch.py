@@ -12,6 +12,7 @@ from nico_agent.net.safe_http import (
     SafeHttpError,
     SafeHttpPolicy,
     canonicalize_http_url,
+    normalize_response_headers,
 )
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
@@ -237,7 +238,7 @@ class WebFetchExecutor:
                 "WEB_FETCH_HTTP_ERROR",
                 "Web source returned an unsuccessful HTTP status",
             )
-        headers = _headers(response.headers)
+        headers = normalize_response_headers(response.headers)
         content_type = headers.get("content-type", "")
         try:
             extracted = await asyncio.to_thread(
@@ -349,13 +350,6 @@ def _bounded_int(
         "WEB_FETCH_NOT_CONFIGURED",
         "Web fetch numeric policy is invalid",
     )
-
-
-def _headers(values: tuple[tuple[str, str], ...]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for name, value in values:
-        result.setdefault(name.lower(), value.strip())
-    return result
 
 
 def _fetch_http_error(exc: SafeHttpError) -> ToolExecutorFailure:
