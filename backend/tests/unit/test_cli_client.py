@@ -299,6 +299,36 @@ def test_conversation_retry_sends_current_run_identity_and_revision() -> None:
     assert seen[0].read() == b'{"expected_run_id":"run-1","expected_run_revision":4}'
 
 
+def test_conversation_queue_and_permission_requests_are_revisioned_and_idempotent() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"conversation_id": "conversation-1", "revision": 5})
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        client.get_conversation_queue("conversation-1")
+        client.resume_conversation_queue(
+            "conversation-1",
+            expected_revision=4,
+            idempotency_key="resume-1",
+        )
+        client.update_conversation(
+            "conversation-1",
+            expected_revision=5,
+            approval_mode="auto-medium",
+        )
+
+    assert [request.url.path for request in seen] == [
+        "/api/v1/conversations/conversation-1/queue",
+        "/api/v1/conversations/conversation-1/queue/resume",
+        "/api/v1/conversations/conversation-1",
+    ]
+    assert seen[1].headers["idempotency-key"] == "resume-1"
+    assert seen[1].read() == b'{"expected_revision":4,"idempotency_key":"resume-1"}'
+    assert seen[2].read() == b'{"expected_revision":5,"approval_mode":"auto-medium"}'
+
+
 def test_conversation_attachment_and_artifact_bytes_never_become_server_paths() -> None:
     seen: list[httpx.Request] = []
 

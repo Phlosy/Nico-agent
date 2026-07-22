@@ -681,16 +681,39 @@ class NicoApiClient:
         expected_revision: int,
         title: str | None = None,
         status: str | None = None,
+        approval_mode: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"expected_revision": expected_revision}
         if title is not None:
             body["title"] = title
         if status is not None:
             body["status"] = status
+        if approval_mode is not None:
+            body["approval_mode"] = approval_mode
         return self.request(
             "PATCH",
             f"/api/v1/conversations/{conversation_id}",
             json_body=body,
+        )
+
+    def get_conversation_queue(self, conversation_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/conversations/{conversation_id}/queue")
+
+    def resume_conversation_queue(
+        self,
+        conversation_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/conversations/{conversation_id}/queue/resume",
+            json_body={
+                "expected_revision": expected_revision,
+                "idempotency_key": idempotency_key,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
         )
 
     def list_conversation_turns(

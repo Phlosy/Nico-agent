@@ -23,6 +23,8 @@ def test_slash_registry_is_discoverable_and_rejects_unknown_command() -> None:
         "/continue",
         "/plan",
         "/tools",
+        "/permissions",
+        "/queue",
         "/retry",
         "/compact",
         "/attach",
