@@ -33,6 +33,8 @@ from nico_agent.domain.states import (
     AgentStatus,
     AgentVersionStatus,
     ApprovalStatus,
+    ConversationApprovalMode,
+    ConversationQueueState,
     ConversationStatus,
     ConversationTurnStatus,
     EvaluationStatus,
@@ -371,6 +373,17 @@ class Conversation(Base, TimestampMixin):
             name="fk_conversations_last_turn",
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "id", "queue_pause_turn_id"],
+            [
+                "conversation_turns.tenant_id",
+                "conversation_turns.conversation_id",
+                "conversation_turns.id",
+            ],
+            ondelete="RESTRICT",
+            use_alter=True,
+            name="fk_conversations_queue_pause_turn",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "summary_model_call_id"],
             ["model_calls.tenant_id", "model_calls.id"],
             ondelete="RESTRICT",
@@ -403,6 +416,33 @@ class Conversation(Base, TimestampMixin):
             "status",
             "updated_at",
         ),
+        Index(
+            "ix_conversations_queue",
+            "tenant_id",
+            "queue_state",
+            "updated_at",
+        ),
+        CheckConstraint(
+            "approval_mode IN ('ask', 'auto-medium', 'auto-all')",
+            name="ck_conversations_approval_mode",
+        ),
+        CheckConstraint(
+            "queue_state IN ('active', 'paused')",
+            name="ck_conversations_queue_state",
+        ),
+        CheckConstraint(
+            "queue_pause_reason IS NULL OR queue_pause_reason IN "
+            "('run_failed', 'run_timed_out', 'turn_cancelled', 'tool_rejected', "
+            "'approval_expired', 'approval_policy_changed')",
+            name="ck_conversations_queue_pause_reason",
+        ),
+        CheckConstraint(
+            "(queue_state = 'active' AND queue_pause_reason IS NULL "
+            "AND queue_pause_turn_id IS NULL AND queue_paused_at IS NULL) OR "
+            "(queue_state = 'paused' AND queue_pause_reason IS NOT NULL "
+            "AND queue_pause_turn_id IS NOT NULL AND queue_paused_at IS NOT NULL)",
+            name="ck_conversations_queue_pause_fields",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -424,6 +464,15 @@ class Conversation(Base, TimestampMixin):
     summary_input_hash: Mapped[str | None] = mapped_column(String(64))
     summary_model_call_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     last_turn_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    approval_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ConversationApprovalMode.ASK.value
+    )
+    queue_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ConversationQueueState.ACTIVE.value
+    )
+    queue_pause_reason: Mapped[str | None] = mapped_column(String(64))
+    queue_pause_turn_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    queue_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -570,6 +619,13 @@ class ConversationTurn(Base, TimestampMixin):
             "ix_conversation_turns_history",
             "tenant_id",
             "conversation_id",
+            "sequence",
+        ),
+        Index(
+            "ix_conversation_turns_queue",
+            "tenant_id",
+            "conversation_id",
+            "status",
             "sequence",
         ),
     )

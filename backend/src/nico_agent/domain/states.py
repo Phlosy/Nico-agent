@@ -61,6 +61,26 @@ class ConversationStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class ConversationApprovalMode(StrEnum):
+    ASK = "ask"
+    AUTO_MEDIUM = "auto-medium"
+    AUTO_ALL = "auto-all"
+
+
+class ConversationQueueState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+
+
+class ConversationQueuePauseReason(StrEnum):
+    RUN_FAILED = "run_failed"
+    RUN_TIMED_OUT = "run_timed_out"
+    TURN_CANCELLED = "turn_cancelled"
+    TOOL_REJECTED = "tool_rejected"
+    APPROVAL_EXPIRED = "approval_expired"
+    APPROVAL_POLICY_CHANGED = "approval_policy_changed"
+
+
 class ConversationTurnStatus(StrEnum):
     ACCEPTED = "accepted"
     QUEUED = "queued"
