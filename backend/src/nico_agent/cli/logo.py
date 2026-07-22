@@ -1,4 +1,4 @@
-"""Terminal-safe Nico coin-cat identity.
+"""Terminal-safe Nico cat identity.
 
 The mark is deliberately code-native: it never requires image assets, remains
 legible without colour, and is omitted from machine-readable output.
@@ -13,24 +13,10 @@ from typing import TextIO
 
 from rich.text import Text
 
-PIXEL_CAT = (
-    "       ▄██████▄",
-    "     ▄█▓▓▓▓▓▓▓▓█▄",
-    "    █▓▒▄▀▄▓▓▄▀▄▒▓█",
-    "   █▓▒█  ●██●  █▒▓█",
-    "   █▓▒█   ██   █▒▓█",
-    "   █▓▒▀▄  ▄▄  ▄▀▒▓█",
-    "    █▓▒▒▀▄▄▄▄▀▒▒▓█",
-    "     ▀█▓▓▓▓▓▓█▀",
-    "       ▀████▀",
-)
-
-COMPACT_CAT = (
-    "    .-====-.",
-    "   / /\\_/\\ \\",
-    "  | ( o.o ) |",
-    "  |  > ^ <  |",
-    "   '-====-'",
+SIMPLE_CAT = (
+    " /\\_/\\",
+    "( o.o )",
+    " > ^ <",
 )
 
 
@@ -61,26 +47,21 @@ def capabilities(
     )
 
 
-def coin_cat(caps: TerminalCapabilities) -> Text:
-    """Return the full pixel mark when possible, otherwise its ASCII fallback."""
+def terminal_cat(caps: TerminalCapabilities) -> Text:
+    """Return Nico's small cat mark with a terminal-safe colour accent."""
 
-    lines = PIXEL_CAT if caps.unicode and caps.width >= 48 and caps.color else COMPACT_CAT
+    use_color = caps.unicode and caps.width >= 48 and caps.color
+    lines = SIMPLE_CAT
     text = Text()
     for index, line in enumerate(lines):
         if index:
             text.append("\n")
-        if lines is COMPACT_CAT or not caps.color:
+        if not use_color:
             text.append(line)
             continue
-        # Muted blue, soft gold, warm white and dark slate form Nico's palette.
+        # Keep the silhouette blue and use gold only for the face details.
         for char in line:
-            style = "#dbe7ee"
-            if char in {"▓", "█"}:
-                style = "#7895ac"
-            elif char in {"▒", "▄", "▀"}:
-                style = "#d0a84e"
-            elif char == "●":
-                style = "#263847"
+            style = "#d0a84e" if char in {"o", "^"} else "#7895ac"
             text.append(char, style=style)
     return text
 

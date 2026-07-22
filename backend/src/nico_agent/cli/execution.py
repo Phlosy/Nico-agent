@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from nico_agent.cli.output import Output
 from nico_agent.cli.renderers import ExecutionRenderer
 
 TERMINAL_RUN_STATES = {"completed", "failed", "cancelled", "timed_out"}
+_FINAL_FETCH_RESULT = "_final_fetch_result"
 
 
 class RunWatcher:
@@ -23,44 +25,66 @@ class RunWatcher:
         self.output = output
         self.renderer = ExecutionRenderer(output)
 
-    def watch(self, run_id: str, *, after_sequence: int = 0) -> dict[str, Any]:
+    def watch(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        _final_fetch: Callable[[], Any] | None = None,
+    ) -> dict[str, Any]:
         events: list[dict[str, Any]] = []
         events_truncated = False
         interrupted = False
         approval_required: dict[str, Any] | None = None
+        final_fetch_result: Any = None
+        final_fetch_completed = False
+        progress = self.renderer.progress()
+        stream_options = {} if self.output.json_mode else {"on_connection": progress.connection}
+        run: dict[str, Any] | None = None
         try:
-            for event in self.client.stream_run_events(
-                run_id,
-                after_sequence=after_sequence,
-            ):
-                if self.output.json_mode:
-                    if len(events) < 2_000:
-                        events.append(event)
+            with progress:
+                for event in self.client.stream_run_events(
+                    run_id,
+                    after_sequence=after_sequence,
+                    **stream_options,
+                ):
+                    if self.output.json_mode:
+                        if len(events) < 2_000:
+                            events.append(event)
+                        else:
+                            events_truncated = True
                     else:
-                        events_truncated = True
-                else:
-                    self.renderer.event(event)
-                if event.get("type") == "ApprovalRequested":
-                    payload = event.get("payload") or {}
-                    approval_id = payload.get("approval_id")
-                    if approval_id:
-                        approval_required = self.client.get_tool_approval(str(approval_id))
-                        if not self.output.json_mode:
-                            self.renderer.approval(approval_required)
-                    break
+                        progress.event(event)
+                    if event.get("type") == "ApprovalRequested":
+                        payload = event.get("payload") or {}
+                        approval_id = payload.get("approval_id")
+                        if approval_id:
+                            approval_required = self.client.get_tool_approval(str(approval_id))
+                            if not self.output.json_mode:
+                                progress.pause()
+                                self.renderer.approval(approval_required)
+                        break
+                run = self.client.get_run(run_id)
+                if _final_fetch is not None:
+                    final_fetch_result = _final_fetch()
+                    final_fetch_completed = True
         except KeyboardInterrupt:
             # Watching is observational: Ctrl+C detaches and never cancels the Run.
             interrupted = True
             if not self.output.json_mode:
                 self.output.out.print("[yellow]已停止监看；Run 仍在服务端继续执行。[/yellow]")
-        run = self.client.get_run(run_id)
-        return {
+        if run is None:
+            run = self.client.get_run(run_id)
+        result = {
             "run": run,
             "events": events,
             "events_truncated": events_truncated,
             "interrupted": interrupted,
             "approval_required": approval_required,
         }
+        if final_fetch_completed:
+            result[_FINAL_FETCH_RESULT] = final_fetch_result
+        return result
 
 
 class ExecRunner:
@@ -107,8 +131,15 @@ class ExecRunner:
             if not self.output.json_mode:
                 self.output.emit(identifiers, title="Run 已在后台启动")
             return result
-        watched = self.watcher.watch(turn["run_id"])
-        final = self.client.get_conversation_turn(turn["id"])
+        watched = self.watcher.watch(
+            turn["run_id"],
+            _final_fetch=lambda: self.client.get_conversation_turn(turn["id"]),
+        )
+        if _FINAL_FETCH_RESULT in watched:
+            final = watched.pop(_FINAL_FETCH_RESULT)
+        else:
+            # Ctrl+C exits the progress scope before preserving the existing final-Turn fetch.
+            final = self.client.get_conversation_turn(turn["id"])
         result = {
             "detached": False,
             **identifiers,
@@ -120,7 +151,7 @@ class ExecRunner:
             "interrupted": watched["interrupted"],
             "approval_required": watched["approval_required"],
         }
-        if not watched["interrupted"]:
+        if not watched["interrupted"] and watched["approval_required"] is None:
             self.renderer.final(final)
         return result
 

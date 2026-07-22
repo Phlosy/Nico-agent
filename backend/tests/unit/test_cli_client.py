@@ -225,6 +225,63 @@ def test_sse_stream_sends_cursor_and_deduplicates_sequences() -> None:
     assert seen["accept"] == "text/event-stream"
 
 
+def test_sse_stream_reports_reconnect_and_recovery_without_synthetic_events() -> None:
+    requests: list[httpx.Request] = []
+    updates: list[tuple[str, int | None, int | None]] = []
+    body = (
+        'id: 3\nevent: RunStarted\ndata: {"sequence":3,"type":"RunStarted","payload":{}}\n\n'
+        'id: 4\nevent: RunCompleted\ndata: {"sequence":4,"type":"RunCompleted","payload":{}}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.ReadTimeout("temporary timeout", request=request)
+        return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        events = list(
+            client.stream_run_events(
+                "run-1",
+                after_sequence=3,
+                on_connection=lambda state, attempt, maximum: updates.append(
+                    (state, attempt, maximum)
+                ),
+            )
+        )
+
+    assert [event["sequence"] for event in events] == [4]
+    assert [request.headers["last-event-id"] for request in requests] == ["3", "3"]
+    assert updates == [("reconnecting", 1, 3), ("recovered", 1, 3)]
+
+
+def test_sse_stream_reports_only_bounded_reconnect_attempts_before_disconnect() -> None:
+    requests: list[httpx.Request] = []
+    updates: list[tuple[str, int | None, int | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ConnectError("disconnected", request=request)
+
+    with (
+        NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(CliError) as captured,
+    ):
+        list(
+            client.stream_run_events(
+                "run-1",
+                reconnect_attempts=2,
+                on_connection=lambda state, attempt, maximum: updates.append(
+                    (state, attempt, maximum)
+                ),
+            )
+        )
+
+    assert captured.value.code == "SSE_DISCONNECTED"
+    assert len(requests) == 3
+    assert updates == [("reconnecting", 1, 2), ("reconnecting", 2, 2)]
+
+
 def test_conversation_retry_sends_current_run_identity_and_revision() -> None:
     seen: list[httpx.Request] = []
 

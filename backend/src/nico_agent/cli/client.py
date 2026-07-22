@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +11,8 @@ import httpx
 from nico_agent.cli.config import ResolvedProfile
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.sse import SseParser
+
+StreamConnectionObserver = Callable[[str, int | None, int | None], None]
 
 
 class NicoApiClient:
@@ -88,6 +90,9 @@ class NicoApiClient:
 
     def readiness(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/health/ready", require_tenant=False)
+
+    def get_tenant(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/tenant")
 
     def list_projects(self, *, include_system: bool = False) -> list[dict[str, Any]]:
         return self.request(
@@ -748,6 +753,7 @@ class NicoApiClient:
         *,
         after_sequence: int = 0,
         reconnect_attempts: int = 3,
+        on_connection: StreamConnectionObserver | None = None,
     ) -> Iterator[dict[str, Any]]:
         cursor = max(0, after_sequence)
         failures = 0
@@ -777,6 +783,8 @@ class NicoApiClient:
                             request_id=request_id,
                             status_code=response.status_code,
                         )
+                    if failures and on_connection is not None:
+                        on_connection("recovered", failures, reconnect_attempts)
                     parser = SseParser()
                     for chunk in response.iter_text():
                         for event in parser.feed(chunk):
@@ -807,6 +815,8 @@ class NicoApiClient:
                         "SSE_TIMEOUT",
                         "the Nico event stream timed out after reconnect attempts",
                     ) from exc
+                if on_connection is not None:
+                    on_connection("reconnecting", failures, reconnect_attempts)
             except httpx.HTTPError as exc:
                 failures += 1
                 if failures > reconnect_attempts:
@@ -814,6 +824,8 @@ class NicoApiClient:
                         "SSE_DISCONNECTED",
                         "the Nico event stream disconnected after reconnect attempts",
                     ) from exc
+                if on_connection is not None:
+                    on_connection("reconnecting", failures, reconnect_attempts)
 
     def _headers(self, *, require_tenant: bool) -> dict[str, str]:
         headers = {"Accept": "application/json", "X-Request-ID": str(uuid4())}

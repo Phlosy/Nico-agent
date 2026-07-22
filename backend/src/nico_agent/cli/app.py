@@ -115,7 +115,9 @@ def main(
 
 def _show_version_and_exit(value: bool) -> bool:
     if value:
-        typer.echo(f"nico {__version__}")
+        build_version = os.environ.get("NICO_BUILD_VERSION")
+        suffix = f" ({build_version})" if build_version else ""
+        typer.echo(f"nico {__version__}{suffix}")
         raise typer.Exit()
     return value
 
@@ -810,6 +812,66 @@ def doctor_command(ctx: typer.Context) -> None:
                     failed = failed or not good
                 except CliError as exc:
                     checks.append({"check": name, "status": "fail", "detail": exc.code})
+                    failed = True
+            if profile.tenant_id is not None:
+                try:
+                    tenant = client.get_tenant()
+                    matches = str(tenant.get("id")) == str(profile.tenant_id)
+                    checks.append(
+                        {
+                            "check": "tenant_access",
+                            "status": "pass" if matches else "fail",
+                            "detail": str(profile.tenant_id) if matches else "tenant mismatch",
+                        }
+                    )
+                    failed = failed or not matches
+                except CliError as exc:
+                    checks.append({"check": "tenant_access", "status": "fail", "detail": exc.code})
+                    failed = True
+                try:
+                    web = _web_coordinator(state, client).status()
+                    diagnosis = str(web.get("diagnosis") or "unconfigured")
+                    web_good = diagnosis in {"ready", "unconfigured"}
+                    checks.append(
+                        {
+                            "check": "web_configuration",
+                            "status": "pass"
+                            if diagnosis == "ready"
+                            else ("warning" if diagnosis == "unconfigured" else "fail"),
+                            "detail": diagnosis,
+                        }
+                    )
+                    failed = failed or not web_good
+                    if web.get("secret_required"):
+                        credential = _web_credential_label(web)
+                        checks.append(
+                            {
+                                "check": "web_credential",
+                                "status": "pass"
+                                if credential == "available"
+                                else ("warning" if credential == "unknown" else "fail"),
+                                "detail": credential,
+                            }
+                        )
+                        failed = failed or credential == "unavailable"
+                    latest_probe = web.get("latest_probe") or {}
+                    checks.append(
+                        {
+                            "check": "web_probe",
+                            "status": (
+                                "pass"
+                                if latest_probe.get("status") in {"succeeded", "activated"}
+                                else "warning"
+                            ),
+                            "detail": latest_probe.get("error_code")
+                            or latest_probe.get("status")
+                            or "not run",
+                        }
+                    )
+                except CliError as exc:
+                    checks.append(
+                        {"check": "web_configuration", "status": "fail", "detail": exc.code}
+                    )
                     failed = True
     except CliError as exc:
         checks.append({"check": "config", "status": "fail", "detail": exc.code})

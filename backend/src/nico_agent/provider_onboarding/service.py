@@ -63,6 +63,11 @@ class ProviderOnboardingService:
         self._validate_candidate(command.candidate)
         candidate_hash = canonical_candidate_hash(command.candidate)
         async with self.database.tenant_transaction(context) as session:
+            tenant_id = await session.scalar(
+                select(Tenant.id).where(Tenant.id == context.tenant_id)
+            )
+            if tenant_id is None:
+                raise ResourceNotFound("tenant", str(context.tenant_id))
             await self._validate_custom_binding(session, context, command.candidate)
             existing = await session.scalar(
                 select(ProviderProbe).where(

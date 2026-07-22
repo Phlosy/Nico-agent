@@ -25,10 +25,32 @@ class FakeClient:
         pass
 
     def liveness(self) -> dict[str, Any]:
-        return {"status": "alive", "service": "Nico Agent", "version": "0.2.0"}
+        return {
+            "status": "alive",
+            "service": "Nico Agent",
+            "version": cli_module.__version__,
+        }
 
     def readiness(self) -> dict[str, Any]:
         return {"status": "ready", "components": {}}
+
+    def get_tenant(self) -> dict[str, Any]:
+        return {"id": str(self.profile.tenant_id), "name": "Test tenant"}
+
+    def web_status(self) -> dict[str, Any]:
+        return {
+            "writes_enabled": False,
+            "tenant_revision": 1,
+            "configured": False,
+            "authorized": False,
+            "enabled": False,
+            "provider": None,
+            "credential_ref": None,
+            "secret_required": False,
+            "diagnosis": "unconfigured",
+            "latest_probe": None,
+            "agents": [],
+        }
 
     def list_projects(self, *, include_system: bool = False) -> list[dict[str, Any]]:
         del include_system
@@ -261,12 +283,21 @@ def test_version_options_and_server_version(monkeypatch) -> None:
     server = runner.invoke(cli_module.app, ["--json", "version", "--server"])
 
     assert eager.exit_code == 0
-    assert eager.stdout.strip() == "nico 0.2.0"
+    assert eager.stdout.strip() == f"nico {cli_module.__version__}"
     assert json.loads(server.stdout) == {
-        "client": "0.2.0",
-        "server": "0.2.0",
+        "client": cli_module.__version__,
+        "server": cli_module.__version__,
         "service": "Nico Agent",
     }
+
+
+def test_version_option_includes_local_build_identifier(monkeypatch) -> None:
+    monkeypatch.setenv("NICO_BUILD_VERSION", "dev-abc123-dirty")
+
+    result = runner.invoke(cli_module.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"nico {cli_module.__version__} (dev-abc123-dirty)"
 
 
 def test_config_profile_flow_never_writes_token(tmp_path: Path) -> None:
@@ -332,8 +363,42 @@ def test_health_doctor_and_resource_json(monkeypatch, tmp_path: Path) -> None:
         "config",
         "api_live",
         "dependencies",
+        "tenant_access",
     }
     assert json.loads(agents.stdout)[0]["name"] == "researcher"
+
+
+def test_doctor_fails_when_profile_tenant_is_not_available(monkeypatch, tmp_path: Path) -> None:
+    class MissingTenantClient(FakeClient):
+        def get_tenant(self) -> dict[str, Any]:
+            raise cli_module.CliError(
+                "RESOURCE_NOT_FOUND",
+                "tenant was not found",
+                status_code=404,
+            )
+
+    monkeypatch.setattr(cli_module, "NicoApiClient", MissingTenantClient)
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(tmp_path / "config.toml"),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "doctor",
+        ],
+    )
+
+    assert result.exit_code == 1
+    tenant_check = next(
+        item for item in json.loads(result.stdout) if item["check"] == "tenant_access"
+    )
+    assert tenant_check == {
+        "check": "tenant_access",
+        "status": "fail",
+        "detail": "RESOURCE_NOT_FOUND",
+    }
 
 
 def test_chat_one_shot_json_and_conversation_history(monkeypatch, tmp_path: Path) -> None:

@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 from rich.columns import Columns
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from nico_agent.cli.logo import capabilities, coin_cat
+from nico_agent.cli.logo import capabilities, terminal_cat
 from nico_agent.cli.output import Output
 
 _PROTOCOL_LABELS = {
@@ -22,6 +26,55 @@ _PROTOCOL_LABELS = {
     "anthropic_messages": "Anthropic Messages",
     "google_gemini": "Google Gemini",
 }
+
+_VISIBLE_TOOL_EVENTS = {
+    "ToolCallStarted",
+    "ToolCallSucceeded",
+    "ToolCallFailed",
+    "ToolCallTimedOut",
+    "ToolCallCancelled",
+    "ToolCallRejected",
+}
+_VISIBLE_ARTIFACT_EVENTS = {"ArtifactAvailable"}
+_VISIBLE_RUN_EVENTS = {"RunFailed", "RunCancelled", "RunTimedOut"}
+_VISIBLE_EXECUTION_EVENTS = _VISIBLE_TOOL_EVENTS | _VISIBLE_ARTIFACT_EVENTS | _VISIBLE_RUN_EVENTS
+_TOOL_TERMINAL_EVENTS = _VISIBLE_TOOL_EVENTS - {"ToolCallStarted"}
+_FAILURE_EVENT_LABELS = {
+    "ToolCallFailed": "Tool failed",
+    "ToolCallTimedOut": "Tool timed out",
+    "ToolCallCancelled": "Tool cancelled",
+    "ToolCallRejected": "Tool rejected",
+    "RunFailed": "Run failed",
+    "RunCancelled": "Run cancelled",
+    "RunTimedOut": "Run timed out",
+}
+
+_PREPARING_EVENTS = {
+    "TaskCreated",
+    "RunCreated",
+    "ConversationTurnQueued",
+    "RuntimeProviderResolved",
+    "RuntimeSessionBound",
+    "RuntimeSessionCreated",
+    "RuntimeRunStarted",
+    "RunStarted",
+}
+_PLANNING_EVENTS = {
+    "RunPlanningStarted",
+    "RuntimePlanCreated",
+    "RuntimePlanStatusChanged",
+    "RuntimePlanStepStarted",
+    "RuntimePlanStepCompleted",
+    "RuntimePlanStepFailed",
+}
+_THINKING_EVENTS = {
+    "RuntimeModelCallStarted",
+    "RuntimeModelCallCompleted",
+    "RuntimeModelCallFailed",
+    "RuntimeModelOutputDelta",
+}
+_REFLECTING_EVENTS = {"RuntimeReflectionCompleted", "RuntimeEvaluationCompleted"}
+_FINALIZING_EVENTS = {"RuntimeOutputDelta", "RuntimeRunCompleted", "RunCompleted"}
 
 
 class ProviderSetupRenderer:
@@ -190,7 +243,14 @@ class ExecutionRenderer:
 
     def __init__(self, output: Output) -> None:
         self.output = output
-        self._stream_open = False
+
+    def progress(
+        self,
+        *,
+        initial: str = "Queued",
+        clock: Callable[[], float] = time.monotonic,
+    ) -> ExecutionProgress:
+        return ExecutionProgress(self, initial=initial, clock=clock)
 
     def header(self, metadata: Mapping[str, Any]) -> None:
         if self.output.json_mode:
@@ -209,38 +269,58 @@ class ExecutionRenderer:
         if metadata.get("project") is not None:
             details.add_row("Project", _label(metadata.get("project")))
         details.add_row("Tools", _label(metadata.get("tools"), default="policy default"))
-        body = Columns([coin_cat(caps), details], padding=(0, 3), expand=False)
+        body = Columns([terminal_cat(caps), details], padding=(0, 3), expand=False)
         self.output.out.print(
             Panel(body, title="Nico Agent", border_style="#7895ac", padding=(0, 1))
         )
 
-    def event(self, event: Mapping[str, Any]) -> None:
+    def event(
+        self,
+        event: Mapping[str, Any],
+        *,
+        duration_seconds: float | None = None,
+    ) -> None:
         if self.output.json_mode:
             return
         event_type = str(event.get("type") or event.get("event_type") or "Event")
-        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
-        sequence = event.get("sequence", "?")
+        payload = _event_payload(event)
         if event_type.endswith("OutputDelta"):
-            delta = payload.get("message") or payload.get("delta") or payload.get("content")
-            if delta:
-                self.output.out.print(str(delta), end="")
-                self._stream_open = True
             return
-        self._finish_stream_line()
-        style, symbol = _event_style(event_type)
-        detail = _event_detail(event_type, payload)
+        if event_type not in _VISIBLE_EXECUTION_EVENTS:
+            return
+        if event_type == "ToolCallStarted":
+            return
         line = Text()
-        line.append(f"{symbol} ", style=style)
-        line.append(event_type, style=f"bold {style}")
-        line.append(f"  #{sequence}", style="dim")
-        if detail:
-            line.append(f"  {detail}")
+        if event_type == "ToolCallSucceeded":
+            detail = _safe_tool_detail(payload)
+            line.append("✓ ", style="green")
+            line.append(detail or "Tool completed")
+            if duration := _duration_text(duration_seconds):
+                line.append(f" ({duration})", style="dim")
+        elif event_type in _VISIBLE_ARTIFACT_EVENTS:
+            detail = _safe_value(payload.get("name"))
+            line.append("✓ ", style="green")
+            line.append(f"Saved {detail or 'artifact'}")
+        else:
+            label = _FAILURE_EVENT_LABELS[event_type]
+            style = "yellow" if "Cancelled" in event_type else "red"
+            line.append(f"{'■' if style == 'yellow' else '×'} ", style=style)
+            line.append(label, style=f"bold {style}")
+            if event_type in _TOOL_TERMINAL_EVENTS:
+                detail = _safe_tool_detail(payload)
+                if detail:
+                    line.append(f": {detail}")
+                if code := _safe_value(payload.get("code")):
+                    line.append(f" ({code})")
+                if duration := _duration_text(duration_seconds):
+                    line.append(f" ({duration})", style="dim")
+            elif detail := _safe_value(payload.get("code")):
+                line.append(f": {detail}")
         self.output.out.print(line)
 
     def final(self, turn: Mapping[str, Any]) -> None:
         if self.output.json_mode:
             return
-        self._finish_stream_line()
         value = turn.get("assistant_output")
         if value is not None:
             if isinstance(value, Mapping):
@@ -298,7 +378,7 @@ class ExecutionRenderer:
         details.add_row("Requester", str(approval.get("requester") or "—"))
         details.add_row("Expires", str(approval.get("expires_at") or "—"))
         arguments = Syntax(
-            json.dumps(approval.get("arguments") or {}, ensure_ascii=False, indent=2),
+            json.dumps(_approval_preview(approval), ensure_ascii=False, indent=2),
             "json",
             word_wrap=True,
             background_color="default",
@@ -337,44 +417,272 @@ class ExecutionRenderer:
         rows = [row for row in rows if len(row) > 1]
         self.output.table(rows, title="Usage")
 
-    def _finish_stream_line(self) -> None:
-        if self._stream_open:
-            self.output.out.print()
-            self._stream_open = False
+
+class ExecutionProgress:
+    """Project raw execution events into one scoped human progress surface."""
+
+    def __init__(
+        self,
+        renderer: ExecutionRenderer,
+        *,
+        initial: str,
+        clock: Callable[[], float],
+    ) -> None:
+        self.renderer = renderer
+        self.output = renderer.output
+        self._clock = clock
+        self._started_at = clock()
+        self._activity_label = initial
+        self._activity_detail: str | None = None
+        self._connection: str | None = None
+        self._tool_started_at: dict[str, float] = {}
+        self._reported_reconnects: set[tuple[int, int]] = set()
+        self._live: Live | None = None
+        self._running = False
+        self._stopped = False
+        self._printed_initial = False
+        self._tty = bool(self.output.out.is_terminal)
+
+    @property
+    def activity(self) -> str:
+        if self._activity_detail:
+            return f"{self._activity_label} {self._activity_detail}"
+        return self._activity_label
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def __enter__(self) -> ExecutionProgress:
+        self.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.stop()
+
+    def start(self) -> None:
+        if self._running or self._stopped:
+            return
+        self._running = True
+        if self.output.json_mode:
+            return
+        if not self._tty:
+            if not self._printed_initial:
+                self.output.out.print(Text(f"› {self.activity}", style="bold #7895ac"))
+                self._printed_initial = True
+            return
+        self._live = Live(
+            console=self.output.out,
+            get_renderable=self._renderable,
+            refresh_per_second=8,
+            transient=True,
+            redirect_stdout=False,
+            redirect_stderr=False,
+        )
+        self._live.start(refresh=True)
+
+    def pause(self) -> None:
+        if not self._running:
+            return
+        live, self._live = self._live, None
+        if live is not None:
+            live.stop()
+        self._running = False
+
+    def resume(self) -> None:
+        if self._stopped or self._running:
+            return
+        self._set_activity("Continuing")
+        self.start()
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self.pause()
+        self._stopped = True
+
+    def event(self, event: Mapping[str, Any]) -> None:
+        event_type = str(event.get("type") or event.get("event_type") or "")
+        normalized_type = event_type.replace("_", "")
+        payload = _event_payload(event)
+
+        if normalized_type == "ToolCallStarted":
+            detail = _safe_tool_detail(payload)
+            if key := _tool_event_key(payload):
+                self._tool_started_at[key] = self._clock()
+            self._set_activity("Running", detail or "tool")
+            return
+        if normalized_type in _TOOL_TERMINAL_EVENTS:
+            duration = None
+            if key := _tool_event_key(payload):
+                started_at = self._tool_started_at.pop(key, None)
+                if started_at is not None:
+                    duration = max(0.0, self._clock() - started_at)
+            self.renderer.event(event, duration_seconds=duration)
+            self._set_activity("Continuing")
+            return
+        if normalized_type == "RuntimeToolCallStarted":
+            self._set_activity("Running", _safe_tool_detail(payload) or "tool")
+            return
+        if normalized_type == "RuntimeToolCallCompleted":
+            self._set_activity("Continuing")
+            return
+        if normalized_type in _VISIBLE_ARTIFACT_EVENTS | _VISIBLE_RUN_EVENTS:
+            self.renderer.event(event)
+        if normalized_type in _PREPARING_EVENTS:
+            self._set_activity("Preparing")
+        elif normalized_type in _PLANNING_EVENTS:
+            self._set_activity("Planning")
+        elif normalized_type in _THINKING_EVENTS:
+            self._set_activity("Thinking")
+        elif normalized_type == "RuntimeStepStarted":
+            self._set_activity("Working")
+        elif normalized_type == "RuntimeDelegationStarted":
+            self._set_activity("Delegating")
+        elif normalized_type == "RuntimeDelegationAccepted":
+            self._set_activity("Waiting for subagent")
+        elif normalized_type == "RuntimeDelegationResultReceived":
+            self._set_activity("Continuing")
+        elif normalized_type in _REFLECTING_EVENTS:
+            self._set_activity("Reflecting")
+        elif normalized_type in _FINALIZING_EVENTS:
+            self._set_activity("Finalizing")
+
+    def connection(
+        self,
+        state: str,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> None:
+        if state == "reconnecting":
+            current = max(1, attempt or 1)
+            total = max(current, max_attempts or current)
+            self._connection = f"reconnecting {current}/{total}"
+            if not self.output.json_mode and not self._tty:
+                key = (current, total)
+                if key not in self._reported_reconnects:
+                    self.output.out.print(f"› Reconnecting {current}/{total}")
+                    self._reported_reconnects.add(key)
+            return
+        self._connection = None
+
+    def status_text(self, width: int) -> str:
+        available = max(1, width)
+        phase = self._activity_label
+        detail = self._activity_detail
+        elapsed = _elapsed_text(max(0.0, self._clock() - self._started_at))
+        connection = self._connection
+
+        activity = f"{phase} {detail}" if detail else phase
+        candidate = _compose_status(activity, elapsed=elapsed, connection=connection)
+        if len(candidate) <= available:
+            return candidate
+        candidate = _compose_status(phase, elapsed=elapsed, connection=connection)
+        if len(candidate) <= available:
+            return candidate
+        candidate = _compose_status(phase, elapsed=None, connection=connection)
+        if len(candidate) <= available:
+            return candidate
+        if connection:
+            compact = f"{phase} | retry {connection.rsplit(' ', 1)[-1]}"
+            if len(compact) <= available:
+                return compact
+        return _ellipsize(candidate, available)
+
+    def _set_activity(self, label: str, detail: str | None = None) -> None:
+        self._activity_label = label
+        self._activity_detail = _safe_value(detail) if detail else None
+
+    def _renderable(self) -> Spinner:
+        width = max(1, self.output.out.width - 2)
+        status = Text(self.status_text(width), style="bold #7895ac", no_wrap=True)
+        return Spinner("dots", status, style="#7895ac")
 
 
-def _event_style(event_type: str) -> tuple[str, str]:
-    lowered = event_type.lower()
-    if any(value in lowered for value in ("failed", "error", "timedout", "timed_out")):
-        return "red", "×"
-    if "cancel" in lowered:
-        return "yellow", "■"
-    if any(value in lowered for value in ("completed", "succeeded", "available")):
-        return "green", "✓"
-    if any(value in lowered for value in ("tool", "artifact")):
-        return "#d0a84e", "◆"
-    if any(value in lowered for value in ("plan", "step")):
-        return "#7895ac", "▸"
-    return "dim", "·"
+def _safe_tool_detail(payload: Mapping[str, Any]) -> str:
+    value = _safe_value(payload.get("tool") or payload.get("tool_name") or payload.get("name"))
+    reference = value.lower()
+    if reference.startswith("web.search@") or reference == "web.search":
+        return "Web search"
+    if reference.startswith("web.fetch@") or reference == "web.fetch":
+        return "Reading source"
+    return value
 
 
-def _event_detail(event_type: str, payload: Mapping[str, Any]) -> str:
-    candidates = (
-        "message",
-        "name",
-        "tool_name",
-        "step_key",
-        "status",
-        "reason",
-        "provider_name",
-    )
-    for key in candidates:
-        value = payload.get(key)
-        if value not in (None, ""):
-            return str(value)
-    if event_type in {"RunFailed", "StepFailed", "ToolCallFailed"} and payload.get("error"):
-        return str(payload["error"])
-    return ""
+def _approval_preview(approval: Mapping[str, Any]) -> Mapping[str, Any]:
+    arguments = approval.get("arguments")
+    safe_arguments = arguments if isinstance(arguments, Mapping) else {}
+    tool_name = str(approval.get("tool_name") or "").lower()
+    if tool_name == "web.search" or tool_name.startswith("web.search@"):
+        return {"query": _safe_value(safe_arguments.get("query"), limit=300)}
+    if tool_name == "web.fetch" or tool_name.startswith("web.fetch@"):
+        raw_url = safe_arguments.get("url")
+        if not isinstance(raw_url, str):
+            return {"origin": "invalid target"}
+        parsed = urlsplit(raw_url)
+        origin = (
+            f"{parsed.scheme}://{parsed.netloc}"
+            if parsed.scheme and parsed.netloc
+            else "invalid target"
+        )
+        return {"origin": _safe_value(origin, limit=300)}
+    return safe_arguments
+
+
+def _tool_event_key(payload: Mapping[str, Any]) -> str | None:
+    for key in ("run_step_id", "tool_call_id"):
+        if value := _safe_value(payload.get(key)):
+            return f"{key}:{value}"
+    return None
+
+
+def _safe_value(value: Any, *, limit: int = 120) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    compact = " ".join(value.split())
+    return _ellipsize(compact, limit)
+
+
+def _duration_text(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.1f}s"
+
+
+def _elapsed_text(value: float) -> str:
+    total = int(value)
+    minutes, seconds = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}:{seconds:02d}"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
+def _compose_status(activity: str, *, elapsed: str | None, connection: str | None) -> str:
+    value = activity
+    if elapsed:
+        value += f" · {elapsed}"
+    if connection:
+        value += f" | {connection}"
+    return value
+
+
+def _ellipsize(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    if width <= 1:
+        return "…"[:width]
+    return f"{value[: width - 1]}…"
+
+
+def _event_payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return {}
+    projected = payload.get("payload")
+    if not isinstance(projected, Mapping):
+        return payload
+    return {**payload, **projected}
 
 
 def _label(value: Any, *, default: str = "—") -> str:

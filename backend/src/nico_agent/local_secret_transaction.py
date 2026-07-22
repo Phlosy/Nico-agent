@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 _ENV_NAME = re.compile(r"^NICO_(?:MODEL|TOOL)_SECRET_[A-Z0-9_]{1,100}$")
 _MAINTENANCE_LEASE_SECONDS = 300
@@ -495,6 +495,157 @@ class LocalSecretTransaction:
             temporary.unlink(missing_ok=True)
 
 
+class DevelopmentLocalSecretTransaction(LocalSecretTransaction):
+    """Source-mode secret transaction coordinated with the make-run supervisor."""
+
+    def __init__(self, home: Path, source_root: Path) -> None:
+        super().__init__(home)
+        self.source_root = source_root.resolve()
+        self.python = self.source_root / ".venv/bin/python"
+        self.control_dir = self.home / "run"
+        self.restart_request = self.control_dir / "worker-restart-request.json"
+        self.restart_response = self.control_dir / "worker-restart-response.json"
+        self.supervisor_pid = self.control_dir / "supervisor.pid"
+
+    def _require_installation(self) -> None:
+        expected_home = (
+            Path(os.environ.get("NICO_DEV_HOME", str(self.source_root / ".nico/dev")))
+            .expanduser()
+            .resolve()
+        )
+        if self.home != expected_home or not self.python.is_file():
+            raise LocalSecretError(
+                "LOCAL_SECRET_UNAVAILABLE",
+                "Nico development environment is incomplete",
+            )
+        for directory in (self.home, self.config_dir, self.control_dir):
+            try:
+                info = directory.lstat()
+            except OSError as exc:
+                raise LocalSecretError(
+                    "LOCAL_SECRET_UNAVAILABLE",
+                    "the Nico development configuration is unavailable",
+                ) from exc
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise LocalSecretError(
+                    "LOCAL_SECRET_PERMISSIONS",
+                    "development configuration directories must be owner-only",
+                )
+        if self.secret_file.exists():
+            self._secure_regular_file(self.secret_file)
+        else:
+            self._write_env(self.secret_file, {})
+
+    def _local_control(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        allow_failure: bool,
+    ) -> dict[str, Any]:
+        try:
+            completed = subprocess.run(
+                [str(self.python), "-m", "nico_agent.local_control", action],
+                input=json.dumps(payload, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=_CONTROL_TIMEOUT_SECONDS,
+                env=dict(os.environ),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LocalSecretError(
+                "LOCAL_CONTROL_UNAVAILABLE",
+                "development maintenance control timed out",
+            ) from exc
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise LocalSecretError(
+                "LOCAL_CONTROL_UNAVAILABLE",
+                "development maintenance control returned an invalid response",
+            ) from exc
+        if not isinstance(response, dict):
+            raise LocalSecretError(
+                "LOCAL_CONTROL_UNAVAILABLE",
+                "development maintenance control returned an invalid response",
+            )
+        if completed.returncode and not allow_failure:
+            raise LocalSecretError(
+                str(response.get("code") or "LOCAL_CONTROL_UNAVAILABLE"),
+                str(response.get("message") or "development maintenance control failed"),
+            )
+        return response
+
+    def _restart_native_worker(self, journal: dict[str, Any]) -> None:
+        self._renew_journal(journal)
+        self._secure_regular_file(self.supervisor_pid)
+        try:
+            supervisor_pid = int(self.supervisor_pid.read_text(encoding="utf-8").strip())
+            os.kill(supervisor_pid, 0)
+        except (OSError, ValueError) as exc:
+            raise LocalSecretError(
+                "LOCAL_SECRET_WORKER_UNHEALTHY",
+                "the make run supervisor is unavailable",
+            ) from exc
+
+        restart_id = str(uuid4())
+        self.restart_response.unlink(missing_ok=True)
+        if self.restart_request.exists():
+            raise LocalSecretError(
+                "LOCAL_SECRET_WORKER_BUSY",
+                "the source Worker already has a pending restart request",
+            )
+        self._write_control_json(self.restart_request, {"restart_id": restart_id})
+
+        deadline = time.monotonic() + _WORKER_RESTART_TIMEOUT_SECONDS
+        renew_at = time.monotonic() + _MAINTENANCE_RENEW_INTERVAL_SECONDS
+        while time.monotonic() < deadline:
+            if time.monotonic() >= renew_at:
+                self._renew_journal(journal)
+                renew_at = time.monotonic() + _MAINTENANCE_RENEW_INTERVAL_SECONDS
+            if self.restart_response.exists():
+                self._secure_regular_file(self.restart_response)
+                try:
+                    response = json.loads(self.restart_response.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise LocalSecretError(
+                        "LOCAL_SECRET_WORKER_UNHEALTHY",
+                        "the source Worker restart response is invalid",
+                    ) from exc
+                if isinstance(response, dict) and response.get("restart_id") == restart_id:
+                    self.restart_response.unlink(missing_ok=True)
+                    if response.get("ok") is True:
+                        return
+                    break
+            try:
+                os.kill(supervisor_pid, 0)
+            except OSError:
+                break
+            time.sleep(0.2)
+        raise LocalSecretError(
+            "LOCAL_SECRET_WORKER_UNHEALTHY",
+            "the source Worker did not become ready after the Provider secret update",
+        )
+
+    def _write_control_json(self, path: Path, value: dict[str, Any]) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=self.control_dir)
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, separators=(",", ":"), sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def run() -> None:
     action = sys.argv[1] if len(sys.argv) == 2 else ""
     try:
@@ -502,7 +653,13 @@ def run() -> None:
         if not isinstance(request, dict):
             raise LocalSecretError("LOCAL_SECRET_INVALID", "request must be a JSON object")
         home = Path(os.environ.get("NICO_HOME", "~/.nico")).expanduser()
-        response = LocalSecretTransaction(home).execute(action, request)
+        source_root = os.environ.get("NICO_DEV_ROOT")
+        transaction: LocalSecretTransaction
+        if source_root:
+            transaction = DevelopmentLocalSecretTransaction(home, Path(source_root))
+        else:
+            transaction = LocalSecretTransaction(home)
+        response = transaction.execute(action, request)
     except (json.JSONDecodeError, LocalSecretError) as exc:
         code = exc.code if isinstance(exc, LocalSecretError) else "LOCAL_SECRET_INVALID"
         message = exc.message if isinstance(exc, LocalSecretError) else "request is invalid JSON"

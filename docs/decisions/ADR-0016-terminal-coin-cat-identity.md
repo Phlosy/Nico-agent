@@ -1,6 +1,6 @@
 # ADR-0016：终端 Coin-cat 品牌标识
 
-- 状态：Accepted
+- 状态：Superseded（2026-07-21 用户反馈要求改为简易小猫）
 - 日期：2026-07-19
 
 ## 背景
@@ -36,3 +36,7 @@ Goal D 在 `cli/logo.py` 落地 Rich Text，header 展示 Agent、Runtime、Proj
 ## 可逆性
 
 高。字符和色板可以在保持 19 列外框、无色语义和 fallback contract 的前提下迭代。
+
+## 后续结果
+
+实际使用反馈认为像素圆章辨识度低且视觉负担过重。当前实现已改为 `docs/cli.md` 中的三行 ASCII 小猫；本 ADR 保留原始决策背景，不再描述现行界面。

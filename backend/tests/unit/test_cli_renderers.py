@@ -7,7 +7,7 @@ from nico_agent.cli.output import Output
 from nico_agent.cli.renderers import ExecutionRenderer, ProjectRenderer, ProviderSetupRenderer
 
 
-def test_human_renderer_snapshot_has_header_events_and_inspection_views() -> None:
+def test_human_renderer_shows_user_actions_without_internal_lifecycle_events() -> None:
     stdout = StringIO()
     renderer = ExecutionRenderer(
         Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
@@ -22,11 +22,26 @@ def test_human_renderer_snapshot_has_header_events_and_inspection_views() -> Non
             "tools": ["http_read", "python_sandbox"],
         }
     )
+    renderer.event({"sequence": 1, "type": "TaskCreated", "payload": {}})
+    renderer.event({"sequence": 2, "type": "RuntimeStepStarted", "payload": {}})
     renderer.event(
-        {"sequence": 2, "type": "ToolCallStarted", "payload": {"tool_name": "http_read"}}
+        {
+            "sequence": 3,
+            "type": "RuntimeModelOutputDelta",
+            "payload": {"message": "private intermediate output"},
+        }
     )
-    renderer.event({"sequence": 3, "type": "RuntimeOutputDelta", "payload": {"message": "stream"}})
-    renderer.event({"sequence": 4, "type": "RunCompleted", "payload": {}})
+    renderer.event({"sequence": 4, "type": "ToolCallStarted", "payload": {"tool": "http_read@1"}})
+    renderer.event({"sequence": 5, "type": "ToolCallSucceeded", "payload": {"tool": "http_read@1"}})
+    renderer.event(
+        {
+            "sequence": 6,
+            "type": "ArtifactAvailable",
+            "payload": {"name": "report.md"},
+        }
+    )
+    renderer.event({"sequence": 7, "type": "RunCompleted", "payload": {}})
+    renderer.final({"assistant_output": {"answer": "Final answer"}})
     renderer.plans(
         [{"revision": 1, "status": "active", "objective": "Research", "reason": "initial"}]
     )
@@ -42,8 +57,16 @@ def test_human_renderer_snapshot_has_header_events_and_inspection_views() -> Non
     rendered = stdout.getvalue()
     assert "Nico Agent" in rendered
     assert "Researcher" in rendered
-    assert "ToolCallStarted" in rendered
-    assert "stream\n✓ RunCompleted" in rendered
+    assert "Running http_read@1" not in rendered
+    assert "✓ http_read@1" in rendered
+    assert "Saved report.md" in rendered
+    assert "Final answer" in rendered
+    assert "TaskCreated" not in rendered
+    assert "RuntimeStepStarted" not in rendered
+    assert "RuntimeModelOutputDelta" not in rendered
+    assert "private intermediate output" not in rendered
+    assert "RunCompleted" not in rendered
+    assert "#1" not in rendered
     assert "Plan Revisions" in rendered
     assert "Run Steps" in rendered
     assert "Tool Calls" in rendered
@@ -62,6 +85,295 @@ def test_json_mode_never_renders_header_or_events() -> None:
     renderer.event({"sequence": 1, "type": "RunStarted", "payload": {}})
 
     assert stdout.getvalue() == ""
+
+
+def test_execution_progress_projects_phases_without_leaking_event_payloads() -> None:
+    stdout = StringIO()
+    now = [10.0]
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+    progress = renderer.progress(clock=lambda: now[0])
+
+    with progress:
+        assert progress.activity == "Queued"
+        progress.event({"type": "RunPlanningStarted", "payload": {"objective": "secret"}})
+        assert progress.activity == "Planning"
+        progress.event(
+            {
+                "type": "RuntimeModelOutputDelta",
+                "payload": {"message": "private intermediate output"},
+            }
+        )
+        assert progress.activity == "Thinking"
+        progress.event(
+            {
+                "type": "RuntimeDelegationAccepted",
+                "payload": {"child_run_id": "internal-child"},
+            }
+        )
+        assert progress.activity == "Waiting for subagent"
+        progress.event({"type": "RuntimeOutputDelta", "payload": {"content": "draft"}})
+        assert progress.activity == "Finalizing"
+        progress.event(
+            {
+                "type": "ToolCallStarted",
+                "payload": {"tool": {"arguments": "nested secret"}},
+            }
+        )
+        assert progress.activity == "Running tool"
+        assert "nested secret" not in progress.status_text(80)
+
+    rendered = stdout.getvalue()
+    assert "› Queued" in rendered
+    assert "secret" not in rendered
+    assert "private intermediate output" not in rendered
+    assert "internal-child" not in rendered
+    assert "draft" not in rendered
+    assert "nested secret" not in rendered
+
+
+def test_execution_renderer_rejects_non_string_durable_labels() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.event(
+        {
+            "type": "ArtifactAvailable",
+            "payload": {"name": {"arguments": "private artifact payload"}},
+        }
+    )
+
+    rendered = stdout.getvalue()
+    assert "Saved artifact" in rendered
+    assert "private artifact payload" not in rendered
+
+
+def test_execution_progress_keeps_one_durable_tool_result_with_correlated_duration() -> None:
+    stdout = StringIO()
+    now = [20.0]
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    with renderer.progress(clock=lambda: now[0]) as progress:
+        progress.event(
+            {
+                "type": "ToolCallStarted",
+                "payload": {"run_step_id": "step-1", "tool": "http_read@1"},
+            }
+        )
+        assert progress.activity == "Running http_read@1"
+        assert "Running http_read@1" not in stdout.getvalue()
+        now[0] = 22.36
+        progress.event(
+            {
+                "type": "ToolCallSucceeded",
+                "payload": {
+                    "run_step_id": "step-1",
+                    "tool": "http_read@1",
+                    "result": {"private": True},
+                },
+            }
+        )
+        assert progress.activity == "Continuing"
+
+    rendered = stdout.getvalue()
+    assert rendered.count("http_read@1") == 1
+    assert "✓ http_read@1 (2.4s)" in rendered
+    assert "private" not in rendered
+
+
+def test_web_progress_is_semantic_and_omits_query_url_and_result() -> None:
+    stdout = StringIO()
+    now = [20.0]
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    with renderer.progress(clock=lambda: now[0]) as progress:
+        progress.event(
+            {
+                "type": "ToolCallStarted",
+                "payload": {
+                    "tool_call_id": "search-1",
+                    "tool": "web.search@1.0.0",
+                    "arguments": {"query": "private research query"},
+                },
+            }
+        )
+        assert progress.activity == "Running Web search"
+        now[0] = 21.2
+        progress.event(
+            {
+                "type": "ToolCallSucceeded",
+                "payload": {
+                    "tool_call_id": "search-1",
+                    "tool": "web.search@1.0.0",
+                    "result": {"url": "https://secret.example/path?token=private"},
+                },
+            }
+        )
+
+    rendered = stdout.getvalue()
+    assert "✓ Web search (1.2s)" in rendered
+    assert "private research query" not in rendered
+    assert "secret.example" not in rendered
+    assert "token=private" not in rendered
+
+
+def test_web_approval_shows_only_bounded_query_or_origin() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+    query = "q" * 400
+
+    renderer.approval(
+        {
+            "tool_name": "web.search",
+            "tool_version": "1.0.0",
+            "arguments": {"query": query, "domains": ["private.example"]},
+        }
+    )
+    renderer.approval(
+        {
+            "tool_name": "web.fetch",
+            "tool_version": "1.0.0",
+            "arguments": {
+                "url": "https://source.example/private/path?secret=canary",
+                "search_tool_call_id": "internal-call-id",
+            },
+        }
+    )
+
+    rendered = stdout.getvalue()
+    assert "q" * 300 not in rendered
+    assert rendered.count("q") > 50
+    assert "…" in rendered
+    assert "private.example" not in rendered
+    assert "https://source.example" in rendered
+    assert "/private/path" not in rendered
+    assert "secret=canary" not in rendered
+    assert "internal-call-id" not in rendered
+
+
+def test_execution_progress_omits_guessed_duration_and_deduplicates_non_tty_reconnects() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    with renderer.progress() as progress:
+        progress.connection("reconnecting", attempt=1, max_attempts=3)
+        progress.connection("reconnecting", attempt=1, max_attempts=3)
+        progress.connection("recovered")
+        progress.event(
+            {
+                "type": "ToolCallFailed",
+                "payload": {
+                    "run_step_id": "missing-start",
+                    "tool": "python_sandbox@1",
+                    "code": "EXECUTION_FAILED",
+                    "error": {"message": "private traceback"},
+                },
+            }
+        )
+
+    rendered = stdout.getvalue()
+    assert rendered.count("Reconnecting 1/3") == 1
+    assert "Tool failed: python_sandbox@1 (EXECUTION_FAILED)" in rendered
+    assert "private traceback" not in rendered
+    assert "0.0s" not in rendered
+
+
+def test_execution_progress_status_is_width_bounded_and_prioritizes_connection() -> None:
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
+    )
+    progress = renderer.progress(clock=lambda: 65.0)
+    progress.event(
+        {
+            "type": "ToolCallStarted",
+            "payload": {
+                "run_step_id": "step-1",
+                "tool": "a_very_long_tool_reference@123",
+            },
+        }
+    )
+    progress.connection("reconnecting", attempt=2, max_attempts=3)
+
+    wide = progress.status_text(80)
+    medium = progress.status_text(40)
+    narrow = progress.status_text(20)
+
+    assert "a_very_long_tool_reference@123" in wide
+    assert "reconnecting 2/3" in wide
+    assert "Running" in medium
+    assert "reconnecting 2/3" in medium
+    assert "a_very_long_tool_reference@123" not in medium
+    assert len(wide) <= 80
+    assert len(medium) <= 40
+    assert len(narrow) <= 20
+    assert "Running" in narrow
+
+
+def test_execution_progress_pause_resume_and_stop_are_idempotent() -> None:
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
+    )
+    progress = renderer.progress()
+
+    progress.start()
+    assert progress.running is True
+    progress.pause()
+    assert progress.running is False
+    progress.resume()
+    assert progress.running is True
+    assert progress.activity == "Continuing"
+    progress.stop()
+    progress.stop()
+    assert progress.running is False
+
+
+def test_human_renderer_surfaces_failures_and_cancellation_without_protocol_names() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.event(
+        {
+            "sequence": 8,
+            "type": "ToolCallFailed",
+            "payload": {"tool": "python_sandbox@1", "code": "EXECUTION_FAILED"},
+        }
+    )
+    renderer.event(
+        {
+            "sequence": 9,
+            "type": "RunCancelled",
+            "payload": {"reason": "private arbitrary cancellation reason"},
+        }
+    )
+    renderer.event(
+        {
+            "sequence": 10,
+            "type": "RunTimedOut",
+            "payload": {"code": "RUN_TIMEOUT"},
+        }
+    )
+
+    rendered = stdout.getvalue()
+    assert "Tool failed: python_sandbox@1 (EXECUTION_FAILED)" in rendered
+    assert "Run cancelled" in rendered
+    assert "Run timed out: RUN_TIMEOUT" in rendered
+    assert "private arbitrary cancellation reason" not in rendered
+    assert "ToolCallFailed" not in rendered
+    assert "RunCancelled" not in rendered
+    assert "#8" not in rendered
 
 
 def test_provider_setup_renderer_presents_guided_presets_and_other_provider() -> None:

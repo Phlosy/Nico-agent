@@ -101,7 +101,7 @@ assert "\x1b" not in non_tty
 
 tty = (root / "tty.txt").read_text(errors="replace")
 tty_plain = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", tty)
-assert "Nico Agent" in tty_plain and "▄██████▄" in tty_plain and "\x1b[" in tty
+assert "Nico Agent" in tty_plain and "/\\_/\\" in tty_plain and "\x1b[" in tty
 
 slash = (root / "slash.txt").read_text(errors="replace")
 for marker in (
@@ -116,4 +116,4 @@ for marker in (
     assert marker in slash, marker
 PY
 
-printf 'PASS CLI Goal D exec/detach/watch/slash/Rich/coin-cat run_id=%s\n' "$run_id"
+printf 'PASS CLI Goal D exec/detach/watch/slash/Rich/terminal-cat run_id=%s\n' "$run_id"

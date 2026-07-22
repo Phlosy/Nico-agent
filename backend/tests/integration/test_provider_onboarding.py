@@ -50,6 +50,9 @@ async def test_catalog_probe_idempotency_cancellation_and_tenant_isolation(
     openai = next(item for item in catalog["providers"] if item["key"] == "openai")
     first_headers = await _headers(client, "ProviderAPI")
     second_headers = await _headers(client, "ProviderOther")
+    tenant = await client.get("/api/v1/tenant", headers=first_headers)
+    assert tenant.status_code == 200
+    assert tenant.json()["id"] == first_headers["X-Tenant-ID"]
     command = {
         "kind": "verify_completion",
         "candidate": {
@@ -86,3 +89,35 @@ async def test_catalog_probe_idempotency_cancellation_and_tenant_isolation(
         headers=first_headers,
     )
     assert terminal.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_probe_with_unknown_tenant_returns_a_specific_not_found_error(
+    client: AsyncClient,
+) -> None:
+    catalog = (await client.get("/api/v1/provider-catalog")).json()
+    openai = next(item for item in catalog["providers"] if item["key"] == "openai")
+    missing_tenant = str(uuid4())
+    response = await client.post(
+        "/api/v1/provider-probes",
+        headers={"X-Tenant-ID": missing_tenant, "X-Actor-ID": "stale-profile"},
+        json={
+            "kind": "verify_completion",
+            "candidate": {
+                "provider_key": "openai",
+                "protocol": openai["protocol"],
+                "base_url": openai["locations"][0]["base_url"],
+                "credential_ref": "env:NICO_MODEL_SECRET_STALE_PROFILE",
+                "model": openai["recommended_models"][0],
+                "catalog_revision": catalog["catalog_revision"],
+            },
+            "idempotency_key": f"stale-profile-{uuid4().hex}",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "code": "RESOURCE_NOT_FOUND",
+        "message": f"tenant {missing_tenant} was not found",
+        "details": {"entity": "tenant", "resource_id": missing_tenant},
+    }

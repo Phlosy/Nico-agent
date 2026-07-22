@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
+import threading
+import time
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from nico_agent.local_secret_transaction import LocalSecretError, LocalSecretTransaction
+from nico_agent.local_secret_transaction import (
+    DevelopmentLocalSecretTransaction,
+    LocalSecretError,
+    LocalSecretTransaction,
+)
 
 
 class FakeTransaction(LocalSecretTransaction):
@@ -24,6 +31,28 @@ class FakeTransaction(LocalSecretTransaction):
                 "ok": True,
                 "attempt_id": payload["attempt_id"],
                 "token": "maintenance-token-" + "x" * 32,
+            }
+        return {"ok": True}
+
+    def _restart_native_worker(self, journal) -> None:
+        self._renew_journal(journal)
+        self.restarts += 1
+
+
+class FakeDevelopmentTransaction(DevelopmentLocalSecretTransaction):
+    def __init__(self, home: Path, source_root: Path) -> None:
+        super().__init__(home, source_root)
+        self.control_actions: list[str] = []
+        self.restarts = 0
+
+    def _local_control(self, action, payload, *, allow_failure):
+        del allow_failure
+        self.control_actions.append(action)
+        if action == "acquire":
+            return {
+                "ok": True,
+                "attempt_id": payload["attempt_id"],
+                "token": "development-maintenance-token-" + "x" * 32,
             }
         return {"ok": True}
 
@@ -165,9 +194,7 @@ def test_tool_credential_uses_same_recoverable_owner_only_store(
     )
 
     journal = json.loads(transaction.journal_file.read_text())
-    assert response["credential_ref"] == (
-        "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST"
-    )
+    assert response["credential_ref"] == ("env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST")
     assert journal["kind"] == "tool"
     assert "brave-canary" not in transaction.journal_file.read_text()
     assert "brave-canary" in transaction.secret_file.read_text()
@@ -256,3 +283,66 @@ def test_local_control_timeout_returns_stable_error(
         )
 
     assert captured.value.code == "LOCAL_CONTROL_UNAVAILABLE"
+
+
+def _development_tree(tmp_path: Path) -> tuple[Path, Path]:
+    source_root = tmp_path / "source"
+    home = source_root / ".nico/dev"
+    (source_root / ".venv/bin").mkdir(parents=True)
+    (source_root / ".venv/bin/python").write_text("", encoding="utf-8")
+    (home / "config").mkdir(parents=True, mode=0o700)
+    (home / "run").mkdir(mode=0o700)
+    home.chmod(0o700)
+    (home / "config").chmod(0o700)
+    return source_root, home
+
+
+def test_development_secret_transaction_isolated_from_installed_home(tmp_path: Path) -> None:
+    source_root, home = _development_tree(tmp_path)
+    installed_secret = tmp_path / "installed/config/model-secrets.env"
+    installed_secret.parent.mkdir(parents=True)
+    installed_secret.write_text("NICO_MODEL_SECRET_INSTALLED=keep\n", encoding="utf-8")
+    transaction = FakeDevelopmentTransaction(home, source_root)
+
+    response = transaction.execute(
+        "begin",
+        {
+            "attempt_id": str(uuid4()),
+            "env_name": "NICO_MODEL_SECRET_DEVELOPMENT_TEST",
+            "secret": "development-canary",
+        },
+    )
+
+    assert response["credential_ref"] == "env:NICO_MODEL_SECRET_DEVELOPMENT_TEST"
+    assert "development-canary" in transaction.secret_file.read_text()
+    assert installed_secret.read_text() == "NICO_MODEL_SECRET_INSTALLED=keep\n"
+    assert transaction.restarts == 1
+
+
+def test_development_worker_restart_uses_supervisor_handshake(tmp_path: Path) -> None:
+    source_root, home = _development_tree(tmp_path)
+    supervisor = home / "run/supervisor.pid"
+    supervisor.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    supervisor.chmod(0o600)
+    transaction = DevelopmentLocalSecretTransaction(home, source_root)
+    transaction._renew_journal = lambda _journal: None  # type: ignore[method-assign]
+
+    def acknowledge() -> None:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if transaction.restart_request.exists():
+                payload = json.loads(transaction.restart_request.read_text())
+                transaction._write_control_json(
+                    transaction.restart_response,
+                    {"ok": True, "restart_id": payload["restart_id"]},
+                )
+                return
+            time.sleep(0.01)
+
+    responder = threading.Thread(target=acknowledge)
+    responder.start()
+    transaction._restart_native_worker({"attempt_id": str(uuid4()), "token": "x" * 40})
+    responder.join(timeout=3)
+
+    assert not responder.is_alive()
+    assert not transaction.restart_response.exists()

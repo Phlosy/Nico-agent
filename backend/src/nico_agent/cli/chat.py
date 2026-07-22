@@ -193,27 +193,23 @@ class ChatRunner:
         events: list[dict[str, Any]] = []
         events_truncated = False
         pending_approval: dict[str, Any] | None = None
+        progress = self.renderer.progress()
+        stream_options = {} if self.output.json_mode else {"on_connection": progress.connection}
         try:
-            for event in self.client.stream_run_events(turn["run_id"]):
-                if self.output.json_mode:
-                    if len(events) < 2_000:
-                        events.append(event)
+            with progress:
+                for event in self.client.stream_run_events(turn["run_id"], **stream_options):
+                    if self.output.json_mode:
+                        if len(events) < 2_000:
+                            events.append(event)
+                        else:
+                            events_truncated = True
                     else:
-                        events_truncated = True
-                else:
-                    self.renderer.event(event)
-                if event.get("type") == "ApprovalRequested":
-                    payload = event.get("payload") or {}
-                    approval_id = payload.get("approval_id")
-                    if approval_id:
-                        pending_approval = self.client.get_tool_approval(str(approval_id))
-                        if not self.output.json_mode:
-                            self.renderer.approval(pending_approval)
-                        if self._can_prompt_for_approval():
-                            if self._decide_interactively(pending_approval):
-                                pending_approval = None
-                                continue
+                        progress.event(event)
+                    should_stop, approval = self._handle_stream_approval(event, progress)
+                    if should_stop:
+                        pending_approval = approval
                         break
+                final = self.client.get_conversation_turn(turn["id"])
         except KeyboardInterrupt:
             current = self.client.get_conversation_turn(turn["id"])
             if current["run_status"] not in _TERMINAL:
@@ -231,7 +227,17 @@ class ChatRunner:
                         raise
                     current = self.client.get_conversation_turn(turn["id"])
             if not self.output.json_mode:
-                self.output.emit(current, title="Run cancelled")
+                event_type = {
+                    "failed": "RunFailed",
+                    "cancelled": "RunCancelled",
+                    "timed_out": "RunTimedOut",
+                }.get(str(current.get("run_status") or current.get("status") or ""))
+                if event_type is not None:
+                    self.renderer.event({"type": event_type, "payload": {}})
+                elif current.get("assistant_output") is not None:
+                    self.renderer.final(current)
+                else:
+                    self.output.out.print("[yellow]■ Run interrupted[/yellow]")
             return {
                 "conversation": self.public_conversation(conversation),
                 "turn": current,
@@ -239,7 +245,6 @@ class ChatRunner:
                 "events_truncated": events_truncated,
                 "approval_required": pending_approval,
             }
-        final = self.client.get_conversation_turn(turn["id"])
         result = {
             "conversation": self.public_conversation(conversation),
             "turn": final,
@@ -247,7 +252,7 @@ class ChatRunner:
             "events_truncated": events_truncated,
             "approval_required": pending_approval,
         }
-        if not self.output.json_mode:
+        if not self.output.json_mode and pending_approval is None:
             self.renderer.final(final)
         return result
 
@@ -564,10 +569,20 @@ class ChatRunner:
                 expected_run_id=turn["run_id"],
                 expected_run_revision=turn["run_revision"],
             )
-            for event in self.client.stream_run_events(accepted["run_id"]):
-                self.renderer.event(event)
-            final = self.client.get_conversation_turn(accepted["id"])
-            self.renderer.final(final)
+            pending_approval: dict[str, Any] | None = None
+            with self.renderer.progress() as progress:
+                for event in self.client.stream_run_events(
+                    accepted["run_id"], on_connection=progress.connection
+                ):
+                    progress.event(event)
+                    should_stop, approval = self._handle_stream_approval(event, progress)
+                    if should_stop:
+                        pending_approval = approval
+                        break
+                if pending_approval is None:
+                    final = self.client.get_conversation_turn(accepted["id"])
+            if pending_approval is None:
+                self.renderer.final(final)
         elif name == "approvals":
             self._require_run(run_id)
             self.renderer.approvals(self.client.list_tool_approvals(run_id=str(run_id)))
@@ -783,6 +798,26 @@ class ChatRunner:
         self.output.emit(value, title="Tool approval saved")
         return True
 
+    def _handle_stream_approval(
+        self,
+        event: dict[str, Any],
+        progress: Any,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if event.get("type") != "ApprovalRequested":
+            return False, None
+        payload = event.get("payload") or {}
+        approval_id = payload.get("approval_id")
+        if not approval_id:
+            return False, None
+        approval = self.client.get_tool_approval(str(approval_id))
+        if not self.output.json_mode:
+            progress.pause()
+            self.renderer.approval(approval)
+        if self._can_prompt_for_approval() and self._decide_interactively(approval):
+            progress.resume()
+            return False, None
+        return True, approval
+
     def _resume_pending_approval(self, conversation: dict[str, Any]) -> None:
         turn = self._latest_turn(conversation)
         if turn is None or not turn.get("run_id"):
@@ -795,19 +830,18 @@ class ChatRunner:
             if not self._decide_interactively(approval):
                 return
         if approvals:
-            for event in self.client.stream_run_events(
-                str(turn["run_id"]), after_sequence=after_sequence
-            ):
-                self.renderer.event(event)
-                if event.get("type") == "ApprovalRequested":
-                    payload = event.get("payload") or {}
-                    approval_id = payload.get("approval_id")
-                    if approval_id:
-                        next_approval = self.client.get_tool_approval(str(approval_id))
-                        self.renderer.approval(next_approval)
-                        if not self._decide_interactively(next_approval):
-                            return
-            self.renderer.final(self.client.get_conversation_turn(turn["id"]))
+            with self.renderer.progress(initial="Continuing") as progress:
+                for event in self.client.stream_run_events(
+                    str(turn["run_id"]),
+                    after_sequence=after_sequence,
+                    on_connection=progress.connection,
+                ):
+                    progress.event(event)
+                    should_stop, _approval = self._handle_stream_approval(event, progress)
+                    if should_stop:
+                        return
+                final = self.client.get_conversation_turn(turn["id"])
+            self.renderer.final(final)
 
     @staticmethod
     def _arity(command: SlashCommand, expected: int, usage: str) -> None:

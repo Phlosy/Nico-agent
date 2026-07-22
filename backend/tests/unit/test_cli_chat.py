@@ -55,7 +55,8 @@ class FakeChatClient:
     ) -> dict[str, Any]:
         return {"id": "turn-1", "run_id": "run-1", "user_input": message}
 
-    def stream_run_events(self, _run_id: str):
+    def stream_run_events(self, _run_id: str, *, on_connection=None):
+        del on_connection
         yield {"sequence": 1, "type": "RunStarted", "payload": {}}
         if self.interrupt:
             raise KeyboardInterrupt
@@ -93,7 +94,8 @@ class FakeApprovalClient(FakeChatClient):
         super().__init__()
         self.decisions: list[dict[str, Any]] = []
 
-    def stream_run_events(self, _run_id: str):
+    def stream_run_events(self, _run_id: str, *, on_connection=None):
+        del on_connection
         yield {"sequence": 1, "type": "RunStarted", "payload": {}}
         yield {
             "sequence": 2,
@@ -138,6 +140,69 @@ class FakeApprovalClient(FakeChatClient):
             "assistant_output": {"answer": "done"} if completed else None,
             "error": None,
         }
+
+
+class FakeRetryApprovalClient(FakeApprovalClient):
+    def list_conversation_turns(self, _conversation_id: str, **_kwargs) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "failed-turn",
+                "run_id": "failed-run",
+                "run_status": "failed",
+                "run_revision": 7,
+            }
+        ]
+
+    def retry_conversation_turn(self, turn_id: str, **kwargs) -> dict[str, Any]:
+        assert turn_id == "failed-turn"
+        assert kwargs == {
+            "expected_run_id": "failed-run",
+            "expected_run_revision": 7,
+        }
+        return {"id": "turn-1", "run_id": "run-1"}
+
+
+class FakeNoisyChatClient(FakeChatClient):
+    def stream_run_events(self, _run_id: str, *, on_connection=None):
+        if on_connection is not None:
+            on_connection("reconnecting", 1, 3)
+            on_connection("recovered", 1, 3)
+        yield {"sequence": 1, "type": "TaskCreated", "payload": {}}
+        yield {"sequence": 2, "type": "RuntimeModelCallStarted", "payload": {}}
+        yield {
+            "sequence": 3,
+            "type": "RuntimeModelOutputDelta",
+            "payload": {"message": "private intermediate output"},
+        }
+        yield {"sequence": 4, "type": "RunCompleted", "payload": {}}
+
+
+class RecordingProgress:
+    def __init__(self, actions: list[str]) -> None:
+        self.actions = actions
+
+    def __enter__(self):
+        self.actions.append("progress:start")
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.stop()
+
+    def event(self, event: dict[str, Any]) -> None:
+        self.actions.append(f"progress:event:{event['type']}")
+
+    def connection(self, state: str, _attempt=None, _maximum=None) -> None:
+        self.actions.append(f"progress:connection:{state}")
+
+    def pause(self) -> None:
+        self.actions.append("progress:pause")
+
+    def resume(self) -> None:
+        self.actions.append("progress:resume")
+
+    def stop(self) -> None:
+        if not self.actions or self.actions[-1] != "progress:stop":
+            self.actions.append("progress:stop")
 
 
 class FakeProjectChatClient(FakeChatClient):
@@ -400,6 +465,40 @@ def test_one_shot_buffers_json_events_and_ctrl_c_cancels_authoritative_run(
     assert interrupted.cancelled == [("turn-1", 3)]
 
 
+def test_human_ctrl_c_renders_curated_cancel_without_internal_turn_fields(
+    tmp_path: Path,
+) -> None:
+    client = FakeChatClient(interrupt=True)
+    runner = _runner(client, tmp_path, json_mode=False)
+
+    result = runner.submit(_conversation("c"), "stop")
+
+    rendered = runner.output.stdout.getvalue()
+    assert result["turn"]["status"] == "cancelled"
+    assert "Run cancelled" in rendered
+    assert "turn-1" not in rendered
+    assert "run-1" not in rendered
+    assert "run_revision" not in rendered
+
+
+def test_human_chat_shows_compact_progress_and_final_without_internal_runtime_events(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(FakeNoisyChatClient(), tmp_path, json_mode=False)
+
+    result = runner.submit(_conversation("c"), "hello")
+
+    rendered = runner.output.stdout.getvalue()
+    assert result["turn"]["status"] == "completed"
+    assert "› Queued" in rendered
+    assert "Reconnecting 1/3" in rendered
+    assert "done" in rendered
+    assert "private intermediate output" not in rendered
+    assert "TaskCreated" not in rendered
+    assert "RuntimeModelCallStarted" not in rendered
+    assert "RunCompleted" not in rendered
+
+
 def test_chat_history_is_created_with_private_permissions(tmp_path: Path) -> None:
     runner = _runner(FakeChatClient(), tmp_path)
 
@@ -433,6 +532,55 @@ def test_chat_approval_is_server_decided_and_stream_resumes(monkeypatch, tmp_pat
     assert "[REDACTED]" in stdout.getvalue()
 
 
+def test_chat_progress_pauses_for_approval_resumes_and_stops_before_final(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = FakeApprovalClient()
+    actions: list[str] = []
+    runner = ChatRunner(
+        client,  # type: ignore[arg-type]
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO()),
+        history_path=tmp_path / "history",
+        approval_prompt=lambda _message: "1",
+    )
+    progress = RecordingProgress(actions)
+    monkeypatch.setattr(runner.renderer, "progress", lambda: progress)
+    monkeypatch.setattr(
+        runner.renderer,
+        "approval",
+        lambda _approval: actions.append("render:approval"),
+    )
+    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        "nico_agent.cli.chat.sys.stdin",
+        type("InteractiveInput", (), {"isatty": lambda self: True})(),
+    )
+
+    runner.submit(_conversation("c"), "query prices")
+
+    assert actions.index("progress:pause") < actions.index("render:approval")
+    assert actions.index("render:approval") < actions.index("progress:resume")
+    assert actions.index("progress:resume") < actions.index("progress:event:RunCompleted")
+    assert actions.index("progress:stop") < actions.index("render:final")
+
+
+def test_chat_progress_stops_when_final_fetch_fails(monkeypatch, tmp_path: Path) -> None:
+    client = FakeChatClient()
+    actions: list[str] = []
+    runner = _runner(client, tmp_path, json_mode=False)
+    monkeypatch.setattr(runner.renderer, "progress", lambda: RecordingProgress(actions))
+    monkeypatch.setattr(
+        client,
+        "get_conversation_turn",
+        lambda _turn_id: (_ for _ in ()).throw(CliError("FINAL_FETCH_FAILED", "failed")),
+    )
+
+    with pytest.raises(CliError, match="failed"):
+        runner.submit(_conversation("c"), "hello")
+
+    assert actions[-1] == "progress:stop"
+
+
 def test_noninteractive_json_never_auto_approves(tmp_path: Path) -> None:
     client = FakeApprovalClient()
 
@@ -440,6 +588,109 @@ def test_noninteractive_json_never_auto_approves(tmp_path: Path) -> None:
 
     assert result["turn"]["status"] == "waiting_for_approval"
     assert result["approval_required"]["id"] == "approval-1"
+    assert client.decisions == []
+
+
+def test_pending_human_submit_does_not_render_raw_turn(monkeypatch, tmp_path: Path) -> None:
+    client = FakeApprovalClient()
+    runner = _runner(client, tmp_path, json_mode=False)
+    final_calls: list[dict[str, Any]] = []
+    render_final = runner.renderer.final
+
+    def record_final(turn: dict[str, Any]) -> None:
+        final_calls.append(turn)
+        render_final(turn)
+
+    monkeypatch.setattr(runner.renderer, "final", record_final)
+    monkeypatch.setattr(
+        "nico_agent.cli.chat.sys.stdin",
+        type("NonInteractiveInput", (), {"isatty": lambda self: False})(),
+    )
+
+    result = runner.submit(_conversation("c"), "query prices")
+
+    rendered = runner.output.stdout.getvalue()
+    assert result["turn"]["status"] == "waiting_for_approval"
+    assert result["approval_required"]["id"] == "approval-1"
+    assert final_calls == []
+    assert "turn-1" not in rendered
+    assert "run_revision" not in rendered
+
+
+def test_retry_approval_pauses_decides_resumes_and_cleans_up_before_final(
+    monkeypatch, tmp_path: Path
+) -> None:
+    client = FakeRetryApprovalClient()
+    actions: list[str] = []
+    runner = ChatRunner(
+        client,  # type: ignore[arg-type]
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO()),
+        history_path=tmp_path / "history",
+        approval_prompt=lambda _message: "1",
+    )
+    progress = RecordingProgress(actions)
+    decide = client.decide_tool_approval
+
+    def record_decision(approval_id: str, **kwargs) -> dict[str, Any]:
+        actions.append("client:decision")
+        return decide(approval_id, **kwargs)
+
+    monkeypatch.setattr(runner.renderer, "progress", lambda: progress)
+    monkeypatch.setattr(
+        runner.renderer,
+        "approval",
+        lambda _approval: actions.append("render:approval"),
+    )
+    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(client, "decide_tool_approval", record_decision)
+    monkeypatch.setattr(
+        "nico_agent.cli.chat.sys.stdin",
+        type("InteractiveInput", (), {"isatty": lambda self: True})(),
+    )
+    command = parse_slash("/retry")
+    assert command is not None
+
+    runner._slash(_conversation("c"), command)
+
+    assert actions.index("progress:pause") < actions.index("render:approval")
+    assert actions.index("render:approval") < actions.index("client:decision")
+    assert actions.index("client:decision") < actions.index("progress:resume")
+    assert actions.index("progress:resume") < actions.index("progress:event:RunCompleted")
+    assert actions.index("progress:event:RunCompleted") < actions.index("progress:stop")
+    assert actions.index("progress:stop") < actions.index("render:final")
+
+
+def test_retry_approval_without_decision_stops_without_final(monkeypatch, tmp_path: Path) -> None:
+    client = FakeRetryApprovalClient()
+    actions: list[str] = []
+
+    def cancel_prompt(_message: str) -> str:
+        raise EOFError
+
+    runner = ChatRunner(
+        client,  # type: ignore[arg-type]
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO()),
+        history_path=tmp_path / "history",
+        approval_prompt=cancel_prompt,
+    )
+    monkeypatch.setattr(runner.renderer, "progress", lambda: RecordingProgress(actions))
+    monkeypatch.setattr(
+        runner.renderer,
+        "approval",
+        lambda _approval: actions.append("render:approval"),
+    )
+    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        "nico_agent.cli.chat.sys.stdin",
+        type("InteractiveInput", (), {"isatty": lambda self: True})(),
+    )
+    command = parse_slash("/retry")
+    assert command is not None
+
+    runner._slash(_conversation("c"), command)
+
+    assert actions[-1] == "progress:stop"
+    assert "render:final" not in actions
     assert client.decisions == []
 
 

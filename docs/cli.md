@@ -40,6 +40,9 @@ nico config use local
 nico doctor
 ```
 
+`nico doctor` 不只检查 tenant ID 是否已填写，还会向当前 API 验证该 tenant 确实
+存在；指向另一套数据库的旧 profile 会以 `tenant_access` 失败显示。
+
 Linux 默认配置路径为 `~/.config/nico/config.toml`；可以用 `nico config path` 查看实际位置。CLI 以 `0600` 原子写入配置文件。配置只保存令牌所在的环境变量名，不保存明文令牌：
 
 ```bash
@@ -271,6 +274,24 @@ nico conversation history <conversation-id>
 
 每条消息在一个数据库事务中创建 ConversationTurn、Task 与 Pending Run。Worker 仍是唯一执行者；CLI 通过可续传 SSE 接收持久化 Event，按 sequence 去重，并在流结束后通过 Turn API 校准最终结果。终端断线不改变服务端权威状态。
 
+human 模式不会把持久化事件流原样打印到对话中。普通 Task、Run、RuntimeSession、计划、步骤、ContextSnapshot、ModelCall 和 checkpoint 生命周期只用于审计与显式检查命令；聊天滚动区只显示最终回答、真实工具动作、审批、可用 Artifact，以及失败或取消。由于模型增量事件无法可靠区分最终正文与中间结构化输出，CLI 等 Turn 终态校准后再渲染 `assistant_output`。`--json` 仍返回完整事件数组供自动化消费。
+
+### 执行中的反馈
+
+交互终端在等待服务端结果时只保留一行临时状态，例如：
+
+```text
+⠋ Queued · 0:00
+⠙ Thinking · 0:08
+⠹ Running http_read@1 · 0:12 | reconnecting 1/3
+```
+
+状态会在准备、规划、思考、运行工具、反思和整理答案之间切换，并显示本次等待的经过时间。连接暂时中断时，同一行显示有界重连次数；连接恢复后自动消失。这一行在最终回答、错误、审批面板或用户中断前清除，不会污染可复制的对话历史。
+
+滚动区只保留有长期价值的结果：每个工具调用至多一条终态、已保存的 Artifact、审批面板、失败或取消，以及最终回答。能够由同一工具调用的开始和结束事件精确关联时才显示耗时。模型增量、私有推理、内部事件名、sequence、内部 ID、原始工具参数和返回 payload 都不会出现在 human 输出中；需要审计时使用 `/inspect`、`/plan`、`/steps`、`/tools`、`/audit` 等显式命令。
+
+输出重定向或非 TTY 环境不播放 spinner，也不连续打印阶段变化：只输出一次初始等待提示、有界重连提示和上述持久结果。`--json` 合同不变，仍只输出一个 JSON 文档及真实事件数组；临时状态和连接提示不会被伪造成事件写入 JSON。
+
 ## 一次性执行与 detached Run
 
 `nico exec` 为脚本、定时任务和 CI 提供非交互入口。默认创建一条独立 Conversation/Turn，并持续读取 Run SSE 直到终态：
@@ -305,78 +326,14 @@ NO_COLOR=1 nico health
 
 环境覆盖包括 `NICO_CONFIG_FILE`、`NICO_PROFILE`、`NICO_API_URL`、`NICO_TENANT_ID`、`NICO_ACTOR_ID` 和仅驻留进程内存的 `NICO_API_TOKEN`。
 
-## Coin-cat 的视觉来源
+## 终端小猫标识
 
-README Logo 是透明背景的蓝金白像素猫头像。终端版本提取四个特征，而不是逐像素复制图片：
-
-- 深灰蓝外轮廓和阴影；
-- 柔和金色的猫脸主体；
-- 白色额头中线与口鼻区域；
-- 方块颗粒构成的清晰猫耳、眼睛和脸部轮廓。
-
-终端图案主题是“小猫位于硬币中央”。CLI Goal D 已用 Rich Text 将主图落地，并在 `chat` 与 human-mode `exec` 启动时与 Agent、Version、Runtime、Project 和 Tool 摘要并排显示。
-
-## 候选 A：像素圆章（最终选择）
+`chat` 与 human-mode `exec` 的 header 使用三行代码原生小猫，与 Agent、Version、Runtime、Project 和 Tool 摘要并排显示：
 
 ```text
-       ▄██████▄
-     ▄█▓▓▓▓▓▓▓▓█▄
-    █▓▒▄▀▄▓▓▄▀▄▒▓█
-   █▓▒█  ●██●  █▒▓█
-   █▓▒█   ██   █▒▓█
-   █▓▒▀▄  ▄▄  ▄▀▒▓█
-    █▓▒▒▀▄▄▄▄▀▒▒▓█
-     ▀█▓▓▓▓▓▓█▀
-       ▀████▀
+ /\_/\
+( o.o )
+ > ^ <
 ```
 
-优点：圆形硬币明确；猫耳、双眼、白色中线都能辨认；19 列左右适合和 Agent/Project 信息并排。缺点：依赖 Unicode 半块/块字符，必须处理宽度和无 Unicode 降级。
-
-## 候选 B：纯 ASCII 猫币
-
-```text
-       .--------.
-     .'  /\__/\  '.
-    /   / o  o \   \
-   |    \  --  /    |
-   |     '.__.'     |
-    \              /
-     '.          .'
-       '--------'
-```
-
-优点：兼容性最高、日志复制稳定。缺点：像素块感较弱，金白中线也不容易在无颜色时体现，品牌辨识度低于候选 A。
-
-## 候选 C：紧凑徽章
-
-```text
-    .-====-.
-   / /\_/\ \
-  | ( o.o ) |
-  |  > ^ <  |
-   '-====-'
-```
-
-优点：窄终端占用小。缺点：更接近普通 ASCII 猫，硬币的像素质感和 README 关联较弱。
-
-## 最终决策与实现规则
-
-选择候选 A 作为正常交互 header 的唯一主标识；候选 C 的尺寸只作为同一品牌标识的窄终端降级，不作为第二套 Logo。选择依据是：
-
-- 三个方案中，它最清楚地同时表达“像素猫”和“硬币”；
-- 轮廓紧凑，不会像大型 ASCII banner 那样挤压对话；
-- 四色区域能映射 README 的灰蓝、柔金、暖白和深色轮廓；
-- 去掉 ANSI 后仍可辨认，不靠颜色维持基本语义。
-
-当前实现规则：
-
-- muted blue：轮廓和阴影；
-- soft gold：硬币外圈与脸部主体；
-- warm white：额头中线、口鼻和高光；
-- dark slate：眼睛与内部线条；
-- 宽度不足时使用 5 行紧凑版；
-- `NO_COLOR`、`--no-color` 和 `TERM=dumb` 输出无 ANSI 版本；
-- `--json` 完全不显示 Logo；human 输出重定向时使用无 ANSI 紧凑版；
-- 字符宽度不可靠时退回纯 ASCII，不使用 emoji。
-
-这是 inspired by README cat style 的终端友好重设计，不声称是原 PNG 的像素级复刻。
+标识只使用 ASCII 字符，不依赖图片协议、emoji 或特殊块字符；蓝色用于轮廓，金色用于眼睛和鼻子。`NO_COLOR`、`--no-color`、`TERM=dumb` 和输出重定向保留同一轮廓但不带 ANSI，`--json` 完全不显示 Logo。
