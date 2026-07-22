@@ -25,6 +25,7 @@ from nico_agent.runtime.contracts import (
     RuntimeToolOutcome,
     RuntimeToolSpec,
 )
+from nico_agent.runtime.native.checkpoint import make_plan_checkpoint
 from nico_agent.runtime.native.planner import parse_plan, plan_content_hash
 from nico_agent.runtime.native.provider import NicoNativeRuntimeProvider
 
@@ -582,8 +583,117 @@ async def test_plan_tool_recovery_reuses_pre_action_idempotency_key() -> None:
     assert len(recovered_handler.intents) == 1
     assert recovered_handler.cached is True
     assert (
-        recovered_handler.intents[0].idempotency_key == initial_handler.intents[0].idempotency_key
+        recovered_handler.intents[0].idempotency_key
+        == initial_handler.intents[0].idempotency_key
     )
     assert recovered_model.requests[0].metadata["call_key"] == (
         "plan:1:step:report:attempt:1:round:2"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("repair_payload", "expected_content", "has_diagnostic"),
+    [
+        (
+            {"output": {"content": "Source: https://docs.example/nico"}},
+            "Source: https://docs.example/nico",
+            False,
+        ),
+        (
+            {"output": {"content": "Still missing a source."}},
+            "Initial answer.",
+            True,
+        ),
+    ],
+)
+async def test_plan_resumes_pending_citation_repair_at_most_once(
+    repair_payload: dict,
+    expected_content: str,
+    has_diagnostic: bool,
+) -> None:
+    base_request = _request()
+    provisional = {
+        "result": {"content": "Initial answer."},
+        "execution_summary": {
+            "plan_revision": 1,
+            "completed_steps": ["report"],
+            "reflections": 0,
+        },
+    }
+    checkpoint = make_plan_checkpoint(
+        manifest=base_request.execution_manifest,
+        loop_state="finalizing",
+        plan_revision=1,
+        plan_content_hash="a" * 64,
+        completed_step_keys=("report",),
+        latest_output={"content": "Initial answer."},
+        context_version=3,
+        observed_web_urls=("https://docs.example/nico",),
+        citation_repair_attempted=True,
+        citation_provisional_output=provisional,
+        usage={"total_tokens": 45, "model_calls": 3},
+    )
+    request = base_request.model_copy(
+        update={
+            "checkpoint": checkpoint.model_dump(mode="json"),
+            "resume_session_id": "nico:prior-plan-attempt",
+            "event_sequence": 30,
+        }
+    )
+    model = SequencedStructuredProvider([repair_payload])
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(session.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output["result"]["content"] == expected_content
+    assert ("diagnostics" in outcome.output) is has_diagnostic
+    if has_diagnostic:
+        assert outcome.output["diagnostics"][0]["code"] == "WEB_CITATION_MISSING"
+        assert outcome.output["diagnostics"][0]["repair_attempted"] is True
+    assert len(model.requests) == 1
+    assert model.requests[0].tools == ()
+    assert model.requests[0].metadata["call_key"].startswith("citation-repair:plan")
+
+
+@pytest.mark.asyncio
+async def test_plan_pending_citation_repair_respects_token_budget() -> None:
+    base_request = _request(budgets={"token_limit": 50})
+    provisional = {
+        "result": {"content": "Initial answer."},
+        "execution_summary": {
+            "plan_revision": 1,
+            "completed_steps": ["report"],
+            "reflections": 0,
+        },
+    }
+    checkpoint = make_plan_checkpoint(
+        manifest=base_request.execution_manifest,
+        loop_state="finalizing",
+        plan_revision=1,
+        plan_content_hash="a" * 64,
+        completed_step_keys=("report",),
+        latest_output={"content": "Initial answer."},
+        observed_web_urls=("https://docs.example/nico",),
+        citation_repair_attempted=True,
+        citation_provisional_output=provisional,
+        usage={"total_tokens": 50, "model_calls": 3},
+    )
+    request = base_request.model_copy(
+        update={"checkpoint": checkpoint.model_dump(mode="json")}
+    )
+    model = SequencedStructuredProvider(
+        [{"output": {"content": "Source: https://docs.example/nico"}}]
+    )
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(session.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output["result"]["content"] == "Initial answer."
+    assert outcome.output["diagnostics"][0]["reason"] == "token_budget"
+    assert outcome.output["diagnostics"][0]["repair_attempted"] is False
+    assert model.requests == []

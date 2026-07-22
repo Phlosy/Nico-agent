@@ -37,6 +37,9 @@ class ReactCheckpoint(BaseModel):
     coordination_calls_consumed: int = Field(default=0, ge=0)
     waiting_delegations: tuple[dict[str, Any], ...] = ()
     consumed_message_ids: tuple[str, ...] = ()
+    observed_web_urls: tuple[str, ...] = Field(default=(), max_length=1024)
+    citation_repair_attempted: bool = False
+    citation_provisional_output: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint_hash: str = Field(min_length=64, max_length=64)
 
@@ -62,6 +65,9 @@ class PlanCheckpoint(BaseModel):
     step_state: dict[str, Any] | None = None
     context_version: int = Field(default=0, ge=0)
     reflection_count: int = Field(default=0, ge=0)
+    observed_web_urls: tuple[str, ...] = Field(default=(), max_length=1024)
+    citation_repair_attempted: bool = False
+    citation_provisional_output: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint_hash: str = Field(min_length=64, max_length=64)
 
@@ -104,6 +110,9 @@ def make_react_checkpoint(
     coordination_calls_consumed: int = 0,
     waiting_delegations: tuple[dict[str, Any], ...] = (),
     consumed_message_ids: tuple[str, ...] = (),
+    observed_web_urls: tuple[str, ...] = (),
+    citation_repair_attempted: bool = False,
+    citation_provisional_output: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
 ) -> ReactCheckpoint:
     payload = {
@@ -124,6 +133,9 @@ def make_react_checkpoint(
         "coordination_calls_consumed": coordination_calls_consumed,
         "waiting_delegations": waiting_delegations,
         "consumed_message_ids": consumed_message_ids,
+        "observed_web_urls": observed_web_urls,
+        "citation_repair_attempted": citation_repair_attempted,
+        "citation_provisional_output": citation_provisional_output,
         "usage": usage or {},
     }
     payload["checkpoint_hash"] = _hash(payload)
@@ -164,6 +176,9 @@ def make_plan_checkpoint(
     step_state: dict[str, Any] | None = None,
     context_version: int = 0,
     reflection_count: int = 0,
+    observed_web_urls: tuple[str, ...] = (),
+    citation_repair_attempted: bool = False,
+    citation_provisional_output: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
 ) -> PlanCheckpoint:
     payload = {
@@ -183,6 +198,9 @@ def make_plan_checkpoint(
         "step_state": step_state,
         "context_version": context_version,
         "reflection_count": reflection_count,
+        "observed_web_urls": observed_web_urls,
+        "citation_repair_attempted": citation_repair_attempted,
+        "citation_provisional_output": citation_provisional_output,
         "usage": usage or {},
     }
     payload["checkpoint_hash"] = _hash(payload)
@@ -200,9 +218,9 @@ def load_plan_checkpoint(
         checkpoint = PlanCheckpoint.model_validate(value)
     except ValidationError as exc:
         raise ValueError("checkpoint schema is invalid") from exc
-    payload = checkpoint.model_dump(mode="json")
-    expected = payload.pop("checkpoint_hash")
-    if _hash(payload) != expected:
+    original_payload = dict(value)
+    expected = original_payload.pop("checkpoint_hash")
+    if _hash(original_payload) != expected:
         raise ValueError("checkpoint integrity hash does not match")
     if checkpoint.manifest_hash != _hash(manifest):
         raise ValueError("checkpoint execution manifest does not match")

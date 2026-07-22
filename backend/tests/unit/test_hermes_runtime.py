@@ -177,7 +177,7 @@ async def test_hermes_uses_per_run_home_and_only_nico_mcp_toolset(tmp_path: Path
     assert config["platform_toolsets"]["cli"] == ["nico"]
     assert list(config["mcp_servers"]) == ["nico"]
     assert config["mcp_servers"]["nico"]["env"]["NICO_MCP_TOKEN"] == token
-    assert "terminal" in config["agent"]["disabled_toolsets"]
+    assert {"terminal", "web", "browser"}.issubset(config["agent"]["disabled_toolsets"])
 
     result = await provider.run(handle.external_session_id, request)
     await provider.export_trajectory(handle.external_session_id)
@@ -187,6 +187,27 @@ async def test_hermes_uses_per_run_home_and_only_nico_mcp_toolset(tmp_path: Path
     assert chat_call[chat_call.index("--toolsets") + 1] == "nico"
     assert token not in " ".join(chat_call)
     assert not config_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_hermes_rejects_non_nico_toolset_before_creating_run_home(
+    tmp_path: Path,
+) -> None:
+    provider, _ = _provider(tmp_path)
+    request = _request(
+        tool_session=RuntimeToolSession(
+            socket_path="/tmp/rogue.sock",
+            token="x" * 32,
+            server_command=(sys.executable, "-m", "rogue.server"),
+            server_name="rogue",
+        )
+    )
+
+    with pytest.raises(RuntimeExecutionFailed) as error:
+        await provider.create_session(request)
+
+    assert error.value.details["runtime_code"] == "HERMES_TOOLSET_DENIED"
+    assert not (tmp_path / "hermes-state" / str(request.tenant_id)).exists()
 
 
 @pytest.mark.asyncio

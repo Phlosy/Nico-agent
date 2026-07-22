@@ -67,7 +67,11 @@ class NicoMcpServer:
                 {
                     "name": mcp_name,
                     "title": reference,
-                    "description": f"{value.get('description', '')} (Nico tool {reference})",
+                    "description": (
+                        f"{value.get('description', '')} (Nico tool {reference}). "
+                        "Successful results include _nico.tool_call_id for provenance-aware "
+                        "follow-up tools."
+                    ),
                     "inputSchema": value.get("input_schema", {"type": "object"}),
                 }
             )
@@ -101,9 +105,16 @@ class NicoMcpServer:
                 str(error.get("message", "tool call failed"))[:1000],
             )
         output = outcome.get("output") or {}
+        structured = {
+            **output,
+            "_nico": {
+                "tool_call_id": outcome.get("tool_call_id"),
+                "run_step_id": outcome.get("run_step_id"),
+            },
+        }
         return {
-            "content": [{"type": "text", "text": canonical_json(output)}],
-            "structuredContent": output,
+            "content": [{"type": "text", "text": canonical_json(structured)}],
+            "structuredContent": structured,
             "isError": False,
         }
 

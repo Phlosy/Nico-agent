@@ -118,6 +118,25 @@ class WebSearchModelProvider:
 
     async def stream(self, request):
         self.requests.append(request)
+        call_key = str(request.metadata.get("call_key", ""))
+        if call_key.startswith("citation-repair:react"):
+            yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
+            yield ModelStreamEvent(
+                type=ModelStreamEventType.TEXT_DELTA,
+                text_delta="Found current documentation: https://docs.example/nico",
+            )
+            yield ModelStreamEvent(
+                type=ModelStreamEventType.RESPONSE_COMPLETED,
+                finish_reason="stop",
+                usage=ModelUsage(
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                    status="exact",
+                ),
+                provider_request_id="web-repair",
+            )
+            return
         observations = [message for message in request.messages if message.role == "tool"]
         if not observations:
             async for event in SequencedToolModelProvider._tool(
@@ -433,8 +452,11 @@ async def test_native_react_observes_web_search_with_platform_tool_call_id() -> 
                 await session.scalars(select(ToolCall).where(ToolCall.run_id == run_id))
             )
         assert completed is not None and completed.status == "completed"
+        assert completed.result == {
+            "content": "Found current documentation: https://docs.example/nico"
+        }
         assert len(tool_calls) == 1 and tool_calls[0].status == "succeeded"
-        assert len(model.requests) == 2
+        assert len(model.requests) == 3
         assert [tool.name for tool in model.requests[0].tools] == ["web.search"]
         observation = model.requests[1].messages[-1]
         assert observation.role == "tool"
@@ -451,6 +473,8 @@ async def test_native_react_observes_web_search_with_platform_tool_call_id() -> 
                 "url": "https://docs.example/nico",
             }
         ]
+        assert model.requests[2].tools == ()
+        assert model.requests[2].metadata["call_key"].startswith("citation-repair:react")
     finally:
         await engine.dispose()
 

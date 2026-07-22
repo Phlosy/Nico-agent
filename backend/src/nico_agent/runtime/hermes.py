@@ -495,6 +495,12 @@ class HermesRuntimeProvider:
             raise RuntimeSessionNotFound(external_session_id) from exc
 
     def _prepare_home(self, request: RuntimeSessionRequest) -> Path:
+        if request.tool_session is not None and request.tool_session.server_name != "nico":
+            raise RuntimeExecutionFailed(
+                "hermes",
+                "HERMES_TOOLSET_DENIED",
+                "Hermes may only use the per-Run Nico MCP toolset",
+            )
         tenant_root = self._state_root / str(request.tenant_id)
         tenant_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         home = tenant_root / str(request.run_id)
@@ -529,6 +535,13 @@ class HermesRuntimeProvider:
                 "connect_timeout": 15,
                 "supports_parallel_tool_calls": False,
             }
+        disabled = set(config["agent"]["disabled_toolsets"])
+        if not {"web", "browser"}.issubset(disabled):
+            raise RuntimeExecutionFailed(
+                "hermes",
+                "HERMES_NATIVE_WEB_ENABLED",
+                "Hermes native Web and browser toolsets must remain disabled",
+            )
         encoded = json.dumps(config, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         descriptor, temporary_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=home)
         try:

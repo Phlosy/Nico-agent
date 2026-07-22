@@ -25,13 +25,26 @@ class ListingHandler:
     async def list_tools(self):
         return (
             RuntimeToolSpec(
-                name="file.read",
+                name="web.search",
                 version="1.0.0",
-                description="Read a Run-scoped file",
+                description="Search the current public Web",
                 input_schema={
                     "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+            RuntimeToolSpec(
+                name="web.fetch",
+                version="1.0.0",
+                description="Fetch an observed Web source",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "search_tool_call_id": {"type": "string"},
+                    },
+                    "required": ["url"],
                 },
             ),
         )
@@ -91,7 +104,8 @@ async def test_real_hermes_0182_discovers_only_nico_mcp_tools(tmp_path: Path) ->
 
         assert process.returncode == 0, output
         assert "nico" in output.lower()
-        assert "file.read" in output or "nico__file_read__v1_0_0" in output
+        assert "web.search" in output or "nico__web_search__v1_0_0" in output
+        assert "web.fetch" in output or "nico__web_fetch__v1_0_0" in output
         assert tool_session.token not in output
         assert "terminal" not in output.lower()
     finally:

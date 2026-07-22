@@ -39,8 +39,52 @@ class FakeToolHandler:
         self.intents.append(intent)
         return RuntimeToolOutcome(
             call_id=intent.call_id,
+            tool_call_id="00000000-0000-0000-0000-000000000111",
+            run_step_id="00000000-0000-0000-0000-000000000112",
             status="succeeded",
             output={"path": intent.arguments["path"], "content": "hello"},
+        )
+
+
+class FakeWebToolHandler:
+    search_tool_call_id = "00000000-0000-0000-0000-000000000211"
+
+    def __init__(self) -> None:
+        self.intents: list[RuntimeToolIntent] = []
+
+    async def list_tools(self):
+        return (
+            RuntimeToolSpec(
+                name="web.search",
+                version="1.0.0",
+                description="Search the current public Web",
+                input_schema={"type": "object"},
+            ),
+            RuntimeToolSpec(
+                name="web.fetch",
+                version="1.0.0",
+                description="Fetch an observed Web source",
+                input_schema={"type": "object"},
+            ),
+        )
+
+    async def execute_tool(self, intent):
+        self.intents.append(intent)
+        if intent.name == "web.search":
+            return RuntimeToolOutcome(
+                call_id=intent.call_id,
+                tool_call_id=self.search_tool_call_id,
+                run_step_id="00000000-0000-0000-0000-000000000212",
+                status="succeeded",
+                output={"results": [{"url": "https://docs.example/nico"}]},
+            )
+        assert intent.arguments["search_tool_call_id"] == self.search_tool_call_id
+        return RuntimeToolOutcome(
+            call_id=intent.call_id,
+            tool_call_id="00000000-0000-0000-0000-000000000213",
+            run_step_id="00000000-0000-0000-0000-000000000214",
+            status="succeeded",
+            output={"final_url": "https://docs.example/nico", "content": "Nico docs"},
         )
 
 
@@ -75,10 +119,60 @@ async def test_mcp_protocol_lists_exact_authorized_version_and_calls_broker() ->
         assert tool["name"] == "nico__file_read__v1_0_0"
         assert called["result"]["isError"] is False
         assert called["result"]["structuredContent"]["content"] == "hello"
+        assert called["result"]["structuredContent"]["_nico"] == {
+            "tool_call_id": "00000000-0000-0000-0000-000000000111",
+            "run_step_id": "00000000-0000-0000-0000-000000000112",
+        }
         assert handler.intents[0].name == "file.read"
         assert handler.intents[0].version == "1.0.0"
         assert handler.intents[0].idempotency_key.startswith("mcp:")
         assert session.token not in repr(session)
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_web_search_exposes_platform_id_for_follow_up_fetch() -> None:
+    handler = FakeWebToolHandler()
+    host = McpGatewayHost(handler)
+    session = await host.start()
+    server = NicoMcpServer(session.socket_path, session.token)
+    try:
+        listed = await server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["title"]: tool for tool in listed["result"]["tools"]}
+        search = await server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "search",
+                "method": "tools/call",
+                "params": {
+                    "name": tools["web.search@1.0.0"]["name"],
+                    "arguments": {"query": "current Nico documentation"},
+                },
+            }
+        )
+        platform_id = search["result"]["structuredContent"]["_nico"]["tool_call_id"]
+        fetched = await server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": "fetch",
+                "method": "tools/call",
+                "params": {
+                    "name": tools["web.fetch@1.0.0"]["name"],
+                    "arguments": {
+                        "url": "https://docs.example/nico",
+                        "search_tool_call_id": platform_id,
+                    },
+                },
+            }
+        )
+
+        assert platform_id == handler.search_tool_call_id
+        assert fetched["result"]["structuredContent"]["final_url"] == (
+            "https://docs.example/nico"
+        )
+        assert [intent.name for intent in handler.intents] == ["web.search", "web.fetch"]
+        assert "_nico.tool_call_id" in tools["web.search@1.0.0"]["description"]
     finally:
         await host.close()
 

@@ -52,10 +52,13 @@ from nico_agent.runtime.native.completion import (
     parse_completion_judge,
 )
 from nico_agent.runtime.native.context import (
+    build_citation_repair_context,
     build_direct_context,
     build_native_context,
     build_phase_context,
     inject_interventions,
+    merge_observed_web_urls,
+    output_has_observed_web_citation,
 )
 from nico_agent.runtime.native.planner import (
     PlanDraft,
@@ -190,6 +193,21 @@ class NativeAgentLoop:
         recovery_instruction: str | None = checkpoint.recovery_instruction
         replan_count = max(0, checkpoint.plan_revision - 1)
 
+        if (
+            checkpoint.loop_state == "finalizing"
+            and checkpoint.citation_repair_attempted
+            and checkpoint.citation_provisional_output is not None
+        ):
+            return await self._finish_plan_citation_repair(
+                request,
+                checkpoint,
+                endpoint=endpoint,
+                model=model,
+                token_limit=token_limit,
+                emit=emit,
+                cancelled=cancelled,
+            )
+
         if checkpoint.loop_state == "reflecting":
             if checkpoint.recovery_decision == "fail":
                 return await self._fail(
@@ -212,6 +230,7 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=checkpoint.context_version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(checkpoint),
                     usage=checkpoint.usage,
                 )
                 plan = None
@@ -227,6 +246,7 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=checkpoint.context_version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(checkpoint),
                     usage=checkpoint.usage,
                 )
 
@@ -338,6 +358,7 @@ class NativeAgentLoop:
                         recovery_instruction=recovery_instruction,
                         context_version=checkpoint.context_version,
                         reflection_count=checkpoint.reflection_count,
+                        **_web_checkpoint_state(checkpoint),
                         usage=checkpoint.usage,
                     )
                     await emit(
@@ -360,6 +381,7 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=checkpoint.context_version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(checkpoint),
                     usage=checkpoint.usage,
                 )
                 restart_with_new_plan = True
@@ -467,6 +489,7 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=checkpoint.context_version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(checkpoint),
                     usage=checkpoint.usage,
                 )
                 await emit(
@@ -477,6 +500,73 @@ class NativeAgentLoop:
                 plan = None
                 continue
 
+            output = {
+                "result": checkpoint.latest_output or {},
+                "execution_summary": {
+                    "plan_revision": checkpoint.plan_revision,
+                    "completed_steps": list(checkpoint.completed_step_keys),
+                    "reflections": checkpoint.reflection_count,
+                },
+            }
+            if checkpoint.observed_web_urls:
+                citation_present = output_has_observed_web_citation(
+                    output,
+                    checkpoint.observed_web_urls,
+                )
+                can_repair = not citation_present and (
+                    not token_limit
+                    or int(checkpoint.usage.get("total_tokens") or 0) < token_limit
+                )
+                await _emit_citation_evaluation(
+                    emit,
+                    passed=citation_present,
+                    phase="initial",
+                    observed_count=len(checkpoint.observed_web_urls),
+                    repair_attempted=False,
+                    reason=(
+                        "present"
+                        if citation_present
+                        else ("repair_scheduled" if can_repair else "budget_exhausted")
+                    ),
+                )
+                if can_repair:
+                    checkpoint = make_plan_checkpoint(
+                        manifest=request.execution_manifest,
+                        loop_state="finalizing",
+                        plan_revision=checkpoint.plan_revision,
+                        plan_content_hash=checkpoint.plan_content_hash,
+                        completed_step_keys=checkpoint.completed_step_keys,
+                        latest_output=checkpoint.latest_output,
+                        context_version=checkpoint.context_version,
+                        reflection_count=checkpoint.reflection_count,
+                        **_web_checkpoint_state(
+                            checkpoint,
+                            citation_repair_attempted=True,
+                            citation_provisional_output=output,
+                        ),
+                        usage=checkpoint.usage,
+                    )
+                    await emit(
+                        RuntimeEventType.CHECKPOINT_SAVED,
+                        None,
+                        checkpoint.model_dump(mode="json"),
+                    )
+                    return await self._finish_plan_citation_repair(
+                        request,
+                        checkpoint,
+                        endpoint=endpoint,
+                        model=model,
+                        token_limit=token_limit,
+                        emit=emit,
+                        cancelled=cancelled,
+                    )
+                if not citation_present:
+                    output = _with_citation_diagnostic(
+                        output,
+                        observed_count=len(checkpoint.observed_web_urls),
+                        repair_attempted=False,
+                        reason="budget_exhausted",
+                    )
             checkpoint = make_plan_checkpoint(
                 manifest=request.execution_manifest,
                 loop_state="completed",
@@ -486,6 +576,7 @@ class NativeAgentLoop:
                 latest_output=checkpoint.latest_output,
                 context_version=checkpoint.context_version,
                 reflection_count=checkpoint.reflection_count,
+                **_web_checkpoint_state(checkpoint),
                 usage=checkpoint.usage,
             )
             await emit(
@@ -498,14 +589,6 @@ class NativeAgentLoop:
                 None,
                 checkpoint.model_dump(mode="json"),
             )
-            output = {
-                "result": checkpoint.latest_output or {},
-                "execution_summary": {
-                    "plan_revision": checkpoint.plan_revision,
-                    "completed_steps": list(checkpoint.completed_step_keys),
-                    "reflections": checkpoint.reflection_count,
-                },
-            }
             await emit(RuntimeEventType.RUN_COMPLETED, None, {"output": output})
             return RuntimeOutcome.terminal(
                 status=RuntimeSessionStatus.COMPLETED,
@@ -577,6 +660,7 @@ class NativeAgentLoop:
             latest_output=checkpoint.latest_output,
             context_version=context.version,
             reflection_count=checkpoint.reflection_count,
+            **_web_checkpoint_state(checkpoint),
             usage=usage,
         )
         await emit(
@@ -674,6 +758,7 @@ class NativeAgentLoop:
             plan_content_hash=content_hash,
             context_version=context.version,
             reflection_count=checkpoint.reflection_count,
+            **_web_checkpoint_state(checkpoint),
             usage=usage,
         )
         return plan, next_checkpoint
@@ -744,8 +829,9 @@ class NativeAgentLoop:
                         "plan_and_execute exhausted its tool-call budget",
                         checkpoint=checkpoint.model_dump(mode="json"),
                         usage=checkpoint.usage,
-                    )
+                )
                 history = tuple(state.get("history", []))
+                observed_web_urls = checkpoint.observed_web_urls
                 for action in sorted(pending, key=lambda item: str(item["call_id"])):
                     await emit(
                         RuntimeEventType.TOOL_CALL_STARTED,
@@ -806,6 +892,7 @@ class NativeAgentLoop:
                         },
                     )
                     history += (_tool_history(outcome),)
+                    observed_web_urls = merge_observed_web_urls(observed_web_urls, outcome)
                 usage = dict(checkpoint.usage)
                 usage["tool_calls"] = consumed + len(pending)
                 state["history"] = list(history)
@@ -821,6 +908,10 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=checkpoint.context_version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(
+                        checkpoint,
+                        observed_web_urls=observed_web_urls,
+                    ),
                     usage=usage,
                     step_state=state,
                 )
@@ -937,6 +1028,7 @@ class NativeAgentLoop:
                     recovery_instruction=recovery_instruction,
                     context_version=context.version,
                     reflection_count=checkpoint.reflection_count,
+                    **_web_checkpoint_state(checkpoint),
                     usage=usage,
                     step_state=state,
                 )
@@ -983,6 +1075,7 @@ class NativeAgentLoop:
                 latest_output=output,
                 context_version=context.version,
                 reflection_count=checkpoint.reflection_count,
+                **_web_checkpoint_state(checkpoint),
                 usage=usage,
                 step_state=None,
             )
@@ -1016,6 +1109,7 @@ class NativeAgentLoop:
             latest_output=output,
             context_version=context.version,
             reflection_count=checkpoint.reflection_count,
+            **_web_checkpoint_state(checkpoint),
             usage=usage,
             step_state=None,
         )
@@ -1109,6 +1203,7 @@ class NativeAgentLoop:
             recovery_decision=decision.decision,
             context_version=context.version,
             reflection_count=number,
+            **_web_checkpoint_state(checkpoint),
             usage=usage,
         )
         await emit(
@@ -1146,6 +1241,252 @@ class NativeAgentLoop:
             next_checkpoint.model_dump(mode="json"),
         )
         return decision, next_checkpoint
+
+    async def _citation_repair_round(
+        self,
+        request: RuntimeSessionRequest,
+        *,
+        endpoint: dict[str, Any],
+        model: str,
+        provisional_output: dict[str, Any],
+        observed_urls: tuple[str, ...],
+        context_version: int,
+        mode: str,
+        emit: Emit,
+    ) -> _ModelRound | None:
+        call_key = _next_named_call_key(
+            f"citation-repair:{mode}",
+            request.recovery_state,
+        )
+        context = build_citation_repair_context(
+            request,
+            provisional_output=provisional_output,
+            observed_urls=observed_urls,
+            version=context_version,
+        )
+        await emit(
+            RuntimeEventType.STEP_STARTED,
+            None,
+            {
+                "step_key": f"citation-repair:{mode}",
+                "step_type": "reasoning",
+                "name": "web.citation_repair",
+            },
+        )
+        try:
+            result = await self._model_round(
+                request,
+                endpoint=endpoint,
+                model=model,
+                context=context,
+                call_key=call_key,
+                tools=(),
+                emit=emit,
+            )
+        except ModelError:
+            await emit(
+                RuntimeEventType.STEP_COMPLETED,
+                None,
+                {
+                    "step_key": f"citation-repair:{mode}",
+                    "step_type": "reasoning",
+                    "name": "web.citation_repair",
+                    "model_call_key": call_key,
+                    "decision": "model_error",
+                },
+            )
+            return None
+        response = result.response
+        await emit(
+            RuntimeEventType.STEP_COMPLETED,
+            None,
+            {
+                "step_key": f"citation-repair:{mode}",
+                "step_type": "reasoning",
+                "name": "web.citation_repair",
+                "model_call_key": call_key,
+                "context_version": context.version,
+                "decision": (
+                    "tool_calls"
+                    if response.tool_calls
+                    else ("final" if response.text.strip() else "empty")
+                ),
+            },
+        )
+        return result
+
+    async def _finish_react_citation_repair(
+        self,
+        request: RuntimeSessionRequest,
+        checkpoint: ReactCheckpoint,
+        *,
+        endpoint: dict[str, Any],
+        model: str,
+        token_limit: int,
+        emit: Emit,
+        cancelled: Callable[[], bool],
+    ) -> RuntimeOutcome:
+        provisional = checkpoint.citation_provisional_output or {}
+        if cancelled():
+            return await self._cancelled(emit, checkpoint=checkpoint.model_dump(mode="json"))
+        repair = None
+        reason = "repair_failed"
+        if not token_limit or int(checkpoint.usage.get("total_tokens") or 0) < token_limit:
+            repair = await self._citation_repair_round(
+                request,
+                endpoint=endpoint,
+                model=model,
+                provisional_output=provisional,
+                observed_urls=checkpoint.observed_web_urls,
+                context_version=checkpoint.context_version + 1,
+                mode="react",
+                emit=emit,
+            )
+        else:
+            reason = "token_budget"
+        usage = checkpoint.usage
+        output = provisional
+        context_version = checkpoint.context_version
+        context_hash = checkpoint.context_hash
+        call_key = checkpoint.last_model_call_key
+        if repair is not None:
+            usage = _merge_usage(checkpoint.usage, repair.usage_payload)
+            context_version = repair.context_version
+            context_hash = repair.context_hash
+            call_key = repair.call_key
+            candidate = _repaired_output("react", provisional, repair.response)
+            if candidate is not None and output_has_observed_web_citation(
+                candidate,
+                checkpoint.observed_web_urls,
+            ):
+                output = candidate
+                reason = "repaired"
+        passed = reason == "repaired"
+        if not passed:
+            output = _with_citation_diagnostic(
+                provisional,
+                observed_count=len(checkpoint.observed_web_urls),
+                repair_attempted=repair is not None,
+                reason=reason,
+            )
+        await _emit_citation_evaluation(
+            emit,
+            passed=passed,
+            phase="repair",
+            observed_count=len(checkpoint.observed_web_urls),
+            repair_attempted=repair is not None,
+            reason=reason,
+        )
+        completed = make_react_checkpoint(
+            manifest=request.execution_manifest,
+            loop_state="completed",
+            iteration=checkpoint.iteration,
+            context_version=context_version,
+            context_hash=context_hash,
+            last_model_call_key=call_key,
+            history=checkpoint.history,
+            completed_action_keys=checkpoint.completed_action_keys,
+            tool_calls_consumed=checkpoint.tool_calls_consumed,
+            coordination_calls_consumed=checkpoint.coordination_calls_consumed,
+            consumed_message_ids=checkpoint.consumed_message_ids,
+            **_web_checkpoint_state(checkpoint),
+            usage=usage,
+        )
+        await emit(RuntimeEventType.CHECKPOINT_SAVED, None, completed.model_dump(mode="json"))
+        await emit(RuntimeEventType.RUN_COMPLETED, None, {"output": output})
+        return RuntimeOutcome.terminal(
+            status=RuntimeSessionStatus.COMPLETED,
+            output=output,
+            usage=usage,
+            checkpoint=completed.model_dump(mode="json"),
+        )
+
+    async def _finish_plan_citation_repair(
+        self,
+        request: RuntimeSessionRequest,
+        checkpoint: PlanCheckpoint,
+        *,
+        endpoint: dict[str, Any],
+        model: str,
+        token_limit: int,
+        emit: Emit,
+        cancelled: Callable[[], bool],
+    ) -> RuntimeOutcome:
+        provisional = checkpoint.citation_provisional_output or {}
+        if cancelled():
+            return await self._cancelled(emit, checkpoint=checkpoint.model_dump(mode="json"))
+        repair = None
+        reason = "repair_failed"
+        if not token_limit or int(checkpoint.usage.get("total_tokens") or 0) < token_limit:
+            repair = await self._citation_repair_round(
+                request,
+                endpoint=endpoint,
+                model=model,
+                provisional_output=provisional,
+                observed_urls=checkpoint.observed_web_urls,
+                context_version=checkpoint.context_version + 1,
+                mode="plan",
+                emit=emit,
+            )
+        else:
+            reason = "token_budget"
+        usage = checkpoint.usage
+        output = provisional
+        context_version = checkpoint.context_version
+        if repair is not None:
+            usage = _merge_usage(checkpoint.usage, repair.usage_payload)
+            context_version = repair.context_version
+            candidate = _repaired_output("plan", provisional, repair.response)
+            if candidate is not None and output_has_observed_web_citation(
+                candidate,
+                checkpoint.observed_web_urls,
+            ):
+                output = candidate
+                reason = "repaired"
+        passed = reason == "repaired"
+        if not passed:
+            output = _with_citation_diagnostic(
+                provisional,
+                observed_count=len(checkpoint.observed_web_urls),
+                repair_attempted=repair is not None,
+                reason=reason,
+            )
+        await _emit_citation_evaluation(
+            emit,
+            passed=passed,
+            phase="repair",
+            observed_count=len(checkpoint.observed_web_urls),
+            repair_attempted=repair is not None,
+            reason=reason,
+        )
+        latest_output = output.get("result")
+        if not isinstance(latest_output, dict):
+            latest_output = checkpoint.latest_output
+        completed = make_plan_checkpoint(
+            manifest=request.execution_manifest,
+            loop_state="completed",
+            plan_revision=checkpoint.plan_revision,
+            plan_content_hash=checkpoint.plan_content_hash,
+            completed_step_keys=checkpoint.completed_step_keys,
+            latest_output=latest_output,
+            context_version=context_version,
+            reflection_count=checkpoint.reflection_count,
+            **_web_checkpoint_state(checkpoint),
+            usage=usage,
+        )
+        await emit(
+            RuntimeEventType.PLAN_STATUS_CHANGED,
+            None,
+            {"revision": completed.plan_revision, "status": "completed"},
+        )
+        await emit(RuntimeEventType.CHECKPOINT_SAVED, None, completed.model_dump(mode="json"))
+        await emit(RuntimeEventType.RUN_COMPLETED, None, {"output": output})
+        return RuntimeOutcome.terminal(
+            status=RuntimeSessionStatus.COMPLETED,
+            output=output,
+            usage=usage,
+            checkpoint=completed.model_dump(mode="json"),
+        )
 
     async def _execute_react(
         self,
@@ -1239,6 +1580,19 @@ class NativeAgentLoop:
         while True:
             if cancelled():
                 return await self._cancelled(emit, checkpoint=checkpoint.model_dump(mode="json"))
+            if (
+                checkpoint.citation_repair_attempted
+                and checkpoint.citation_provisional_output is not None
+            ):
+                return await self._finish_react_citation_repair(
+                    request,
+                    checkpoint,
+                    endpoint=endpoint,
+                    model=model,
+                    token_limit=token_limit,
+                    emit=emit,
+                    cancelled=cancelled,
+                )
             if checkpoint.pending_actions:
                 action_result = await self._execute_pending_actions(
                     request,
@@ -1358,6 +1712,7 @@ class NativeAgentLoop:
                     coordination_calls_consumed=checkpoint.coordination_calls_consumed,
                     waiting_delegations=checkpoint.waiting_delegations,
                     consumed_message_ids=checkpoint.consumed_message_ids,
+                    **_web_checkpoint_state(checkpoint),
                     usage=usage,
                 )
                 await emit(
@@ -1374,6 +1729,65 @@ class NativeAgentLoop:
                     "model returned neither a final result nor a tool call",
                     checkpoint=checkpoint.model_dump(mode="json"),
                 )
+            output = {"content": response.text}
+            if checkpoint.observed_web_urls:
+                citation_present = output_has_observed_web_citation(
+                    output,
+                    checkpoint.observed_web_urls,
+                )
+                can_repair = (
+                    not citation_present
+                    and checkpoint.iteration < max_iterations
+                    and (
+                        not token_limit
+                        or int(usage.get("total_tokens") or 0) < token_limit
+                    )
+                )
+                await _emit_citation_evaluation(
+                    emit,
+                    passed=citation_present,
+                    phase="initial",
+                    observed_count=len(checkpoint.observed_web_urls),
+                    repair_attempted=False,
+                    reason=(
+                        "present"
+                        if citation_present
+                        else ("repair_scheduled" if can_repair else "budget_exhausted")
+                    ),
+                )
+                if can_repair:
+                    checkpoint = make_react_checkpoint(
+                        manifest=request.execution_manifest,
+                        loop_state="reasoning",
+                        iteration=checkpoint.iteration + 1,
+                        context_version=context_version,
+                        context_hash=context.content_hash,
+                        last_model_call_key=call_key,
+                        history=checkpoint.history,
+                        completed_action_keys=checkpoint.completed_action_keys,
+                        tool_calls_consumed=checkpoint.tool_calls_consumed,
+                        coordination_calls_consumed=checkpoint.coordination_calls_consumed,
+                        consumed_message_ids=checkpoint.consumed_message_ids,
+                        **_web_checkpoint_state(
+                            checkpoint,
+                            citation_repair_attempted=True,
+                            citation_provisional_output=output,
+                        ),
+                        usage=usage,
+                    )
+                    await emit(
+                        RuntimeEventType.CHECKPOINT_SAVED,
+                        None,
+                        checkpoint.model_dump(mode="json"),
+                    )
+                    continue
+                if not citation_present:
+                    output = _with_citation_diagnostic(
+                        output,
+                        observed_count=len(checkpoint.observed_web_urls),
+                        repair_attempted=False,
+                        reason="budget_exhausted",
+                    )
             checkpoint = make_react_checkpoint(
                 manifest=request.execution_manifest,
                 loop_state="completed",
@@ -1386,6 +1800,7 @@ class NativeAgentLoop:
                 tool_calls_consumed=checkpoint.tool_calls_consumed,
                 coordination_calls_consumed=checkpoint.coordination_calls_consumed,
                 consumed_message_ids=checkpoint.consumed_message_ids,
+                **_web_checkpoint_state(checkpoint),
                 usage=usage,
             )
             await emit(
@@ -1393,7 +1808,6 @@ class NativeAgentLoop:
                 None,
                 checkpoint.model_dump(mode="json"),
             )
-            output = {"content": response.text}
             await emit(RuntimeEventType.RUN_COMPLETED, None, {"output": output})
             return RuntimeOutcome.terminal(
                 status=RuntimeSessionStatus.COMPLETED,
@@ -1423,6 +1837,7 @@ class NativeAgentLoop:
                 checkpoint=checkpoint.model_dump(mode="json"),
             )
         history = checkpoint.history
+        observed_web_urls = checkpoint.observed_web_urls
         completed = list(checkpoint.completed_action_keys)
         waiting_delegations: list[dict[str, Any]] = []
         for action in sorted(checkpoint.pending_actions, key=lambda item: str(item["call_id"])):
@@ -1593,6 +2008,7 @@ class NativeAgentLoop:
                     },
                 )
                 history += (_tool_history(outcome),)
+                observed_web_urls = merge_observed_web_urls(observed_web_urls, outcome)
             completed.append(str(action["idempotency_key"]))
 
         if waiting_delegations:
@@ -1611,6 +2027,10 @@ class NativeAgentLoop:
                 ),
                 waiting_delegations=tuple(waiting_delegations),
                 consumed_message_ids=checkpoint.consumed_message_ids,
+                **_web_checkpoint_state(
+                    checkpoint,
+                    observed_web_urls=observed_web_urls,
+                ),
                 usage=checkpoint.usage,
             )
             await emit(
@@ -1641,6 +2061,10 @@ class NativeAgentLoop:
             tool_calls_consumed=checkpoint.tool_calls_consumed + tool_action_count,
             coordination_calls_consumed=checkpoint.coordination_calls_consumed,
             consumed_message_ids=checkpoint.consumed_message_ids,
+            **_web_checkpoint_state(
+                checkpoint,
+                observed_web_urls=observed_web_urls,
+            ),
             usage=checkpoint.usage,
         )
         await emit(
@@ -1709,6 +2133,7 @@ class NativeAgentLoop:
             tool_calls_consumed=checkpoint.tool_calls_consumed,
             coordination_calls_consumed=checkpoint.coordination_calls_consumed,
             consumed_message_ids=tuple(consumed),
+            **_web_checkpoint_state(checkpoint),
             usage=checkpoint.usage,
         )
         await emit(
@@ -2314,6 +2739,91 @@ def _next_named_call_key(base: str, recovery_state: dict[str, Any]) -> str:
     return f"{base}:replay:{replay}"
 
 
+def _web_checkpoint_state(
+    checkpoint: ReactCheckpoint | PlanCheckpoint,
+    **updates: Any,
+) -> dict[str, Any]:
+    state = {
+        "observed_web_urls": checkpoint.observed_web_urls,
+        "citation_repair_attempted": checkpoint.citation_repair_attempted,
+        "citation_provisional_output": checkpoint.citation_provisional_output,
+    }
+    state.update(updates)
+    return state
+
+
+def _repaired_output(
+    mode: str,
+    provisional: dict[str, Any],
+    response: ModelResponse,
+) -> dict[str, Any] | None:
+    if response.tool_calls or not response.text.strip():
+        return None
+    if mode == "react":
+        return {"content": response.text.strip()}
+    try:
+        result = _parse_step_output(response.text)
+    except ValueError:
+        result = {}
+    if not result:
+        previous = provisional.get("result")
+        result = dict(previous) if isinstance(previous, dict) else {}
+        if isinstance(result.get("content"), str):
+            result["content"] = response.text.strip()
+        else:
+            result["citation_note"] = response.text.strip()
+    return {**provisional, "result": result}
+
+
+def _with_citation_diagnostic(
+    output: dict[str, Any],
+    *,
+    observed_count: int,
+    repair_attempted: bool,
+    reason: str,
+) -> dict[str, Any]:
+    existing = output.get("diagnostics")
+    diagnostics = list(existing) if isinstance(existing, list) else []
+    diagnostics.append(
+        {
+            "code": "WEB_CITATION_MISSING",
+            "observed_source_count": observed_count,
+            "repair_attempted": repair_attempted,
+            "reason": reason,
+        }
+    )
+    return {**output, "diagnostics": diagnostics}
+
+
+async def _emit_citation_evaluation(
+    emit: Emit,
+    *,
+    passed: bool,
+    phase: str,
+    observed_count: int,
+    repair_attempted: bool,
+    reason: str,
+) -> None:
+    await emit(
+        RuntimeEventType.STEP_COMPLETED,
+        None,
+        {
+            "step_key": f"citation-evaluation:{phase}",
+            "step_type": "observation",
+            "name": "web.citation_validation",
+            "method": "deterministic",
+            "verdict": "passed" if passed else "failed",
+            "output": {
+                "code": None if passed else "WEB_CITATION_MISSING",
+                "phase": phase,
+                "observed_source_count": observed_count,
+                "repair_attempted": repair_attempted,
+                "reason": reason,
+            },
+        },
+    )
+
+
 def _restore_plan(request: RuntimeSessionRequest, checkpoint: PlanCheckpoint) -> PlanDraft | None:
     if checkpoint.plan_revision == 0 or checkpoint.loop_state == "planning":
         return None
@@ -2417,6 +2927,7 @@ def _reconcile_plan_recovery(
         recovery_decision=recovery_decision,
         context_version=max(checkpoint.context_version, context_version),
         reflection_count=max(checkpoint.reflection_count, reflection_count),
+        **_web_checkpoint_state(checkpoint),
         usage=usage,
     )
     return reconciled, plan
