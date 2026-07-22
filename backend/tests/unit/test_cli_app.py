@@ -291,13 +291,15 @@ def test_version_options_and_server_version(monkeypatch) -> None:
     }
 
 
-def test_version_option_includes_local_build_identifier(monkeypatch) -> None:
+def test_version_option_uses_local_build_identifier_instead_of_release_version(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("NICO_BUILD_VERSION", "dev-abc123-dirty")
 
     result = runner.invoke(cli_module.app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == f"nico {cli_module.__version__} (dev-abc123-dirty)"
+    assert result.stdout.strip() == "nico dev-abc123-dirty"
 
 
 def test_config_profile_flow_never_writes_token(tmp_path: Path) -> None:

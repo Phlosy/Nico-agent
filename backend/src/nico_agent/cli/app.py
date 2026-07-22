@@ -116,8 +116,7 @@ def main(
 def _show_version_and_exit(value: bool) -> bool:
     if value:
         build_version = os.environ.get("NICO_BUILD_VERSION")
-        suffix = f" ({build_version})" if build_version else ""
-        typer.echo(f"nico {__version__}{suffix}")
+        typer.echo(f"nico {build_version or __version__}")
         raise typer.Exit()
     return value
 

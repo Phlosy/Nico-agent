@@ -404,7 +404,7 @@ DEVELOPMENT_VERSION="$("$ROOT_DIR/scripts/version.sh" development)"
    "$DEVELOPMENT_VERSION" == *-* ]] || \
   fail "development version is not branch-commit based: $DEVELOPMENT_VERSION"
 [[ "$($ROOT_DIR/scripts/nico-dev --version)" == \
-  "nico $EXPECTED_VERSION ($DEVELOPMENT_VERSION)" ]] || \
+  "nico $DEVELOPMENT_VERSION" ]] || \
   fail 'local nico launcher does not expose the development version'
 "$ROOT_DIR/scripts/version.sh" check-tag "v$EXPECTED_VERSION" >/dev/null
 if "$ROOT_DIR/scripts/version.sh" check-tag v999.0.0 >/dev/null 2>&1; then
