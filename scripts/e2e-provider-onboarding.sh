@@ -66,6 +66,15 @@ log "starting deterministic Provider model, API, and Native Worker"
 wait_for_service_health fake-model
 wait_for_service_health api
 wait_for_service_health worker
+for attempt in {1..30}; do
+  if "${COMPOSE[@]}" exec -T worker python -c \
+    'import socket; socket.create_connection(("fake-model", 8100), timeout=2).close()' \
+    >/dev/null 2>&1; then
+    break
+  fi
+  [[ "$attempt" -eq 30 ]] && die "Worker could not resolve and connect to fake-model"
+  sleep 1
+done
 
 request GET /api/v1/provider-catalog '' "$TMP_DIR/catalog.json"
 python3 - "$TMP_DIR/catalog.json" <<'PY'

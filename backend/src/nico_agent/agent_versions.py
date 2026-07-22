@@ -254,6 +254,7 @@ class AgentVersionLifecycle:
         model_name: str | None,
         runtime_provider: str | None = "nico_native",
         tool_policy: dict[str, Any] | None = None,
+        skill_policy: dict[str, Any] | None = None,
     ) -> AgentVersionCreate:
         return AgentVersionCreate(
             role=source.role,
@@ -268,7 +269,7 @@ class AgentVersionLifecycle:
             model_config=source.model_config_json,
             tool_policy=source.tool_policy if tool_policy is None else tool_policy,
             memory_policy=source.memory_policy,
-            skill_policy=source.skill_policy,
+            skill_policy=source.skill_policy if skill_policy is None else skill_policy,
             plugin_refs=source.plugin_refs,
             coordination_policy=source.coordination_policy,
             budgets=source.budgets,

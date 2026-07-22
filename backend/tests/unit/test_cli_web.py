@@ -44,6 +44,26 @@ class FakeClient:
         return {
             "schema_version": 1,
             "catalog_revision": "catalog-1",
+            "dns_resolvers": [
+                {
+                    "key": "system",
+                    "label": "System DNS",
+                    "description": "Use the operating system resolver.",
+                    "recommended": False,
+                },
+                {
+                    "key": "cloudflare",
+                    "label": "Cloudflare DNS",
+                    "description": "Use DNS-over-HTTPS; compatible with Fake-IP.",
+                    "recommended": True,
+                },
+                {
+                    "key": "google",
+                    "label": "Google Public DNS",
+                    "description": "Use Google DNS-over-HTTPS.",
+                    "recommended": False,
+                },
+            ],
             "providers": [
                 {
                     "key": "brave",
@@ -210,6 +230,8 @@ def test_hidden_brave_key_uses_local_transaction_and_never_enters_api_candidate(
 
     def prompt(message: str, **kwargs: Any) -> str:
         prompts.append((message, kwargs))
+        if message.startswith("DNS resolver"):
+            return "cloudflare"
         return "brave-canary"
 
     coordinator = _coordinator(client, bridge, interactive=True)
@@ -217,7 +239,9 @@ def test_hidden_brave_key_uses_local_transaction_and_never_enters_api_candidate(
     result = coordinator.configure(_starter("brave"))
 
     assert result["status"] == "ready"
-    assert prompts[0][1] == {"hide_input": True}
+    assert next(options for message, options in prompts if "API key" in message) == {
+        "hide_input": True
+    }
     assert bridge.recovered == 1
     assert bridge.committed == 1
     assert bridge.rolled_back == 0
@@ -234,6 +258,17 @@ def test_noninteractive_searxng_configuration_needs_no_fake_secret() -> None:
     assert result["provider"] == "searxng"
     assert client.candidate is not None
     assert client.candidate["credential_ref"] is None
+    assert client.candidate["policy"]["dns_resolver"] == "system"
+
+
+def test_interactive_web_setup_selects_recommended_doh_resolver() -> None:
+    client = FakeClient()
+
+    result = _coordinator(client, interactive=True, answers=("2",)).configure(_starter("searxng"))
+
+    assert result["provider"] == "searxng"
+    assert client.candidate is not None
+    assert client.candidate["policy"]["dns_resolver"] == "cloudflare"
 
 
 def test_web_test_probes_without_publishing() -> None:

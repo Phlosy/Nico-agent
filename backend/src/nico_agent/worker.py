@@ -27,6 +27,7 @@ from nico_agent.models.providers import (
     GoogleGeminiProvider,
     OpenAICompatibleProvider,
 )
+from nico_agent.net.doh import DOH_ENDPOINTS, DnsOverHttpsResolver
 from nico_agent.net.safe_http import SafeHttpClient
 from nico_agent.projects.worker import ProjectSupervisionWorker
 from nico_agent.provider_onboarding.worker import ProviderProbeWorker
@@ -193,6 +194,22 @@ async def worker_main(settings: Settings | None = None) -> None:
         connect_timeout=runtime_settings.web_connect_timeout_seconds,
         read_timeout=runtime_settings.web_read_timeout_seconds,
     )
+    doh_bootstrap_http = SafeHttpClient(
+        connect_timeout=runtime_settings.web_connect_timeout_seconds,
+        read_timeout=runtime_settings.web_read_timeout_seconds,
+    )
+    resolver_http = {
+        key: SafeHttpClient(
+            resolver=DnsOverHttpsResolver(
+                endpoint,
+                http=doh_bootstrap_http,
+                allow_private_bootstrap=True,
+            ),
+            connect_timeout=runtime_settings.web_connect_timeout_seconds,
+            read_timeout=runtime_settings.web_read_timeout_seconds,
+        )
+        for key, endpoint in DOH_ENDPOINTS.items()
+    }
     web_providers = WebProviderRegistry(
         [
             BraveSearchProvider(
@@ -242,6 +259,7 @@ async def worker_main(settings: Settings | None = None) -> None:
             WebFetchExecutor(
                 WebSourceAuthorizer(database),
                 http=web_http,
+                resolver_http=resolver_http,
                 cache=RedisWebFetchCache(resources.redis),
             ),
         ]

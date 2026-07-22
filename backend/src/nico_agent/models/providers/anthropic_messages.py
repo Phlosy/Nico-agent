@@ -29,6 +29,7 @@ from nico_agent.models.http_safety import (
     parse_json_object,
     raise_transport_error,
 )
+from nico_agent.models.tool_names import ProviderToolNames
 
 
 class AnthropicMessagesProvider:
@@ -69,12 +70,13 @@ class AnthropicMessagesProvider:
         )
         secret = self.http.resolve_secret(request.endpoint)
         headers = self._headers(endpoint.host_header, secret)
+        tool_names = ProviderToolNames.from_definitions(request.tools)
         try:
             async with self.client.stream(
                 "POST",
                 endpoint.url,
                 headers=headers,
-                json=self._request_body(request),
+                json=self._request_body(request, tool_names),
                 timeout=self.http.timeout(request.timeout_seconds),
                 follow_redirects=False,
                 extensions={"sni_hostname": endpoint.sni_hostname},
@@ -123,7 +125,7 @@ class AnthropicMessagesProvider:
                                 type=ModelStreamEventType.TOOL_CALL_DELTA,
                                 tool_index=index,
                                 tool_call_id=str(block.get("id") or ""),
-                                tool_name=str(block.get("name") or ""),
+                                tool_name=tool_names.decode(str(block.get("name") or "")),
                                 tool_arguments_delta=(
                                     json.dumps(arguments, separators=(",", ":"))
                                     if isinstance(arguments, dict) and arguments
@@ -241,14 +243,20 @@ class AnthropicMessagesProvider:
         }
 
     @staticmethod
-    def _request_body(request: ModelRequest) -> dict[str, Any]:
+    def _request_body(
+        request: ModelRequest,
+        tool_names: ProviderToolNames | None = None,
+    ) -> dict[str, Any]:
+        tool_names = tool_names or ProviderToolNames.from_definitions(request.tools)
         system = "\n\n".join(
             message.content or "" for message in request.messages if message.role == "system"
         )
         body: dict[str, Any] = {
             "model": request.model,
             "messages": [
-                _message_body(message) for message in request.messages if message.role != "system"
+                _message_body(message, tool_names)
+                for message in request.messages
+                if message.role != "system"
             ],
             "max_tokens": request.max_output_tokens or 4096,
             "stream": True,
@@ -260,7 +268,7 @@ class AnthropicMessagesProvider:
         if request.tools:
             body["tools"] = [
                 {
-                    "name": tool.name,
+                    "name": tool_names.encode(tool.name),
                     "description": tool.description,
                     "input_schema": tool.input_schema,
                 }
@@ -269,7 +277,7 @@ class AnthropicMessagesProvider:
         return body
 
 
-def _message_body(message: Any) -> dict[str, Any]:
+def _message_body(message: Any, tool_names: ProviderToolNames) -> dict[str, Any]:
     if message.role == "tool":
         return {
             "role": "user",
@@ -298,7 +306,7 @@ def _message_body(message: Any) -> dict[str, Any]:
                 {
                     "type": "tool_use",
                     "id": str(call.get("id") or ""),
-                    "name": str(function.get("name") or ""),
+                    "name": tool_names.encode(str(function.get("name") or "")),
                     "input": arguments,
                 }
             )

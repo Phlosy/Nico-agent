@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nico_agent.web.contracts import SearchRequest
 
 WebProviderKey = Literal["brave", "searxng"]
+WebDnsResolverKey = Literal["system", "cloudflare", "google"]
+WebActivationScope = Literal["provider_only", "provider_and_agent"]
 
 
 class FrozenContract(BaseModel):
@@ -45,13 +47,22 @@ class WebProviderPreset(FrozenContract):
         return self
 
 
+class WebDnsResolverChoice(FrozenContract):
+    key: WebDnsResolverKey
+    label: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=300)
+    recommended: bool = False
+
+
 class WebProviderCatalog(FrozenContract):
     schema_version: int = 1
     catalog_revision: str = Field(min_length=1, max_length=64)
+    dns_resolvers: tuple[WebDnsResolverChoice, ...]
     providers: tuple[WebProviderPreset, ...]
 
 
 class WebSearchPolicy(FrozenContract):
+    dns_resolver: WebDnsResolverKey = "system"
     safe_search: Literal["off", "moderate", "strict"] = "moderate"
     cache_ttl_seconds: int = Field(default=900, ge=1, le=86_400)
     rate_limit_per_minute: int = Field(default=20, ge=1, le=10_000)
@@ -137,7 +148,33 @@ class WebActivationTarget(FrozenContract):
 class WebPreviewCreate(FrozenContract):
     probe_id: UUID
     candidate_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    target: WebActivationTarget
+    scope: WebActivationScope = "provider_and_agent"
+    expected_tenant_revision: int | None = Field(default=None, ge=1)
+    target: WebActivationTarget | None = None
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> WebPreviewCreate:
+        if self.scope == "provider_only":
+            if self.target is not None:
+                raise ValueError("provider-only activation cannot include an Agent target")
+            if self.expected_tenant_revision is None:
+                raise ValueError("provider-only activation requires the expected Tenant revision")
+            return self
+        if self.target is None:
+            raise ValueError("combined activation requires an Agent target")
+        if (
+            self.expected_tenant_revision is not None
+            and self.expected_tenant_revision != self.target.expected_tenant_revision
+        ):
+            raise ValueError("Tenant revisions in the activation request do not match")
+        return self
+
+    @property
+    def tenant_revision(self) -> int:
+        if self.target is not None:
+            return self.target.expected_tenant_revision
+        assert self.expected_tenant_revision is not None
+        return self.expected_tenant_revision
 
 
 class WebActivationCreate(WebPreviewCreate):
@@ -157,15 +194,16 @@ class WebActivationPreview(FrozenContract):
 
 class WebActivationRead(FrozenContract):
     schema_version: int = 1
+    scope: WebActivationScope = "provider_and_agent"
     probe_id: UUID
     candidate_hash: str
     provider: WebProviderKey
     tenant_revision: int
-    agent_id: UUID
-    agent_revision: int
-    agent_version_id: UUID
-    agent_version: int
-    project_id: UUID
+    agent_id: UUID | None = None
+    agent_revision: int | None = None
+    agent_version_id: UUID | None = None
+    agent_version: int | None = None
+    project_id: UUID | None = None
     activated_at: datetime
 
 
@@ -193,6 +231,7 @@ class WebProviderStatus(FrozenContract):
     enabled: bool
     provider: WebProviderKey | None = None
     endpoint_key: str | None = None
+    dns_resolver: WebDnsResolverKey = "system"
     credential_ref: str | None = None
     secret_required: bool = False
     diagnosis: Literal[

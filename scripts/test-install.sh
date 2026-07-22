@@ -141,6 +141,92 @@ NICO_HOME="$TMP_DIR/missing-install" bash "$ROOT_DIR/scripts/nico-service.sh" --
 
 SOURCE_NICO="$ROOT_DIR/.venv/bin/nico"
 [[ -x "$SOURCE_NICO" ]] || fail "backend test environment omitted the Nico CLI"
+SOURCE_PYTHON="$ROOT_DIR/.venv/bin/python"
+TENANT_PAYLOAD="$(PYTHONPATH="$ROOT_DIR/backend/src" \
+  local_tenant_payload "$SOURCE_PYTHON" "Nico Local" "nico-local-test")"
+assert_eq "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' \
+  <<< "$TENANT_PAYLOAD")" "Nico Local" "fresh Tenant payload name"
+assert_eq "$(python3 -c \
+  'import json,sys; print(",".join(json.load(sys.stdin)["settings"]["tool_policy"]["allow"]))' \
+  <<< "$TENANT_PAYLOAD")" \
+  "file.read@1.0.0,file.write@1.0.0,python.execute@1.0.0,report.write@1.0.0" \
+  "fresh Tenant bounded Tool ceiling"
+if grep -Eq 'web\.|http\.|database\.' <<< "$TENANT_PAYLOAD"; then
+  fail "fresh Tenant payload silently granted Web, HTTP, or database capabilities"
+fi
+grep -q 'nico_agent.local_defaults' "$ROOT_DIR/scripts/local-dev.sh" || fail \
+  "make run bootstrap does not consume backend-owned local defaults"
+
+GUIDED_PROMPT_LOG="$TMP_DIR/guided-prompt.log"
+(
+  RUNTIME=native
+  NON_INTERACTIVE=false
+  has_controlling_tty() { return 0; }
+  read_guided_setup_choice() { printf '\n'; }
+  run_guided_setup_command() { printf 'started\n'; }
+  report_guided_setup_status() { printf 'reported\n'; }
+  offer_guided_setup
+) > "$GUIDED_PROMPT_LOG"
+assert_contains "$(cat "$GUIDED_PROMPT_LOG")" "started" \
+  "guided setup default yes"
+
+(
+  RUNTIME=native
+  NON_INTERACTIVE=false
+  has_controlling_tty() { return 0; }
+  read_guided_setup_choice() { printf 'n\n'; }
+  run_guided_setup_command() { printf 'unexpected-start\n'; }
+  report_guided_setup_status() { printf 'reported\n'; }
+  offer_guided_setup
+) > "$GUIDED_PROMPT_LOG"
+if grep -q 'unexpected-start' "$GUIDED_PROMPT_LOG"; then
+  fail "guided setup ignored an explicit decline"
+fi
+assert_contains "$(cat "$GUIDED_PROMPT_LOG")" "reported" \
+  "guided setup decline status"
+
+(
+  RUNTIME=native
+  NON_INTERACTIVE=false
+  has_controlling_tty() { return 1; }
+  read_guided_setup_choice() { printf 'unexpected-prompt\n'; }
+  run_guided_setup_command() { printf 'unexpected-start\n'; }
+  report_guided_setup_status() { printf 'reported\n'; }
+  offer_guided_setup
+) > "$GUIDED_PROMPT_LOG"
+if grep -Eq 'unexpected-(prompt|start)' "$GUIDED_PROMPT_LOG"; then
+  fail "installer prompted or launched setup without a controlling TTY"
+fi
+
+if ! (
+  RUNTIME=native
+  NON_INTERACTIVE=false
+  has_controlling_tty() { return 0; }
+  read_guided_setup_choice() { printf 'y\n'; }
+  run_guided_setup_command() { return 1; }
+  report_guided_setup_status() { printf 'reported\n'; }
+  offer_guided_setup
+) > "$GUIDED_PROMPT_LOG" 2>&1; then
+  fail "guided setup failure changed successful installation status"
+fi
+assert_contains "$(cat "$GUIDED_PROMPT_LOG")" "installation remains usable" \
+  "guided setup failure warning"
+
+QUOTED_RELEASE="$TMP_DIR/release with spaces"
+mkdir -p "$QUOTED_RELEASE/venv/bin"
+ln -s "$SOURCE_PYTHON" "$QUOTED_RELEASE/venv/bin/python"
+cat > "$QUOTED_RELEASE/venv/bin/nico" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$GUIDED_NICO_ARGS"
+printf '{"overall":"partial"}\n'
+SH
+chmod 755 "$QUOTED_RELEASE/venv/bin/nico"
+GUIDED_NICO_ARGS="$TMP_DIR/guided-nico-args"
+OVERALL="$(RELEASE_DIR="$QUOTED_RELEASE" GUIDED_NICO_ARGS="$GUIDED_NICO_ARGS" \
+  guided_setup_overall)"
+assert_eq "$OVERALL" "partial" "guided setup readiness status"
+assert_eq "$(cat "$GUIDED_NICO_ARGS")" "--json setup --status" \
+  "guided setup status command quoting"
 PROJECT_HELP="$(PYTHONPATH="$ROOT_DIR/backend/src" "$SOURCE_NICO" project --help)"
 assert_contains "$PROJECT_HELP" "new" "installed CLI Project creation command"
 assert_contains "$PROJECT_HELP" "session" "installed CLI Project Session command"

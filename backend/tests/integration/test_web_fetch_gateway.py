@@ -94,18 +94,18 @@ async def _seed_run(database: Database, *, worker_id: str):
         "max_redirects": 3,
     }
     tenant_policy = {
-        "allow": ["web.search@1.0.0", "web.fetch@1.0.0"],
+        "allow": ["web.search@1.0.0", "web.fetch@1.1.0"],
         "permissions": ["network.web.search", "network.web.fetch"],
         "tools": {
             "web.search@1.0.0": search_config,
-            "web.fetch@1.0.0": fetch_config,
+            "web.fetch@1.1.0": fetch_config,
         },
     }
     agent_policy = {
         **tenant_policy,
         "tools": {
             "web.search@1.0.0": search_config,
-            "web.fetch@1.0.0": fetch_config,
+            "web.fetch@1.1.0": fetch_config,
         },
     }
     async with database.admin_transaction() as session:
@@ -184,7 +184,7 @@ def _checkpoint(tool_name: str) -> dict:
 def _request(tool: str, arguments: dict, key: str) -> ToolGatewayRequest:
     return ToolGatewayRequest(
         tool_name=tool,
-        tool_version="1.0.0",
+        tool_version="1.1.0" if tool == "web.fetch" else "1.0.0",
         arguments=arguments,
         idempotency_key=key,
         caller="runtime:nico_native",

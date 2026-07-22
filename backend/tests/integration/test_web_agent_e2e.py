@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -10,6 +9,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from nico_agent.agent_capabilities.contracts import (
+    CapabilityActivationCreate,
+    CapabilityPreviewCreate,
+    CapabilitySelection,
+    CapabilityTarget,
+)
+from nico_agent.agent_capabilities.service import AgentCapabilityService
 from nico_agent.config import Settings
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.models import (
@@ -24,12 +30,9 @@ from nico_agent.domain.models import (
     ToolApprovalRequest,
     ToolCall,
 )
-from nico_agent.models.contracts import (
-    ModelCapability,
-    ModelStreamEvent,
-    ModelStreamEventType,
-    ModelUsage,
-)
+from nico_agent.guided_setup.contracts import SetupProofCreate
+from nico_agent.guided_setup.service import GuidedSetupService
+from nico_agent.models.contracts import ModelCapability
 from nico_agent.models.gateway import ModelGateway
 from nico_agent.models.registry import ModelProviderRegistry
 from nico_agent.net.safe_http import SafeHttpClient
@@ -51,7 +54,6 @@ from nico_agent.web.source_authorization import WebSourceAuthorizer
 from nico_agent.web_onboarding.catalog import get_web_provider_catalog
 from nico_agent.web_onboarding.contracts import (
     WebActivationCreate,
-    WebActivationTarget,
     WebPreviewCreate,
     WebProbeCreate,
     WebProviderCandidate,
@@ -64,70 +66,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-class OfflineWebModelProvider:
+class UnexpectedModelProvider:
     name = "openai_compatible"
 
     def __init__(self) -> None:
         self.requests = []
-        self.search_platform_id: str | None = None
 
     def describe_capabilities(self):
         return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
 
     async def stream(self, request):
         self.requests.append(request)
-        observations = [message for message in request.messages if message.role == "tool"]
-        if not observations:
-            async for event in self._tool(
-                "model-search",
-                "web.search",
-                {"query": "current Nico offline evidence", "count": 1},
-            ):
-                yield event
-            return
-        if len(observations) == 1:
-            payload = json.loads(observations[-1].content or "{}")
-            self.search_platform_id = payload["tool_call_id"]
-            async for event in self._tool(
-                "model-fetch",
-                "web.fetch",
-                {
-                    "url": payload["output"]["results"][0]["url"],
-                    "search_tool_call_id": self.search_platform_id,
-                },
-            ):
-                yield event
-            return
-        payload = json.loads(observations[-1].content or "{}")
-        final_url = payload["output"]["final_url"]
-        yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
-        yield ModelStreamEvent(
-            type=ModelStreamEventType.TEXT_DELTA,
-            text_delta=f"Verified offline Web evidence: {final_url}",
-        )
-        yield ModelStreamEvent(
-            type=ModelStreamEventType.RESPONSE_COMPLETED,
-            finish_reason="stop",
-            usage=ModelUsage(input_tokens=12, output_tokens=8, total_tokens=20, status="exact"),
-            provider_request_id="web-e2e-final",
-        )
-
-    @staticmethod
-    async def _tool(call_id: str, name: str, arguments: dict):
-        yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
-        yield ModelStreamEvent(
-            type=ModelStreamEventType.TOOL_CALL_DELTA,
-            tool_index=0,
-            tool_call_id=call_id,
-            tool_name=name,
-            tool_arguments_delta=json.dumps(arguments, separators=(",", ":")),
-        )
-        yield ModelStreamEvent(
-            type=ModelStreamEventType.RESPONSE_COMPLETED,
-            finish_reason="tool_calls",
-            usage=ModelUsage(input_tokens=10, output_tokens=6, total_tokens=16, status="exact"),
-            provider_request_id=f"web-e2e-{call_id}",
-        )
+        raise AssertionError("setup proof must not call the model")
+        yield  # pragma: no cover
 
 
 async def _seed_agent(database: Database):
@@ -274,30 +225,52 @@ async def test_configure_publish_approve_search_fetch_and_cite_offline() -> None
         completed_probe = await onboarding.get_probe(context, probe.id)
         assert completed_probe.status == "succeeded"
 
-        target = WebActivationTarget(
-            project_id=project_id,
-            expected_tenant_revision=tenant_revision,
-            agent_id=agent_id,
-            expected_agent_revision=agent_revision,
-        )
         preview = await onboarding.preview_activation(
             context,
             WebPreviewCreate(
                 probe_id=probe.id,
                 candidate_hash=probe.candidate_hash,
-                target=target,
+                scope="provider_only",
+                expected_tenant_revision=tenant_revision,
             ),
         )
-        activated = await onboarding.activate(
+        web_activation = await onboarding.activate(
             context,
             WebActivationCreate(
                 probe_id=probe.id,
                 candidate_hash=probe.candidate_hash,
-                target=target,
+                scope="provider_only",
+                expected_tenant_revision=tenant_revision,
                 preview_hash=preview.preview_hash,
             ),
         )
+        assert web_activation.agent_version_id is None
+        capabilities = AgentCapabilityService(database)
+        target = CapabilityTarget(
+            agent_id=agent_id,
+            expected_agent_revision=agent_revision,
+        )
+        selection = CapabilitySelection(profile="web_research")
+        capability_preview = await capabilities.preview(
+            context,
+            CapabilityPreviewCreate(
+                expected_tenant_revision=web_activation.tenant_revision,
+                target=target,
+                selection=selection,
+            ),
+        )
+        activated = await capabilities.activate(
+            context,
+            CapabilityActivationCreate(
+                expected_tenant_revision=web_activation.tenant_revision,
+                target=target,
+                selection=selection,
+                preview_hash=capability_preview.preview_hash,
+                accepted_risks=("medium",),
+            ),
+        )
         assert activated.agent_version == 2
+        guided_setup = GuidedSetupService(database, settings)
 
         async with database.admin_transaction() as session:
             old_version = await session.get(AgentVersion, old_version_id)
@@ -323,12 +296,17 @@ async def test_configure_publish_approve_search_fetch_and_cite_offline() -> None
                 attempt=1,
                 max_steps=5,
                 token_budget=1000,
+                timeout_seconds=120,
+                budgets={
+                    "tool_allow": ["web.search@1.0.0", "web.fetch@1.1.0"],
+                    "setup_proof": True,
+                },
             )
             session.add(run)
             await session.flush()
             run_id = run.id
 
-        model = OfflineWebModelProvider()
+        model = UnexpectedModelProvider()
         worker = RuntimeWorker(
             database,
             RuntimeProviderRegistry(
@@ -393,11 +371,18 @@ async def test_configure_publish_approve_search_fetch_and_cite_offline() -> None
             )
 
         assert completed is not None and completed.status == "completed"
-        assert completed.result == {"content": f"Verified offline Web evidence: {EVIDENCE_URL}"}
+        assert completed.result == {
+            "content": f"Online verification succeeded. Source: {EVIDENCE_URL}",
+            "verification": {
+                "search": "completed",
+                "fetch": "completed",
+                "source_url": EVIDENCE_URL,
+            },
+        }
         assert [call.tool_name for call in calls] == ["web.search", "web.fetch"]
         assert all(call.status == "succeeded" and len(call.attempts) == 1 for call in calls)
         assert calls[1].arguments["search_tool_call_id"] == str(calls[0].id)
-        assert model.search_platform_id == str(calls[0].id)
+        assert model.requests == []
         assert calls[0].result["external_content"]["untrusted"] is True
         assert calls[1].result["external_content"]["untrusted"] is True
         assert {approval.id for approval in approvals} == set(approved_ids)
@@ -409,5 +394,23 @@ async def test_configure_publish_approve_search_fetch_and_cite_offline() -> None
             ("fake-web", "/search"),
             ("evidence.example", "/article"),
         ]
+        proof = await guided_setup.validate_proof(
+            context,
+            SetupProofCreate(
+                expected_tenant_revision=activated.tenant_revision,
+                run_id=run_id,
+            ),
+        )
+        assert proof.state == "succeeded", proof
+        readiness = await guided_setup.readiness(context)
+        assert readiness.overall == "full"
+        assert readiness.target is not None
+        assert readiness.target.agent_version_id == activated.agent_version_id
+        assert {area.key: area.state for area in readiness.areas} == {
+            "model": "ready",
+            "web": "ready",
+            "capabilities": "ready",
+            "verification": "ready",
+        }
     finally:
         await engine.dispose()

@@ -63,7 +63,7 @@ print_command() {
 }
 
 web_search_local_enabled() {
-  case "${NICO_DEV_WEB_SEARCH:-brave}" in
+  case "${NICO_DEV_WEB_SEARCH:-searxng}" in
     brave) return 1 ;;
     searxng) return 0 ;;
     *) die "NICO_DEV_WEB_SEARCH must be brave or searxng" ;;
@@ -151,7 +151,7 @@ stop_containerized_app_services() {
   while IFS= read -r service; do
     [[ -n "$service" ]] || continue
     case "$service" in
-      postgres | redis | minio | minio-init | searxng | fake-model) ;;
+      postgres | redis | minio | minio-init | searxng | fake-model | fake-web) ;;
       api | worker | worker-hermes | worker-hermes-contract | sandbox-runner | web)
         application_services+=("$service")
         ;;
@@ -621,12 +621,25 @@ PY
   fi
 
   if [[ -z "$tenant" || -z "$project" ]]; then
-    local suffix tenant_json project_json
+    local suffix tenant_json project_json tenant_settings tenant_payload
     suffix="$(date -u +%Y%m%d%H%M%S)-$$"
+    tenant_settings="$("$ROOT_DIR/.venv/bin/python" -m nico_agent.local_defaults)"
+    tenant_payload="$("$ROOT_DIR/.venv/bin/python" - \
+      "Nico Development" "nico-development-$suffix" "$tenant_settings" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "name": sys.argv[1],
+    "slug": sys.argv[2],
+    "settings": json.loads(sys.argv[3]),
+}, separators=(",", ":")))
+PY
+    )"
     tenant_json="$(curl --fail-with-body --silent --show-error \
       --request POST --header 'Content-Type: application/json' \
       --header 'X-Actor-ID: development-operator' \
-      --data "{\"name\":\"Nico Development\",\"slug\":\"nico-development-$suffix\"}" \
+      --data "$tenant_payload" \
       "$api_base/api/v1/tenants/bootstrap")"
     tenant="$("$ROOT_DIR/.venv/bin/python" -c \
       'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$tenant_json")"

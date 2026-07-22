@@ -152,14 +152,28 @@ class RuntimePreparationService:
         skill_policy = _mapping(policy_snapshot.get("skill"))
         if skill_policy.get("enabled") is True:
             allowed_ids = frozenset(UUID(value) for value in skill_policy["allowed_skill_ids"])
-            results = await self.skills.resolve_available_in_session(
-                session,
-                run,
-                task,
-                allowed_skill_ids=allowed_ids,
-                allowed_scope_types=frozenset(skill_policy["scopes"]),
-                limit=int(skill_policy["top_k"]),
-            )
+            if skill_policy.get("pin_versions") is True:
+                allowed_version_ids = frozenset(
+                    UUID(value) for value in skill_policy["allowed_skill_version_ids"]
+                )
+                results = await self.skills.resolve_exact_available_in_session(
+                    session,
+                    run,
+                    task,
+                    allowed_skill_ids=allowed_ids,
+                    allowed_skill_version_ids=allowed_version_ids,
+                    allowed_scope_types=frozenset(skill_policy["scopes"]),
+                    limit=int(skill_policy["top_k"]),
+                )
+            else:
+                results = await self.skills.resolve_available_in_session(
+                    session,
+                    run,
+                    task,
+                    allowed_skill_ids=allowed_ids,
+                    allowed_scope_types=frozenset(skill_policy["scopes"]),
+                    limit=int(skill_policy["top_k"]),
+                )
             remaining = min(
                 int(skill_policy["max_chars"]),
                 int(skill_policy["max_tokens"]) * 4,
@@ -401,6 +415,31 @@ def _skill_intersection(
     )
     if "allowed_skill_ids" in restriction:
         skill_ids &= _uuid_strings(restriction.get("allowed_skill_ids"), errors)
+    left_pinned = (
+        left.get("pin_versions") is True
+        if parent_is_snapshot
+        else "allowed_skill_version_ids" in left
+    )
+    right_pinned = right.get("pin_versions") is True or "allowed_skill_version_ids" in right
+    restriction_pinned = "allowed_skill_version_ids" in restriction
+    left_versions = _uuid_strings(left.get("allowed_skill_version_ids"), errors)
+    right_versions = _uuid_strings(right.get("allowed_skill_version_ids"), errors)
+    if left_pinned and right_pinned:
+        skill_version_ids = left_versions & right_versions
+    elif left_pinned:
+        skill_version_ids = left_versions
+    elif right_pinned:
+        skill_version_ids = right_versions
+    else:
+        skill_version_ids = set()
+    if restriction_pinned:
+        restricted_versions = _uuid_strings(restriction.get("allowed_skill_version_ids"), errors)
+        skill_version_ids = (
+            skill_version_ids & restricted_versions
+            if left_pinned or right_pinned
+            else restricted_versions
+        )
+    pin_versions = left_pinned or right_pinned or restriction_pinned
     top_k = _minimum_limit(left, right, restriction, "top_k", default=5, maximum=100)
     max_chars = _minimum_limit(
         left, right, restriction, "max_chars", default=16_000, maximum=256_000
@@ -413,6 +452,7 @@ def _skill_intersection(
         and right.get("enabled") is True
         and bool(scopes)
         and bool(skill_ids)
+        and (bool(skill_version_ids) or not pin_versions)
         and top_k > 0
         and max_chars > 0
         and max_tokens > 0
@@ -423,6 +463,8 @@ def _skill_intersection(
         "enabled": enabled,
         "scopes": sorted(scopes),
         "allowed_skill_ids": sorted(skill_ids),
+        "allowed_skill_version_ids": sorted(skill_version_ids),
+        "pin_versions": pin_versions,
         "top_k": top_k,
         "max_chars": max_chars,
         "max_tokens": max_tokens,

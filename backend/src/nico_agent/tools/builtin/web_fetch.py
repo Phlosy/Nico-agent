@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,7 +36,7 @@ from nico_agent.web.source_authorization import (
 class WebFetchExecutor:
     spec = ToolDefinitionSpec(
         name="web.fetch",
-        version="1.0.0",
+        version="1.1.0",
         description=(
             "Read a Web source returned by web.search in this Run, passing that search "
             "observation's platform tool_call_id, or read a frozen allowlisted domain. "
@@ -124,17 +125,19 @@ class WebFetchExecutor:
         risk=ToolRisk.MEDIUM,
         max_output_bytes=131_072,
     )
-    implementation_hash = canonical_hash({"executor": "web.fetch", "revision": 1})
+    implementation_hash = canonical_hash({"executor": "web.fetch", "revision": 2})
 
     def __init__(
         self,
         source_authorizer: WebSourceAuthorizer,
         *,
         http: SafeHttpClient | Any | None = None,
+        resolver_http: Mapping[str, SafeHttpClient | Any] | None = None,
         cache: RedisWebFetchCache | Any | None = None,
     ) -> None:
         self.source_authorizer = source_authorizer
         self.http = http or SafeHttpClient()
+        self.resolver_http = {"system": self.http, **dict(resolver_http or {})}
         self.cache = cache
 
     async def execute(self, context, arguments, secrets):
@@ -151,6 +154,14 @@ class WebFetchExecutor:
             )
         except WebSourceDenied as exc:
             raise ToolExecutorFailure(exc.code, exc.message) from exc
+
+        resolver_key = context.tool_config.get("dns_resolver", "system")
+        if not isinstance(resolver_key, str) or resolver_key not in self.resolver_http:
+            raise ToolExecutorFailure(
+                "WEB_FETCH_NOT_CONFIGURED",
+                "Web fetch DNS resolver is unavailable",
+            )
+        http = self.resolver_http[resolver_key]
 
         extract_mode = arguments.get("extract_mode", "markdown")
         requested_chars = arguments.get("max_chars", 20_000)
@@ -214,7 +225,7 @@ class WebFetchExecutor:
             allow_zero=True,
         )
         try:
-            fetched = await self.http.request_with_metadata(
+            fetched = await http.request_with_metadata(
                 "GET",
                 source.target.url,
                 policy=SafeHttpPolicy.strict_public(

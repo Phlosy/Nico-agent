@@ -714,7 +714,30 @@ class ToolGateway:
             and isinstance(step_state, dict)
             and bool(step_state.get("pending_actions"))
         )
-        if not valid_react_boundary and not valid_plan_boundary:
+        valid_setup_proof_boundary = (
+            execution_mode == "setup_proof"
+            and schema_version == 1
+            and run.budgets.get("setup_proof") is True
+            and (
+                (
+                    checkpoint.get("loop_state") == "searching"
+                    and checkpoint.get("tool_calls_consumed") == 0
+                    and checkpoint.get("completed_action_keys") == []
+                    and checkpoint.get("search_tool_call_id") is None
+                    and checkpoint.get("source_url") is None
+                    and checkpoint.get("final_url") is None
+                )
+                or (
+                    checkpoint.get("loop_state") == "fetching"
+                    and checkpoint.get("tool_calls_consumed") == 1
+                    and checkpoint.get("completed_action_keys") == ["setup-proof-search"]
+                    and isinstance(checkpoint.get("search_tool_call_id"), str)
+                    and isinstance(checkpoint.get("source_url"), str)
+                    and checkpoint.get("final_url") is None
+                )
+            )
+        )
+        if not (valid_react_boundary or valid_plan_boundary or valid_setup_proof_boundary):
             raise ToolSchemaViolation(
                 code="TOOL_CHECKPOINT_INVALID",
                 message="tool execution requires a valid native pre-action checkpoint",

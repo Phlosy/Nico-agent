@@ -15,6 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 
+from nico_agent.cli.approvals import ApprovalCoordinator
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.execution import RunWatcher, write_binary_result
@@ -775,28 +776,12 @@ class ChatRunner:
         if approval.get("status") != "requested":
             self.output.emit(approval, title="Tool approval already decided")
             return True
-        while True:
-            try:
-                choice = self.approval_prompt("allow › ").strip()
-            except (EOFError, KeyboardInterrupt):
-                self.output.out.print(
-                    "[yellow]审批仍保存在服务端；可稍后使用 /approvals 恢复。[/yellow]"
-                )
-                return False
-            if choice in {"1", "2", "3"}:
-                break
-            self.output.out.print("[yellow]请输入 1、2 或 3。[/yellow]")
-        approved = choice in {"1", "2"}
-        value = self.client.decide_tool_approval(
-            str(approval["id"]),
-            expected_revision=int(approval["revision"]),
-            decision="approve" if approved else "reject",
-            allowed_scope={"1": "once", "2": "run", "3": None}[choice],
-            reason=None if approved else "rejected from Nico CLI",
-            idempotency_key=str(uuid4()),
-        )
-        self.output.emit(value, title="Tool approval saved")
-        return True
+        return ApprovalCoordinator(
+            self.client,
+            self.output,
+            interactive=self._can_prompt_for_approval(),
+            prompt=self.approval_prompt,
+        ).decide(approval)
 
     def _handle_stream_approval(
         self,

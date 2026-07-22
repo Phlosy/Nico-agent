@@ -116,6 +116,9 @@ services:
       NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES: ${NICO_CONVERSATION_ATTACHMENT_MAX_TOTAL_BYTES:-26214400}
       NICO_DEPENDENCY_TIMEOUT_SECONDS: ${NICO_DEPENDENCY_TIMEOUT_SECONDS:-2}
       NICO_MODEL_ENDPOINT_WRITES_ENABLED: ${NICO_MODEL_ENDPOINT_WRITES_ENABLED:-true}
+      NICO_WEB_PROVIDER_WRITES_ENABLED: ${NICO_WEB_PROVIDER_WRITES_ENABLED:-true}
+      NICO_WEB_SEARXNG_ENDPOINT: ${NICO_WEB_SEARXNG_ENDPOINT:-http://searxng:8080/search}
+      NICO_WEB_SEARXNG_ALLOW_PRIVATE: ${NICO_WEB_SEARXNG_ALLOW_PRIVATE:-true}
       NICO_MODEL_TRUSTED_PRIVATE_HOSTS: ${NICO_MODEL_TRUSTED_PRIVATE_HOSTS:-["host.docker.internal"]}
       NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-true}
       NICO_PROVIDER_E2E_ALLOW_HTTP: ${NICO_PROVIDER_E2E_ALLOW_HTTP:-false}
@@ -184,6 +187,9 @@ services:
       NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS: ${NICO_MODEL_ALLOW_HTTP_TRUSTED_HOSTS:-true}
       NICO_PROVIDER_E2E_ALLOW_HTTP: ${NICO_PROVIDER_E2E_ALLOW_HTTP:-false}
       NICO_PROVIDER_E2E_BASE_URL: ${NICO_PROVIDER_E2E_BASE_URL:-}
+      NICO_WEB_PROVIDER_WRITES_ENABLED: ${NICO_WEB_PROVIDER_WRITES_ENABLED:-true}
+      NICO_WEB_SEARXNG_ENDPOINT: ${NICO_WEB_SEARXNG_ENDPOINT:-http://searxng:8080/search}
+      NICO_WEB_SEARXNG_ALLOW_PRIVATE: ${NICO_WEB_SEARXNG_ALLOW_PRIVATE:-true}
       NICO_MODEL_SECRET_GOAL_G: ${NICO_MODEL_SECRET_GOAL_G:-}
       NICO_NATIVE_POST_TOOL_DELAY_SECONDS: ${NICO_NATIVE_POST_TOOL_DELAY_SECONDS:-0}
       NICO_TOOL_APPROVAL_REQUIRED_RISKS: ${NICO_TOOL_APPROVAL_REQUIRED_RISKS:-["medium","high"]}
@@ -254,7 +260,7 @@ services:
       - hermes-state:/var/lib/nico/hermes
 
   fake-model:
-    profiles: ["goal-g", "goal-h", "goal-j", "goal-k"]
+    profiles: ["goal-g", "goal-h", "goal-j", "goal-k", "guided-setup-e2e"]
     image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
     build:
       context: ./backend
@@ -276,6 +282,32 @@ services:
         - python
         - -c
         - import urllib.request; urllib.request.urlopen('http://localhost:8100/healthz', timeout=3)
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+    restart: "no"
+
+  fake-web:
+    profiles: ["guided-setup-e2e"]
+    image: ${NICO_BACKEND_IMAGE:-nico-agent-backend:local}
+    build:
+      context: ./backend
+    command:
+      - uvicorn
+      - nico_agent.testing.fake_web:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8120"
+      - --log-config
+      - logging.json
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8120/healthz', timeout=3)
       interval: 3s
       timeout: 3s
       retries: 20

@@ -16,6 +16,38 @@ The Docker Socket is required by `sandbox-runner`, the only service allowed to c
 
 ## Start Nico
 
+推荐的源码开发入口不会构建应用镜像：
+
+```bash
+make run
+```
+
+它通过 Compose 启动 PostgreSQL、Redis、MinIO 和默认的 SearXNG，同时从 checkout
+运行 API、Worker、Sandbox Runner、Console，并安装最新的本地 `nico` 命令。首次
+运行后在另一个终端完成四步引导：
+
+```bash
+nico setup
+nico setup --status
+```
+
+引导只显示模型验证、Web 验证、AgentVersion 发布、Search、Fetch 和引用校验等
+用户可判断的阶段，不显示内部事件名、模型增量或私有推理。
+
+首次在线验证由平台确定性执行 Search → Fetch → Final，不要求模型临场选择工具，因此
+不同 Provider 的工具调用习惯不会让设置流程随机失败。验证仍使用所选 AgentVersion 的
+冻结授权和正常 Tool 审批；该专用流程不会改变之后的普通聊天行为。
+
+Web 步骤还会选择 DNS 解析方式。普通网络可使用 `system`；如果 Clash、Surge 等代理
+返回 `198.18.0.0/15` Fake-IP，选择推荐的 `cloudflare` DoH（或 `google` DoH），不要
+通过放宽私网地址校验来绕过错误。
+
+设置全部完成后，再次运行 `nico setup` 会进入维护菜单。脚本可使用
+`nico setup --reconfigure AREA` 定向更新或复验 `model`、`web`、`capabilities`
+或 `verification`，不会重放其他已完成步骤。
+
+完整容器化开发入口仍可使用：
+
 ```bash
 cp .env.example .env
 scripts/dev.sh --detach

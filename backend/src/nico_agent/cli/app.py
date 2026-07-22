@@ -14,6 +14,7 @@ from uuid import UUID
 import typer
 
 from nico_agent import __version__
+from nico_agent.cli.capabilities import CapabilityCoordinator, CapabilityInput
 from nico_agent.cli.chat import ChatRunner
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.config import CliConfig, ConfigStore, Profile, validate_profile_name
@@ -24,6 +25,7 @@ from nico_agent.cli.project import ProjectCli
 from nico_agent.cli.provider import ProviderInput, ProviderOnboardingCoordinator
 from nico_agent.cli.renderers import ProjectRenderer
 from nico_agent.cli.service_bridge import ServiceBridge
+from nico_agent.cli.setup import GuidedSetupCoordinator, GuidedSetupInput
 from nico_agent.cli.web import WebConfigureInput, WebCoordinator
 
 T = TypeVar("T")
@@ -211,6 +213,11 @@ def _run_provider_onboarding(
 @app.command("setup")
 def setup_command(
     ctx: typer.Context,
+    status_only: bool = typer.Option(
+        False,
+        "--status",
+        help="仅显示四步设置状态，不启动或修改设置。",
+    ),
     provider_key: str | None = typer.Option(None, "--provider"),
     credential_ref: str | None = typer.Option(None, "--credential-ref"),
     model: str | None = typer.Option(None, "--model"),
@@ -225,34 +232,107 @@ def setup_command(
     custom_provider_name: str | None = typer.Option(None, "--custom-name"),
     custom_protocol: str | None = typer.Option(None, "--protocol"),
     custom_base_url: str | None = typer.Option(None, "--base-url"),
+    enable_web: bool = typer.Option(False, "--enable-web"),
+    skip_web: bool = typer.Option(False, "--skip-web"),
+    web_provider: str | None = typer.Option(None, "--web-provider"),
+    web_endpoint: str | None = typer.Option(None, "--web-endpoint"),
+    web_credential_ref: str | None = typer.Option(None, "--web-credential-ref"),
+    web_dns: str | None = typer.Option(None, "--web-dns"),
+    capability_profile: str | None = typer.Option(None, "--capability-profile"),
+    capability_tool: list[str] | None = typer.Option(None, "--capability-tool"),
+    capability_skill: list[UUID] | None = typer.Option(None, "--capability-skill"),
+    all_capabilities: bool = typer.Option(False, "--all-capabilities"),
+    clear_capabilities: bool = typer.Option(False, "--clear-capabilities"),
+    accept_risk: list[str] | None = typer.Option(None, "--accept-risk"),
+    approve_tools: bool = typer.Option(
+        False,
+        "--approve-tools",
+        help="自动批准本次在线验证所需的 Tool 调用。",
+    ),
+    reconfigure: str | None = typer.Option(
+        None,
+        "--reconfigure",
+        help="重新配置 model、web、capabilities 或 verification。",
+    ),
     yes: bool = typer.Option(False, "--yes", help="确认发布服务端预览。"),
 ) -> None:
-    """在尚无可用 Native 路由时引导配置第一个 Provider。"""
+    """恢复并完成模型、Web、Agent 能力和在线验证四步设置。"""
 
     state = _state(ctx)
 
+    if status_only:
+        result = _api(state, lambda client: client.setup_readiness())
+        state.output().emit(result, title="Nico Setup Status")
+        return
+
     def operation() -> dict[str, Any]:
-        readiness = _api(state, lambda client: client.provider_setup_readiness())
-        if not readiness.get("needs_setup"):
-            return {"status": "ready", "readiness": readiness}
-        return _run_provider_onboarding(
-            state,
-            provider_key=provider_key,
-            credential_ref=credential_ref,
-            model=model,
-            project_id=project_id,
-            agent_id=agent_id,
-            expected_agent_revision=expected_agent_revision,
-            starter_agent_name=starter_agent_name,
-            starter_agent_display_name=starter_agent_display_name,
-            location=location,
-            option=option or [],
-            custom_provider_key=custom_provider_key,
-            custom_provider_name=custom_provider_name,
-            custom_protocol=custom_protocol,
-            custom_base_url=custom_base_url,
-            confirmed=yes,
-        )
+        resolved = state.resolved_profile()
+        interactive = sys.stdin.isatty() and not state.json_mode
+        with NicoApiClient(resolved) as client:
+            web = WebCoordinator(
+                client,
+                state.output(),
+                service_bridge=ServiceBridge(resolved),
+                interactive=interactive,
+                prompt=typer.prompt,
+                confirm=typer.confirm,
+            )
+            capabilities = _capability_coordinator(state, client)
+            coordinator = GuidedSetupCoordinator(
+                client,
+                state.output(),
+                interactive=interactive,
+                prompt=typer.prompt,
+                confirm=typer.confirm,
+                model_setup=lambda: _run_provider_onboarding(
+                    state,
+                    provider_key=provider_key,
+                    credential_ref=credential_ref,
+                    model=model,
+                    project_id=project_id,
+                    agent_id=agent_id,
+                    expected_agent_revision=expected_agent_revision,
+                    starter_agent_name=starter_agent_name,
+                    starter_agent_display_name=starter_agent_display_name,
+                    location=location,
+                    option=option or [],
+                    custom_provider_key=custom_provider_key,
+                    custom_provider_name=custom_provider_name,
+                    custom_protocol=custom_protocol,
+                    custom_base_url=custom_base_url,
+                    confirmed=yes,
+                ),
+                web_setup=lambda: web.configure(
+                    WebConfigureInput(
+                        provider=(
+                            web_provider if web_provider is not None or interactive else "searxng"
+                        ),
+                        endpoint_key=web_endpoint,
+                        credential_ref=web_credential_ref,
+                        dns_resolver=web_dns,
+                        confirmed=yes,
+                        provider_only=True,
+                    )
+                ),
+                capabilities=capabilities,
+            )
+            return coordinator.run(
+                GuidedSetupInput(
+                    skip_web=skip_web,
+                    enable_web=enable_web,
+                    automatically_approve_tools=approve_tools,
+                    reconfigure=reconfigure,
+                ),
+                CapabilityInput(
+                    profile=capability_profile,
+                    tool_refs=capability_tool or [],
+                    skill_version_ids=[str(value) for value in (capability_skill or [])],
+                    select_all=all_capabilities,
+                    clear_all=clear_capabilities,
+                    accepted_risks=accept_risk or [],
+                    confirmed=yes,
+                ),
+            )
 
     result = _guard(state, operation)
     state.output().emit(result, title="Nico Setup")
@@ -476,6 +556,7 @@ def web_configure(
     cache_ttl_seconds: int = typer.Option(900, "--cache-ttl", min=1, max=86_400),
     rate_limit_per_minute: int = typer.Option(20, "--rate-limit", min=1, max=10_000),
     allowed_domain: list[str] | None = typer.Option(None, "--allow-domain"),
+    dns_resolver: str | None = typer.Option(None, "--dns-resolver"),
     yes: bool = typer.Option(False, "--yes", help="确认发布新的 AgentVersion。"),
 ) -> None:
     """验证 Web Provider 并原子发布到一个 Agent。"""
@@ -499,6 +580,7 @@ def web_configure(
                     cache_ttl_seconds=cache_ttl_seconds,
                     rate_limit_per_minute=rate_limit_per_minute,
                     allowed_domains=allowed_domain or [],
+                    dns_resolver=dns_resolver,
                     confirmed=yes,
                 )
             )
@@ -826,6 +908,34 @@ def doctor_command(ctx: typer.Context) -> None:
                     failed = failed or not matches
                 except CliError as exc:
                     checks.append({"check": "tenant_access", "status": "fail", "detail": exc.code})
+                    failed = True
+                try:
+                    setup = client.setup_readiness()
+                    overall = str(setup.get("overall") or "incomplete")
+                    checks.append(
+                        {
+                            "check": "setup_overall",
+                            "status": "pass" if overall == "full" else "warning",
+                            "detail": overall,
+                        }
+                    )
+                    for area in setup.get("areas") or []:
+                        area_state = str(area.get("state") or "incomplete")
+                        area_failed = area_state in {"blocked", "failed"}
+                        checks.append(
+                            {
+                                "check": f"setup_{area.get('key')}",
+                                "status": (
+                                    "pass"
+                                    if area_state == "ready"
+                                    else ("fail" if area_failed else "warning")
+                                ),
+                                "detail": area_state,
+                            }
+                        )
+                        failed = failed or area_failed
+                except CliError as exc:
+                    checks.append({"check": "setup_overall", "status": "fail", "detail": exc.code})
                     failed = True
                 try:
                     web = _web_coordinator(state, client).status()
@@ -1535,6 +1645,110 @@ def agent_list(ctx: typer.Context) -> None:
         title="Agents",
         columns=["id", "name", "display_name", "status", "current_version_id"],
     )
+
+
+def _capability_coordinator(
+    state: AppState,
+    client: NicoApiClient,
+) -> CapabilityCoordinator:
+    return CapabilityCoordinator(
+        client,
+        state.output(),
+        interactive=sys.stdin.isatty() and not state.json_mode,
+        prompt=typer.prompt,
+        confirm=typer.confirm,
+    )
+
+
+@agent_app.command("capabilities")
+def agent_capabilities(
+    ctx: typer.Context,
+    agent_id: UUID,
+    profile: str | None = typer.Option(None, "--profile"),
+    tool: list[str] | None = typer.Option(None, "--tool"),
+    skill: list[UUID] | None = typer.Option(None, "--skill"),
+    select_all: bool = typer.Option(False, "--all", help="选择全部当前可用能力。"),
+    clear_all: bool = typer.Option(False, "--clear", help="清除全部可选能力。"),
+    accept_risk: list[str] | None = typer.Option(None, "--accept-risk"),
+    yes: bool = typer.Option(False, "--yes", help="确认发布预览。"),
+) -> None:
+    """为现有 Agent 发布一个新的不可变能力版本。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        with NicoApiClient(state.resolved_profile()) as client:
+            return _capability_coordinator(state, client).publish(
+                CapabilityInput(
+                    agent_id=str(agent_id),
+                    profile=profile,
+                    tool_refs=tool or [],
+                    skill_version_ids=[str(value) for value in (skill or [])],
+                    select_all=select_all,
+                    clear_all=clear_all,
+                    accepted_risks=accept_risk or [],
+                    confirmed=yes,
+                )
+            )
+
+    state.output().emit(_guard(state, operation), title="Agent Capabilities")
+
+
+@agent_app.command("create")
+def agent_create(
+    ctx: typer.Context,
+    name: str,
+    display_name: str | None = typer.Option(None, "--display-name"),
+    source_version: UUID | None = typer.Option(None, "--source-version"),
+    profile: str | None = typer.Option(None, "--profile"),
+    tool: list[str] | None = typer.Option(None, "--tool"),
+    skill: list[UUID] | None = typer.Option(None, "--skill"),
+    select_all: bool = typer.Option(False, "--all"),
+    clear_all: bool = typer.Option(False, "--clear"),
+    accept_risk: list[str] | None = typer.Option(None, "--accept-risk"),
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """从现有已发布模型版本创建 Starter Agent 并选择能力。"""
+
+    state = _state(ctx)
+
+    def operation() -> dict[str, Any]:
+        interactive = sys.stdin.isatty() and not state.json_mode
+        resolved_display = display_name
+        resolved_source = source_version
+        with NicoApiClient(state.resolved_profile()) as client:
+            if resolved_display is None and interactive:
+                resolved_display = typer.prompt("Starter Agent display name", default=name)
+            if resolved_source is None and interactive:
+                agents = [
+                    item
+                    for item in client.list_agents()
+                    if item.get("current_version_id") and item.get("status") != "archived"
+                ]
+                state.output().table(
+                    agents,
+                    title="Published Model Sources",
+                    columns=["name", "display_name", "current_version_id", "status"],
+                )
+                resolved_source = UUID(typer.prompt("Source AgentVersion ID").strip())
+            return _capability_coordinator(state, client).publish(
+                CapabilityInput(
+                    starter_agent_name=name,
+                    starter_agent_display_name=resolved_display,
+                    source_agent_version_id=(
+                        str(resolved_source) if resolved_source is not None else None
+                    ),
+                    profile=profile,
+                    tool_refs=tool or [],
+                    skill_version_ids=[str(value) for value in (skill or [])],
+                    select_all=select_all,
+                    clear_all=clear_all,
+                    accepted_risks=accept_risk or [],
+                    confirmed=yes,
+                )
+            )
+
+    state.output().emit(_guard(state, operation), title="Agent Created")
 
 
 @agent_app.command("get")

@@ -626,6 +626,68 @@ class SkillLifecycleService:
                 break
         return tuple(resolved)
 
+    async def resolve_exact_available_in_session(
+        self,
+        session: AsyncSession,
+        run: Run,
+        task: Task,
+        *,
+        allowed_skill_ids: frozenset[UUID],
+        allowed_skill_version_ids: frozenset[UUID],
+        allowed_scope_types: frozenset[str],
+        limit: int,
+    ) -> tuple[tuple[Skill, SkillVersion, SkillResolution], ...]:
+        """Resolve frozen published SkillVersion IDs without following rollout pointers."""
+
+        if not 1 <= limit <= 100:
+            raise ValueError("Skill runtime limit must be between 1 and 100")
+        if not allowed_scope_types <= {"tenant", "project", "agent"}:
+            raise ValueError("Skill runtime scopes contain unsupported values")
+        if not allowed_skill_ids or not allowed_skill_version_ids or not allowed_scope_types:
+            return ()
+        rows = (
+            await session.execute(
+                select(Skill, SkillVersion)
+                .join(
+                    SkillVersion,
+                    (SkillVersion.tenant_id == Skill.tenant_id)
+                    & (SkillVersion.skill_id == Skill.id),
+                )
+                .where(
+                    Skill.id.in_(allowed_skill_ids),
+                    Skill.status == "published",
+                    Skill.scope_type.in_(allowed_scope_types),
+                    SkillVersion.id.in_(allowed_skill_version_ids),
+                    SkillVersion.status == "published",
+                )
+                .order_by(
+                    case(
+                        (Skill.scope_type == "agent", 0),
+                        (Skill.scope_type == "project", 1),
+                        else_=2,
+                    ),
+                    Skill.name,
+                    SkillVersion.version,
+                    SkillVersion.id,
+                )
+            )
+        ).all()
+        resolved: list[tuple[Skill, SkillVersion, SkillResolution]] = []
+        for skill, version in rows:
+            if not self._run_scope_matches(skill, task.project_id, run.agent_id):
+                continue
+            resolution = SkillResolution(
+                skill_id=skill.id,
+                skill_version_id=version.id,
+                version=version.version,
+                run_id=run.id,
+                selection="stable",
+            )
+            resolved.append((skill, version, resolution))
+            if len(resolved) >= limit:
+                break
+        return tuple(resolved)
+
     async def _resolve_for_run(
         self,
         session: AsyncSession,

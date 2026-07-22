@@ -30,6 +30,7 @@ from nico_agent.models.http_safety import (
     parse_json_object,
     raise_transport_error,
 )
+from nico_agent.models.tool_names import ProviderToolNames
 
 
 class GoogleGeminiProvider:
@@ -72,13 +73,14 @@ class GoogleGeminiProvider:
             model=request.model,
         )
         secret = self.http.resolve_secret(request.endpoint)
+        tool_names = ProviderToolNames.from_definitions(request.tools)
         try:
             async with self.client.stream(
                 "POST",
                 endpoint.url,
                 params={"alt": "sse"},
                 headers=self._headers(endpoint.host_header, secret),
-                json=self._request_body(request),
+                json=self._request_body(request, tool_names),
                 timeout=self.http.timeout(request.timeout_seconds),
                 follow_redirects=False,
                 extensions={"sni_hostname": endpoint.sni_hostname},
@@ -135,7 +137,7 @@ class GoogleGeminiProvider:
                                     type=ModelStreamEventType.TOOL_CALL_DELTA,
                                     tool_index=tool_index,
                                     tool_call_id=f"gemini-{tool_index}",
-                                    tool_name=str(function.get("name") or ""),
+                                    tool_name=tool_names.decode(str(function.get("name") or "")),
                                     tool_arguments_delta=json.dumps(
                                         function.get("args") or {}, separators=(",", ":")
                                     ),
@@ -231,13 +233,19 @@ class GoogleGeminiProvider:
         }
 
     @staticmethod
-    def _request_body(request: ModelRequest) -> dict[str, Any]:
+    def _request_body(
+        request: ModelRequest,
+        tool_names: ProviderToolNames | None = None,
+    ) -> dict[str, Any]:
+        tool_names = tool_names or ProviderToolNames.from_definitions(request.tools)
         system = "\n\n".join(
             message.content or "" for message in request.messages if message.role == "system"
         )
         body: dict[str, Any] = {
             "contents": [
-                _message_body(message) for message in request.messages if message.role != "system"
+                _message_body(message, tool_names)
+                for message in request.messages
+                if message.role != "system"
             ],
             "generationConfig": {},
         }
@@ -252,7 +260,7 @@ class GoogleGeminiProvider:
                 {
                     "functionDeclarations": [
                         {
-                            "name": tool.name,
+                            "name": tool_names.encode(tool.name),
                             "description": tool.description,
                             "parameters": tool.input_schema,
                         }
@@ -263,7 +271,7 @@ class GoogleGeminiProvider:
         return body
 
 
-def _message_body(message: Any) -> dict[str, Any]:
+def _message_body(message: Any, tool_names: ProviderToolNames) -> dict[str, Any]:
     role = "model" if message.role == "assistant" else "user"
     if message.role == "tool":
         return {
@@ -271,7 +279,7 @@ def _message_body(message: Any) -> dict[str, Any]:
             "parts": [
                 {
                     "functionResponse": {
-                        "name": message.name or "tool",
+                        "name": tool_names.encode(message.name or "tool"),
                         "response": {"result": message.content or ""},
                     }
                 }
@@ -291,7 +299,7 @@ def _message_body(message: Any) -> dict[str, Any]:
         parts.append(
             {
                 "functionCall": {
-                    "name": str(function.get("name") or ""),
+                    "name": tool_names.encode(str(function.get("name") or "")),
                     "args": arguments,
                 }
             }

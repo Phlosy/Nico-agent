@@ -94,6 +94,27 @@ class NicoApiClient:
     def get_tenant(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/tenant")
 
+    def setup_readiness(self) -> dict[str, Any]:
+        return self.request("GET", "/api/v1/setup/readiness")
+
+    def update_setup_intent(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self.request("PATCH", "/api/v1/setup/intent", json_body=command)
+
+    def validate_setup_proof(
+        self,
+        *,
+        expected_tenant_revision: int,
+        run_id: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/setup/proof",
+            json_body={
+                "expected_tenant_revision": expected_tenant_revision,
+                "run_id": run_id,
+            },
+        )
+
     def list_projects(self, *, include_system: bool = False) -> list[dict[str, Any]]:
         return self.request(
             "GET",
@@ -334,6 +355,27 @@ class NicoApiClient:
     def list_agent_versions(self, agent_id: str) -> list[dict[str, Any]]:
         return self.request("GET", f"/api/v1/agents/{agent_id}/versions")
 
+    def capability_catalog(self, *, agent_id: str | None = None) -> dict[str, Any]:
+        return self.request(
+            "GET",
+            "/api/v1/agent-capabilities/catalog",
+            params={"agent_id": agent_id} if agent_id is not None else None,
+        )
+
+    def preview_capabilities(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/agent-capabilities/preview",
+            json_body=command,
+        )
+
+    def activate_capabilities(self, command: dict[str, Any]) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            "/api/v1/agent-capabilities/activate",
+            json_body=command,
+        )
+
     def provider_catalog(self) -> dict[str, Any]:
         return self.request("GET", "/api/v1/provider-catalog", require_tenant=False)
 
@@ -442,16 +484,23 @@ class NicoApiClient:
         *,
         probe_id: str,
         candidate_hash: str,
-        target: dict[str, Any],
+        target: dict[str, Any] | None = None,
+        scope: str = "provider_and_agent",
+        expected_tenant_revision: int | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "probe_id": probe_id,
+            "candidate_hash": candidate_hash,
+            "scope": scope,
+        }
+        if target is not None:
+            body["target"] = target
+        if expected_tenant_revision is not None:
+            body["expected_tenant_revision"] = expected_tenant_revision
         return self.request(
             "POST",
             "/api/v1/web/activation/preview",
-            json_body={
-                "probe_id": probe_id,
-                "candidate_hash": candidate_hash,
-                "target": target,
-            },
+            json_body=body,
         )
 
     def activate_web(
@@ -459,16 +508,22 @@ class NicoApiClient:
         *,
         probe_id: str,
         candidate_hash: str,
-        target: dict[str, Any],
+        target: dict[str, Any] | None,
         preview_hash: str,
         maintenance_attempt_id: str | None = None,
+        scope: str = "provider_and_agent",
+        expected_tenant_revision: int | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "probe_id": probe_id,
             "candidate_hash": candidate_hash,
-            "target": target,
             "preview_hash": preview_hash,
+            "scope": scope,
         }
+        if target is not None:
+            body["target"] = target
+        if expected_tenant_revision is not None:
+            body["expected_tenant_revision"] = expected_tenant_revision
         if maintenance_attempt_id is not None:
             body["maintenance_attempt_id"] = maintenance_attempt_id
         return self.request("POST", "/api/v1/web/activation", json_body=body)
@@ -657,11 +712,24 @@ class NicoApiClient:
         message: str,
         *,
         idempotency_key: str,
+        max_steps: int | None = None,
+        token_budget: int | None = None,
+        timeout_seconds: int | None = None,
+        budgets: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {"user_input": message}
+        if max_steps is not None:
+            body["max_steps"] = max_steps
+        if token_budget is not None:
+            body["token_budget"] = token_budget
+        if timeout_seconds is not None:
+            body["timeout_seconds"] = timeout_seconds
+        if budgets is not None:
+            body["budgets"] = budgets
         return self.request(
             "POST",
             f"/api/v1/conversations/{conversation_id}/turns",
-            json_body={"user_input": message},
+            json_body=body,
             extra_headers={"Idempotency-Key": idempotency_key},
         )
 

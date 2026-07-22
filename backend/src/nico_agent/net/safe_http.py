@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import http.client
+import inspect
 import ipaddress
 import socket
 import ssl
@@ -158,7 +159,7 @@ class HttpTransport(Protocol):
     async def request(self, request: PinnedRequest) -> RawHttpResponse: ...
 
 
-Resolver = Callable[[str, int], Sequence[str]]
+Resolver = Callable[[str, int], Sequence[str] | Awaitable[Sequence[str]]]
 RequestAuthorizer = Callable[[str, str | None], Awaitable[None]]
 
 
@@ -382,7 +383,7 @@ async def resolve_http_target(
     _authorize_url(parsed, policy, redirect_from=redirect_from)
     resolver = resolver or resolve_addresses
     try:
-        raw_addresses = await asyncio.to_thread(resolver, parsed.hostname, parsed.port)
+        raw_addresses = await _call_resolver(resolver, parsed.hostname, parsed.port)
     except OSError as exc:
         raise SafeHttpError("DNS_ERROR", "HTTP hostname resolution failed") from exc
     if not raw_addresses:
@@ -424,6 +425,23 @@ def resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
             item[4][0] for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         )
     )
+
+
+async def _call_resolver(
+    resolver: Resolver,
+    hostname: str,
+    port: int,
+) -> Sequence[str]:
+    call = type(resolver).__call__
+    if inspect.iscoroutinefunction(resolver) or inspect.iscoroutinefunction(call):
+        result = resolver(hostname, port)
+        if not inspect.isawaitable(result):
+            raise SafeHttpError("DNS_ERROR", "HTTP resolver returned an invalid result")
+        return await result
+    result = await asyncio.to_thread(resolver, hostname, port)
+    if inspect.isawaitable(result):
+        raise SafeHttpError("DNS_ERROR", "HTTP resolver returned an invalid result")
+    return result
 
 
 def _authorize_url(

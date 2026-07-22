@@ -37,6 +37,17 @@ class FakeClient:
     def get_tenant(self) -> dict[str, Any]:
         return {"id": str(self.profile.tenant_id), "name": "Test tenant"}
 
+    def setup_readiness(self) -> dict[str, Any]:
+        return {
+            "overall": "full",
+            "areas": [
+                {"key": "model", "state": "ready"},
+                {"key": "web", "state": "ready"},
+                {"key": "capabilities", "state": "ready"},
+                {"key": "verification", "state": "ready"},
+            ],
+        }
+
     def web_status(self) -> dict[str, Any]:
         return {
             "writes_enabled": False,
@@ -217,6 +228,86 @@ class FakeClient:
 
 
 class FakeProviderClient(FakeClient):
+    model_activated = False
+    capabilities_activated = False
+    web_skipped = False
+
+    def setup_readiness(self):
+        model_ready = type(self).model_activated
+        capability_ready = type(self).capabilities_activated
+        web_state = "skipped" if type(self).web_skipped else "incomplete"
+        target = (
+            {
+                "agent_id": "33333333-3333-4333-8333-333333333333",
+                "agent_name": "setup-assistant",
+                "agent_revision": 1 if not capability_ready else 2,
+                "agent_version_id": "44444444-4444-4444-8444-444444444444",
+                "agent_version": 1 if not capability_ready else 2,
+                "model_name": "model-a",
+            }
+            if model_ready
+            else None
+        )
+        return {
+            "schema_version": 1,
+            "tenant_revision": 1 + int(type(self).web_skipped) + int(capability_ready),
+            "overall": (
+                "partial"
+                if model_ready and capability_ready and type(self).web_skipped
+                else "incomplete"
+            ),
+            "areas": [
+                {
+                    "key": "model",
+                    "state": "ready" if model_ready else "incomplete",
+                    "summary": "model",
+                },
+                {"key": "web", "state": web_state, "summary": "web"},
+                {
+                    "key": "capabilities",
+                    "state": "ready" if capability_ready else "incomplete",
+                    "summary": "capabilities",
+                },
+                {"key": "verification", "state": "incomplete", "summary": "verification"},
+            ],
+            "target": target,
+            "selected_profile": "minimal" if capability_ready else None,
+            "web_provider": None,
+            "verified_at": None,
+        }
+
+    def update_setup_intent(self, _command):
+        type(self).web_skipped = True
+        return {"tenant_revision": 2, "web_intent": "skipped"}
+
+    def capability_catalog(self, *, agent_id=None):
+        return {
+            "schema_version": 1,
+            "tenant_revision": 2,
+            "agent_id": agent_id,
+            "profiles": [],
+            "tools": [],
+            "skills": [],
+        }
+
+    def preview_capabilities(self, command):
+        return {
+            "preview_hash": "c" * 64,
+            "target_agent_name": "setup-assistant",
+            "proposed_agent_version": 2,
+            "risks": [],
+            "diff": {},
+            "command": command,
+        }
+
+    def activate_capabilities(self, command):
+        type(self).capabilities_activated = True
+        return {
+            "agent_id": command["target"]["agent_id"],
+            "agent_version_id": "44444444-4444-4444-8444-444444444444",
+            "agent_version": 2,
+        }
+
     def provider_setup_readiness(self):
         return {
             "needs_setup": True,
@@ -269,6 +360,7 @@ class FakeProviderClient(FakeClient):
         }
 
     def activate_provider(self, **_kwargs):
+        type(self).model_activated = True
         return {
             "agent_id": "33333333-3333-4333-8333-333333333333",
             "agent_version_id": "version-1",
@@ -403,6 +495,67 @@ def test_doctor_fails_when_profile_tenant_is_not_available(monkeypatch, tmp_path
     }
 
 
+def test_doctor_reports_partial_as_warning_without_failure(monkeypatch, tmp_path: Path) -> None:
+    class PartialClient(FakeClient):
+        def setup_readiness(self) -> dict[str, Any]:
+            return {
+                "overall": "partial",
+                "areas": [
+                    {"key": "model", "state": "ready"},
+                    {"key": "web", "state": "skipped"},
+                    {"key": "capabilities", "state": "ready"},
+                    {"key": "verification", "state": "incomplete"},
+                ],
+            }
+
+    monkeypatch.setattr(cli_module, "NicoApiClient", PartialClient)
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(tmp_path / "config.toml"),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "doctor",
+        ],
+    )
+    assert result.exit_code == 0
+    checks = {item["check"]: item for item in json.loads(result.stdout)}
+    assert checks["setup_overall"]["status"] == "warning"
+    assert checks["setup_web"]["detail"] == "skipped"
+
+
+def test_doctor_fails_for_blocked_setup_area(monkeypatch, tmp_path: Path) -> None:
+    class BlockedClient(FakeClient):
+        def setup_readiness(self) -> dict[str, Any]:
+            return {
+                "overall": "incomplete",
+                "areas": [
+                    {"key": "model", "state": "ready"},
+                    {"key": "web", "state": "blocked"},
+                    {"key": "capabilities", "state": "incomplete"},
+                    {"key": "verification", "state": "incomplete"},
+                ],
+            }
+
+    monkeypatch.setattr(cli_module, "NicoApiClient", BlockedClient)
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(tmp_path / "config.toml"),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "doctor",
+        ],
+    )
+    assert result.exit_code == 1
+    checks = {item["check"]: item for item in json.loads(result.stdout)}
+    assert checks["setup_web"]["status"] == "fail"
+
+
 def test_chat_one_shot_json_and_conversation_history(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
     prefix = [
@@ -483,6 +636,9 @@ def test_json_interactive_chat_is_rejected(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_setup_supports_safe_non_interactive_reference_flow(monkeypatch, tmp_path: Path) -> None:
+    FakeProviderClient.model_activated = False
+    FakeProviderClient.capabilities_activated = False
+    FakeProviderClient.web_skipped = False
     monkeypatch.setattr(cli_module, "NicoApiClient", FakeProviderClient)
     project = "22222222-2222-4222-8222-222222222222"
     result = runner.invoke(
@@ -506,15 +662,44 @@ def test_setup_supports_safe_non_interactive_reference_flow(monkeypatch, tmp_pat
             "setup-assistant",
             "--starter-display-name",
             "Setup Assistant",
+            "--skip-web",
+            "--capability-profile",
+            "minimal",
             "--yes",
         ],
     )
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["status"] == "ready"
-    assert payload["provider"] == "openai"
+    assert payload["status"] == "partial"
+    assert payload["model"] == "model-a"
     assert "secret:providers/openai" not in result.stdout
+
+
+def test_setup_status_is_read_only_and_non_interactive(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    result = runner.invoke(
+        cli_module.app,
+        [
+            "--config-file",
+            str(tmp_path / "config.toml"),
+            "--tenant-id",
+            str(TENANT_ID),
+            "--json",
+            "setup",
+            "--status",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["overall"] == "full"
+    assert [area["key"] for area in payload["areas"]] == [
+        "model",
+        "web",
+        "capabilities",
+        "verification",
+    ]
 
 
 def test_exec_supports_local_json_detach_and_private_output(monkeypatch, tmp_path: Path) -> None:

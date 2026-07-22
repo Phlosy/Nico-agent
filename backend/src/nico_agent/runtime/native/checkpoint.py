@@ -72,6 +72,31 @@ class PlanCheckpoint(BaseModel):
     checkpoint_hash: str = Field(min_length=64, max_length=64)
 
 
+class SetupProofCheckpoint(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[1] = 1
+    provider_name: Literal["nico_native"] = "nico_native"
+    protocol_version: Literal["2.0"] = "2.0"
+    execution_mode: Literal["setup_proof"] = "setup_proof"
+    manifest_hash: str = Field(min_length=64, max_length=64)
+    loop_state: Literal[
+        "searching",
+        "fetching",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
+    ]
+    search_tool_call_id: str | None = Field(default=None, min_length=36, max_length=36)
+    source_url: str | None = Field(default=None, min_length=1, max_length=4096)
+    final_url: str | None = Field(default=None, min_length=1, max_length=4096)
+    completed_action_keys: tuple[str, ...] = ()
+    tool_calls_consumed: int = Field(default=0, ge=0, le=2)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    checkpoint_hash: str = Field(min_length=64, max_length=64)
+
+
 def direct_checkpoint(
     *, context_hash: str, call_key: str, completed: bool, usage: dict[str, Any]
 ) -> dict[str, Any]:
@@ -216,6 +241,55 @@ def load_plan_checkpoint(
         return make_plan_checkpoint(manifest=manifest, loop_state="planning")
     try:
         checkpoint = PlanCheckpoint.model_validate(value)
+    except ValidationError as exc:
+        raise ValueError("checkpoint schema is invalid") from exc
+    original_payload = dict(value)
+    expected = original_payload.pop("checkpoint_hash")
+    if _hash(original_payload) != expected:
+        raise ValueError("checkpoint integrity hash does not match")
+    if checkpoint.manifest_hash != _hash(manifest):
+        raise ValueError("checkpoint execution manifest does not match")
+    return checkpoint
+
+
+def make_setup_proof_checkpoint(
+    *,
+    manifest: dict[str, Any],
+    loop_state: str,
+    search_tool_call_id: str | None = None,
+    source_url: str | None = None,
+    final_url: str | None = None,
+    completed_action_keys: tuple[str, ...] = (),
+    tool_calls_consumed: int = 0,
+    usage: dict[str, Any] | None = None,
+) -> SetupProofCheckpoint:
+    payload = {
+        "schema_version": 1,
+        "provider_name": "nico_native",
+        "protocol_version": "2.0",
+        "execution_mode": "setup_proof",
+        "manifest_hash": _hash(manifest),
+        "loop_state": loop_state,
+        "search_tool_call_id": search_tool_call_id,
+        "source_url": source_url,
+        "final_url": final_url,
+        "completed_action_keys": completed_action_keys,
+        "tool_calls_consumed": tool_calls_consumed,
+        "usage": usage or {"model_calls": 0, "tool_calls": tool_calls_consumed},
+    }
+    payload["checkpoint_hash"] = _hash(payload)
+    return SetupProofCheckpoint.model_validate(payload)
+
+
+def load_setup_proof_checkpoint(
+    value: dict[str, Any] | None,
+    *,
+    manifest: dict[str, Any],
+) -> SetupProofCheckpoint:
+    if value is None:
+        return make_setup_proof_checkpoint(manifest=manifest, loop_state="searching")
+    try:
+        checkpoint = SetupProofCheckpoint.model_validate(value)
     except ValidationError as exc:
         raise ValueError("checkpoint schema is invalid") from exc
     original_payload = dict(value)

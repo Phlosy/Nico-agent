@@ -11,7 +11,9 @@ from uuid import UUID
 from nico_agent.web_onboarding.contracts import WebProviderCandidate
 
 SEARCH_REF = "web.search@1.0.0"
-FETCH_REF = "web.fetch@1.0.0"
+FETCH_REF = "web.fetch@1.1.0"
+LEGACY_FETCH_REFS = frozenset({"web.fetch@1.0.0"})
+WEB_REFS = frozenset({SEARCH_REF, FETCH_REF, *LEGACY_FETCH_REFS})
 SEARCH_PERMISSION = "network.web.search"
 FETCH_PERMISSION = "network.web.fetch"
 BRAVE_SECRET = "web_search_brave_api_key"
@@ -19,11 +21,15 @@ BRAVE_SECRET = "web_search_brave_api_key"
 
 def merge_tenant_policy(value: Any, candidate: WebProviderCandidate) -> dict[str, Any]:
     policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = sorted(set(strings(policy.get("allow"))) | {SEARCH_REF, FETCH_REF})
+    policy["allow"] = sorted(
+        (set(strings(policy.get("allow"))) - LEGACY_FETCH_REFS) | {SEARCH_REF, FETCH_REF}
+    )
     policy["permissions"] = sorted(
         set(strings(policy.get("permissions"))) | {SEARCH_PERMISSION, FETCH_PERMISSION}
     )
     tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
+    for reference in LEGACY_FETCH_REFS:
+        tools.pop(reference, None)
     search_config, fetch_config = tool_configs(candidate)
     tools[SEARCH_REF] = search_config
     tools[FETCH_REF] = fetch_config
@@ -41,11 +47,15 @@ def merge_tenant_policy(value: Any, candidate: WebProviderCandidate) -> dict[str
 
 def merge_agent_policy(value: Any, candidate: WebProviderCandidate) -> dict[str, Any]:
     policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = sorted(set(strings(policy.get("allow"))) | {SEARCH_REF, FETCH_REF})
+    policy["allow"] = sorted(
+        (set(strings(policy.get("allow"))) - LEGACY_FETCH_REFS) | {SEARCH_REF, FETCH_REF}
+    )
     policy["permissions"] = sorted(
         set(strings(policy.get("permissions"))) | {SEARCH_PERMISSION, FETCH_PERMISSION}
     )
     tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
+    for reference in LEGACY_FETCH_REFS:
+        tools.pop(reference, None)
     search_config, fetch_config = tool_configs(candidate)
     tools[SEARCH_REF] = search_config
     tools[FETCH_REF] = fetch_config
@@ -71,23 +81,22 @@ def tool_configs(candidate: WebProviderCandidate) -> tuple[dict[str, Any], dict[
         {
             "allowed_domains": list(policy.allowed_domains),
             "cache_ttl_seconds": policy.cache_ttl_seconds,
+            "dns_resolver": policy.dns_resolver,
         },
     )
 
 
 def remove_tenant_web_policy(value: Any) -> dict[str, Any]:
     policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = [
-        item for item in strings(policy.get("allow")) if item not in {SEARCH_REF, FETCH_REF}
-    ]
+    policy["allow"] = [item for item in strings(policy.get("allow")) if item not in WEB_REFS]
     policy["permissions"] = [
         item
         for item in strings(policy.get("permissions"))
         if item not in {SEARCH_PERMISSION, FETCH_PERMISSION}
     ]
     tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    tools.pop(SEARCH_REF, None)
-    tools.pop(FETCH_REF, None)
+    for reference in WEB_REFS:
+        tools.pop(reference, None)
     policy["tools"] = tools
     secret_refs = (
         deepcopy(policy.get("secret_refs")) if isinstance(policy.get("secret_refs"), dict) else {}
@@ -99,17 +108,15 @@ def remove_tenant_web_policy(value: Any) -> dict[str, Any]:
 
 def remove_agent_web_policy(value: Any) -> dict[str, Any]:
     policy = deepcopy(value) if isinstance(value, dict) else {}
-    policy["allow"] = [
-        item for item in strings(policy.get("allow")) if item not in {SEARCH_REF, FETCH_REF}
-    ]
+    policy["allow"] = [item for item in strings(policy.get("allow")) if item not in WEB_REFS]
     policy["permissions"] = [
         item
         for item in strings(policy.get("permissions"))
         if item not in {SEARCH_PERMISSION, FETCH_PERMISSION}
     ]
     tools = deepcopy(policy.get("tools")) if isinstance(policy.get("tools"), dict) else {}
-    tools.pop(SEARCH_REF, None)
-    tools.pop(FETCH_REF, None)
+    for reference in WEB_REFS:
+        tools.pop(reference, None)
     policy["tools"] = tools
     policy["secrets"] = [item for item in strings(policy.get("secrets")) if item != BRAVE_SECRET]
     return policy

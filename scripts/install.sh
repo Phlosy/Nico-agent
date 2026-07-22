@@ -555,6 +555,24 @@ install_cli() {
   install -d "$BIN_DIR"
 }
 
+local_tenant_payload() {
+  local python_command="$1"
+  local name="$2"
+  local slug="$3"
+  local tenant_settings
+  tenant_settings="$("$python_command" -m nico_agent.local_defaults)"
+  "$python_command" - "$name" "$slug" "$tenant_settings" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "name": sys.argv[1],
+    "slug": sys.argv[2],
+    "settings": json.loads(sys.argv[3]),
+}, separators=(",", ":")))
+PY
+}
+
 switch_current_release() {
   local env_file="$NICO_HOME/config/deployment.env"
   for command_link in "$BIN_DIR/nico" "$BIN_DIR/nico-service"; do
@@ -597,12 +615,14 @@ PY
     fi
   fi
   if [[ -z "$tenant" || -z "$project" ]]; then
-    local suffix tenant_json project_json
+    local suffix tenant_json project_json tenant_payload
     suffix="$(date -u +%Y%m%d%H%M%S)-$$"
+    tenant_payload="$(local_tenant_payload "$RELEASE_DIR/venv/bin/python" \
+      "Nico Local" "nico-local-$suffix")"
     tenant_json="$(curl --fail-with-body --silent --show-error \
       --request POST --header 'Content-Type: application/json' \
       --header 'X-Actor-ID: local-operator' \
-      --data "{\"name\":\"Nico Local\",\"slug\":\"nico-local-$suffix\"}" \
+      --data "$tenant_payload" \
       "$api_base/api/v1/tenants/bootstrap")"
     tenant="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' \
       <<< "$tenant_json")"
@@ -628,13 +648,67 @@ PY
   "$RELEASE_DIR/venv/bin/nico" config set local \
     --api-url "$api_base" --tenant-id "$tenant" --actor-id local-operator
   "$RELEASE_DIR/venv/bin/nico" config use local
-  printf '\n[nico-install] Next step:\n'
-  if [[ "$RUNTIME" == "native" ]]; then
-    printf '  nico setup\n'
-  else
-    printf '  nico doctor\n'
-  fi
   printf '[nico-install] Project: %s\n' "$project"
+}
+
+has_controlling_tty() {
+  [[ -r /dev/tty && -w /dev/tty ]] || return 1
+  (exec 9<>/dev/tty && [[ -t 9 ]]) 2>/dev/null
+}
+
+read_guided_setup_choice() {
+  local answer=""
+  printf '\n[nico-install] Start guided setup now? [Y/n]: ' >/dev/tty
+  IFS= read -r answer </dev/tty || answer=""
+  printf '%s\n' "$answer"
+}
+
+guided_setup_choice_starts() {
+  local answer
+  answer="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  [[ -z "$answer" || "$answer" == "y" || "$answer" == "yes" ]]
+}
+
+guided_setup_overall() {
+  local payload
+  payload="$("$RELEASE_DIR/venv/bin/nico" --json setup --status 2>/dev/null)" || return 1
+  "$RELEASE_DIR/venv/bin/python" -c \
+    'import json,sys; print(json.load(sys.stdin).get("overall", "incomplete"))' \
+    <<< "$payload"
+}
+
+report_guided_setup_status() {
+  local overall="unavailable"
+  overall="$(guided_setup_overall)" || true
+  printf '[nico-install] Guided setup status: %s\n' "$overall"
+  if [[ "$overall" != "full" ]]; then
+    printf '[nico-install] Continue when ready:\n  nico setup\n'
+  fi
+}
+
+run_guided_setup_command() {
+  "$RELEASE_DIR/venv/bin/nico" setup </dev/tty >/dev/tty 2>&1
+}
+
+offer_guided_setup() {
+  if [[ "$RUNTIME" != "native" ]]; then
+    printf '\n[nico-install] Next step:\n  nico doctor\n'
+    return 0
+  fi
+
+  if [[ "$NON_INTERACTIVE" == true ]] || ! has_controlling_tty; then
+    report_guided_setup_status
+    return 0
+  fi
+
+  local answer
+  answer="$(read_guided_setup_choice)"
+  if guided_setup_choice_starts "$answer"; then
+    if ! run_guided_setup_command; then
+      printf '[nico-install] Guided setup did not complete; the installation remains usable.\n' >&2
+    fi
+  fi
+  report_guided_setup_status
 }
 
 run_demo_profile() {
@@ -703,6 +777,7 @@ main() {
     log "starting the $RUNTIME runtime profile"
     NICO_HOME="$NICO_HOME" "$NICO_HOME/bin/nico-service" up
     bootstrap_setup_profile
+    offer_guided_setup
     if [[ "$RUN_DEMO" == true ]]; then
       run_demo_profile
     fi

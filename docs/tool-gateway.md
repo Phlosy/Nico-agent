@@ -82,6 +82,15 @@ AgentVersion 必须重复声明允许集合和权限；Secret 只声明逻辑名
 
 配置值不能扩大租户限制：数字取更小值，列表取交集，布尔值取 AND，映射只保留双方共有键。Agent 未提供某工具配置时使用租户配置；Secret 引用只允许 `env:NICO_TOOL_SECRET_<NAME>`，并在 Gateway 执行时解析。引用和值都不会进入 Prompt；ToolCall/Event/Audit/错误和轨迹对敏感键和值递归脱敏。
 
+`nico setup` 与 `nico agent create|capabilities` 通过服务端目录把 Minimal、Web
+Research、Developer 或 Custom 选择编译为同一种 AgentVersion 策略。不可用 Tool/Skill
+不会进入策略；发布前 availability、Tenant/Agent revision 和预览 Hash 会在行锁内重新
+校验。完整在线验证仍使用所选 AgentVersion，但在该证明 Run 上额外施加只能缩小权限的
+`web.search@1.0.0`/`web.fetch@1.1.0` allowlist，并由可恢复的平台状态机固定执行
+Search → Fetch → Final。状态机使用 Tool Gateway 返回的 Search `tool_call_id` 绑定 Fetch，
+不调用模型，也不允许 Developer 或 Custom 的其他能力进入验证；普通 Run 保持原有的
+模型驱动执行模式。
+
 ## 内置工具
 
 | 精确引用 | 权限 | 风险/隔离 | 默认超时 | 行为边界 |
@@ -93,7 +102,7 @@ AgentVersion 必须重复声明允许集合和权限；Secret 只声明逻辑名
 | `database.read@1.0.0` | `database.read` | medium / read-only DB | 30s | 单条参数化 SELECT/WITH、只读角色 |
 | `python.execute@1.0.0` | `code.python.execute` | high / container | 40s | 一次性固定镜像、无网络的受限 Python |
 | `web.search@1.0.0` | `network.web.search` | medium / network | 30s | Brave 或 SearXNG 的规范化搜索；返回内容标为不可信 |
-| `web.fetch@1.0.0` | `network.web.fetch` | medium / network | 30s | 只读取本 Run 搜索结果或冻结域名白名单中的来源 |
+| `web.fetch@1.1.0` | `network.web.fetch` | medium / network | 30s | 只读取本 Run 搜索结果或冻结域名白名单中的来源 |
 
 ### 文件与报告
 
@@ -120,6 +129,12 @@ AgentVersion 中冻结的 `allowed_domains`。cache lookup 发生在来源授权
 redirect 都重新做来源授权、DNS/IP、scheme 和 port 检查。HTML、纯文本、Markdown
 和 JSON 在下载完成后由有界 extractor 处理，结果包含最终 URL、内容 Hash、截断状态
 和不可信标记。页面正文不能更改工具权限、审批、Provider、Secret 或 endpoint。
+
+Fetch 的 `dns_resolver` 与 Provider 一起冻结，支持 `system`、`cloudflare` 和 `google`。
+后两者只访问平台内置的精确 HTTPS DoH endpoint；该 endpoint 可显式通过本机 Fake-IP
+引导连接，并依赖 TLS hostname 校验。DoH 返回的每个网页地址仍进入相同的 strict-public
+校验、混合网段拒绝和 IP pinning，因此 DoH 不会形成私网访问例外。模型和 Tenant policy
+都不能提供任意 DoH URL。
 
 Native ReAct 会保存搜索与抓取观察中的 URL；最终答案使用 Web 证据却没有引用已观察
 URL 时，只允许一次有界 citation repair，仍未通过则返回明确诊断，绝不合成来源。

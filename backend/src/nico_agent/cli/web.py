@@ -33,7 +33,9 @@ class WebConfigureInput:
     cache_ttl_seconds: int = 900
     rate_limit_per_minute: int = 20
     allowed_domains: list[str] = field(default_factory=list)
+    dns_resolver: str | None = None
     confirmed: bool = False
+    provider_only: bool = False
 
 
 class _LeaseKeeper:
@@ -101,6 +103,7 @@ class WebCoordinator:
         catalog = self._catalog()
         provider = self._provider(catalog, values.provider)
         endpoint_key = self._endpoint(provider, values.endpoint_key)
+        dns_resolver = self._dns_resolver(catalog, values.dns_resolver)
         attempt: SecretAttempt | None = None
         keeper: _LeaseKeeper | None = None
         published = False
@@ -128,6 +131,7 @@ class WebCoordinator:
                 "endpoint_key": endpoint_key,
                 "credential_ref": credential_ref,
                 "policy": {
+                    "dns_resolver": dns_resolver,
                     "safe_search": values.safe_search,
                     "cache_ttl_seconds": values.cache_ttl_seconds,
                     "rate_limit_per_minute": values.rate_limit_per_minute,
@@ -140,12 +144,21 @@ class WebCoordinator:
             if keeper is not None:
                 keeper.check()
             self._require_probe_success(probe)
-            target = self._target(values, readiness)
-            preview = self.client.preview_web_activation(
-                probe_id=str(probe["id"]),
-                candidate_hash=str(probe["candidate_hash"]),
-                target=target,
-            )
+            target = None if values.provider_only else self._target(values, readiness)
+            if values.provider_only:
+                preview = self.client.preview_web_activation(
+                    probe_id=str(probe["id"]),
+                    candidate_hash=str(probe["candidate_hash"]),
+                    target=None,
+                    scope="provider_only",
+                    expected_tenant_revision=readiness["tenant_revision"],
+                )
+            else:
+                preview = self.client.preview_web_activation(
+                    probe_id=str(probe["id"]),
+                    candidate_hash=str(probe["candidate_hash"]),
+                    target=target,
+                )
             self._preview(preview, action="Enable Web access")
             confirmed = values.confirmed
             if not confirmed and self.interactive:
@@ -159,13 +172,21 @@ class WebCoordinator:
             if keeper is not None:
                 keeper.check()
             with self.renderer.progress("Publishing Web access…"):
-                activation = self.client.activate_web(
-                    probe_id=str(probe["id"]),
-                    candidate_hash=str(probe["candidate_hash"]),
-                    target=target,
-                    preview_hash=str(preview["preview_hash"]),
-                    maintenance_attempt_id=attempt.attempt_id if attempt else None,
-                )
+                activation_args = {
+                    "probe_id": str(probe["id"]),
+                    "candidate_hash": str(probe["candidate_hash"]),
+                    "target": target,
+                    "preview_hash": str(preview["preview_hash"]),
+                    "maintenance_attempt_id": attempt.attempt_id if attempt else None,
+                }
+                if values.provider_only:
+                    activation_args.update(
+                        {
+                            "scope": "provider_only",
+                            "expected_tenant_revision": readiness["tenant_revision"],
+                        }
+                    )
+                activation = self.client.activate_web(**activation_args)
             published = True
             if attempt is not None:
                 if keeper is not None:
@@ -176,6 +197,7 @@ class WebCoordinator:
             return {
                 "status": "ready",
                 "provider": provider["key"],
+                "dns_resolver": dns_resolver,
                 "activation": activation,
             }
         finally:
@@ -288,7 +310,14 @@ class WebCoordinator:
                 title="Web Providers",
                 columns=["number", "provider", "name", "credential"],
             )
-            selected = self.prompt("Provider number or key").strip().lower()
+            selected = (
+                self.prompt(
+                    "Provider number or key",
+                    default="searxng",
+                )
+                .strip()
+                .lower()
+            )
             if selected.isdigit() and 1 <= int(selected) <= len(providers):
                 key = str(providers[int(selected) - 1]["key"])
             else:
@@ -319,6 +348,41 @@ class WebCoordinator:
         if selected is None:
             raise CliError("WEB_PROVIDER_ENDPOINT_INVALID", "Web Provider has no endpoint")
         return str(selected["key"])
+
+    def _dns_resolver(self, catalog: dict[str, Any], requested: str | None) -> str:
+        choices = catalog.get("dns_resolvers") or []
+        selected_key = requested
+        if selected_key is None and self.interactive:
+            self.output.table(
+                [
+                    {
+                        "number": index,
+                        "resolver": item.get("key"),
+                        "description": item.get("description"),
+                        "recommended": "yes" if item.get("recommended") else "",
+                    }
+                    for index, item in enumerate(choices, start=1)
+                ],
+                title="Web DNS Resolvers",
+                columns=["number", "resolver", "description", "recommended"],
+            )
+            default = next(
+                (str(item.get("key")) for item in choices if item.get("recommended")),
+                "system",
+            )
+            answer = self.prompt("DNS resolver number or key", default=default).strip().lower()
+            if answer.isdigit() and 1 <= int(answer) <= len(choices):
+                selected_key = str(choices[int(answer) - 1].get("key"))
+            else:
+                selected_key = answer
+        selected_key = selected_key or "system"
+        if not any(item.get("key") == selected_key for item in choices):
+            raise CliError(
+                "WEB_DNS_RESOLVER_INVALID",
+                f"Web DNS resolver '{selected_key}' is unavailable",
+                exit_code=2,
+            )
+        return selected_key
 
     def _credential(
         self,

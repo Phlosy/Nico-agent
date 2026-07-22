@@ -108,8 +108,9 @@ bash install.sh
 4. 在 `~/.nico/config/deployment.env` 生成权限为 `0600` 的共享配置；
 5. 把 Python 包安装到 `~/.nico/releases/<tag>/venv`；
 6. 将 `nico` 和 `nico-service` 链接到 `~/.local/bin`；
-7. 启动服务、等待 API/Console 就绪，创建本地 Tenant/Project 并配置 `local` Profile；
-8. 输出 `nico setup`，由操作者在安装完成后单独配置 Native Provider。
+7. 启动服务与本地 SearXNG，等待 API/Console 就绪，创建本地 Tenant/Project 并配置
+   `local` Profile；
+8. 在真实终端询问是否立即启动 `nico setup`，默认回车为“是”。
 
 如果 `~/.local/bin` 不在 `PATH` 中，请按安装器提示加入 shell 配置。安装完成
 后运行安装器输出的下一步：
@@ -118,8 +119,37 @@ bash install.sh
 nico setup
 ```
 
-安装阶段不会读取 Native Provider Key，也不会在真实 completion 验证完成前宣称
-可以聊天。需要保留原来的无凭据 Mock 演示时，显式传入 `--demo`。
+选择立即设置后，Provider Key 仍只通过隐藏提示或逻辑 Secret 引用读取。安装器不会
+在真实 completion 和 Search → Fetch → 引用验证完成前宣称完全就绪。明确选择“否”
+会正常完成安装并打印 `nico setup`；`--non-interactive` 或没有 controlling TTY 时绝不
+等待输入，只读取四步状态并打印后续命令。需要无凭据 Mock 演示时，显式传入
+`--demo`。
+
+## 首次设置与能力模板
+
+`nico setup` 是可重复运行的四步检查单：模型路由、Web Provider、Agent 能力和
+Search → Fetch 在线验证。已经完成的步骤不会重新索要 Secret；中断后再次运行会从
+未完成处继续。只查看状态而不修改配置：
+
+```bash
+nico setup --status
+nico doctor
+```
+
+本机安装推荐 SearXNG：它随 Native/Hermes Release Profile 启动，不需要搜索 API
+Key，数据路径留在本机服务栈。Brave 适合不希望运行搜索服务的部署，但需要 Brave
+API Key：
+
+```bash
+nico setup
+nico web configure brave --project <project-id> --agent <agent-id>
+```
+
+能力选择提供 Minimal、Web Research、Developer 和 Custom。能力写入新的不可变
+AgentVersion，而不是模型连接；发布后旧 Conversation 仍冻结旧版本，新能力需新建
+Conversation。新建本地 Tenant 的上限只包含工作区文件读写、报告和无网络 Python，
+不会默认授予 Web、通用 HTTP、数据库或 Skill。模板只能在该上限内缩小授权；Web
+需要独立 Provider 激活和明确的 Agent 授权。
 
 ## 固定版本与自动化参数
 
@@ -140,6 +170,22 @@ bash install.sh --version v0.2.0 --no-start
 改变数据目录和命令链接目录。运行 `bash install.sh --help` 查看完整参数。
 `--local-images` 专用于带明确 `--version` 和 `--bundle` 的本地 Release 演练，
 普通用户不需要手工传入它。
+
+非交互 setup 必须显式给出 Web 选择、能力模板和所需确认。例如有既有逻辑 Secret
+引用时可以运行：
+
+```bash
+nico --json setup \
+  --provider deepseek \
+  --credential-ref secret:providers/deepseek \
+  --model <exact-model-id> \
+  --project <project-id> \
+  --starter-name nico-assistant \
+  --starter-display-name "Nico Assistant" \
+  --enable-web --web-provider searxng \
+  --capability-profile web_research \
+  --accept-risk medium --approve-tools --yes
+```
 
 ## 使用 Hermes Runtime
 
@@ -260,7 +306,9 @@ Docker Engine、共享镜像缓存，或用户自行配置的外部 Secret。
 make run
 ```
 
-`make run` 会自动同步 editable CLI，并把 `nico` 链接到
+`make run` 默认把 PostgreSQL、Redis、MinIO 和 SearXNG 作为 Compose 基础服务，
+其余 API、Worker、Sandbox Runner 和前端从源码运行，不构建应用镜像。它会自动同步
+editable CLI，并把 `nico` 链接到
 `NICO_BIN_DIR`（默认 `~/.local/bin`）。它还会在源码数据库中校验 development
 tenant/project，并使用 `.nico/dev` 保存独立的 CLI profile 和 Provider 密钥，
 不会复用 Release 安装的 `~/.nico`。另一个终端可直接运行：

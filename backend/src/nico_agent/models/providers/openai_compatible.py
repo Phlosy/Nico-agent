@@ -28,6 +28,7 @@ from nico_agent.models.http_safety import (
     normalize_token_count,
     raise_transport_error,
 )
+from nico_agent.models.tool_names import ProviderToolNames
 
 
 class OpenAICompatibleProvider:
@@ -73,7 +74,8 @@ class OpenAICompatibleProvider:
             request.endpoint, "chat/completions", model=request.model
         )
         secret = self.http.resolve_secret(request.endpoint)
-        body = self._request_body(request)
+        tool_names = ProviderToolNames.from_definitions(request.tools)
+        body = self._request_body(request, tool_names)
         timeout = self.http.timeout(request.timeout_seconds)
         try:
             async with self.client.stream(
@@ -141,7 +143,7 @@ class OpenAICompatibleProvider:
                         if not isinstance(tool_calls, list):
                             raise ModelProtocolError("tool call delta must be an array")
                         for tool_call in tool_calls:
-                            yield self._tool_delta(tool_call, request_id)
+                            yield self._tool_delta(tool_call, request_id, tool_names)
                 yield ModelStreamEvent(
                     type=ModelStreamEventType.RESPONSE_COMPLETED,
                     finish_reason=finish_reason,
@@ -205,10 +207,14 @@ class OpenAICompatibleProvider:
         return ModelDiscoveryResult(models=tuple(models), truncated=overflow)
 
     @staticmethod
-    def _request_body(request: ModelRequest) -> dict[str, Any]:
+    def _request_body(
+        request: ModelRequest,
+        tool_names: ProviderToolNames | None = None,
+    ) -> dict[str, Any]:
+        tool_names = tool_names or ProviderToolNames.from_definitions(request.tools)
         body: dict[str, Any] = {
             "model": request.model,
-            "messages": [_message_body(message) for message in request.messages],
+            "messages": [_message_body(message, tool_names) for message in request.messages],
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -223,7 +229,7 @@ class OpenAICompatibleProvider:
                 {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": tool_names.encode(tool.name),
                         "description": tool.description,
                         "parameters": tool.input_schema,
                     },
@@ -259,7 +265,11 @@ class OpenAICompatibleProvider:
         )
 
     @staticmethod
-    def _tool_delta(value: Any, request_id: str | None) -> ModelStreamEvent:
+    def _tool_delta(
+        value: Any,
+        request_id: str | None,
+        tool_names: ProviderToolNames,
+    ) -> ModelStreamEvent:
         if not isinstance(value, dict) or type(value.get("index")) is not int or value["index"] < 0:
             raise ModelProtocolError("tool call delta is invalid")
         function = value.get("function") or {}
@@ -269,7 +279,11 @@ class OpenAICompatibleProvider:
             type=ModelStreamEventType.TOOL_CALL_DELTA,
             tool_index=value["index"],
             tool_call_id=str(value["id"]) if value.get("id") is not None else None,
-            tool_name=str(function["name"]) if function.get("name") is not None else None,
+            tool_name=(
+                tool_names.decode(str(function["name"]))
+                if function.get("name") is not None
+                else None
+            ),
             tool_arguments_delta=(
                 str(function["arguments"]) if function.get("arguments") is not None else None
             ),
@@ -277,8 +291,15 @@ class OpenAICompatibleProvider:
         )
 
 
-def _message_body(message: Any) -> dict[str, Any]:
+def _message_body(message: Any, tool_names: ProviderToolNames) -> dict[str, Any]:
     body = message.model_dump(exclude_none=True)
     if not message.tool_calls:
         body.pop("tool_calls", None)
+    else:
+        for call in body.get("tool_calls", []):
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and isinstance(function.get("name"), str):
+                function["name"] = tool_names.encode(function["name"])
+    if isinstance(body.get("name"), str):
+        body["name"] = tool_names.encode(body["name"])
     return body

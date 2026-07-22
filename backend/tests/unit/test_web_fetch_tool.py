@@ -131,7 +131,7 @@ def _context(config=None):
 def test_web_fetch_contract_is_exact_bounded_and_medium_risk() -> None:
     spec = WebFetchExecutor.spec
 
-    assert spec.reference == "web.fetch@1.0.0"
+    assert spec.reference == "web.fetch@1.1.0"
     assert spec.permission == "network.web.fetch"
     assert spec.risk.value == "medium"
     assert spec.max_output_bytes == 131_072
@@ -233,6 +233,45 @@ async def test_valid_fetch_extracts_bounds_and_wraps_untrusted_content() -> None
     assert len(result.output["sha256"]) == 64
     assert result.usage["origin"] == "https://docs.example"
     assert len(cache.sets) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_the_frozen_dns_resolver_http_client() -> None:
+    system_http = FakeHttp(_response(b"system"))
+    cloudflare_http = FakeHttp(_response(b"cloudflare"))
+    executor = WebFetchExecutor(
+        FakeAuthorizer(),
+        http=system_http,
+        resolver_http={"cloudflare": cloudflare_http},
+    )
+    context = _context()
+    context.tool_config["dns_resolver"] = "cloudflare"
+
+    result = await executor.execute(
+        context,
+        {"url": "https://docs.example/guide"},
+        {},
+    )
+
+    assert result.output["content"] == "cloudflare"
+    assert cloudflare_http.calls == 1
+    assert system_http.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_rejects_an_unavailable_frozen_dns_resolver() -> None:
+    executor = WebFetchExecutor(FakeAuthorizer(), http=FakeHttp(_response()))
+    context = _context()
+    context.tool_config["dns_resolver"] = "custom-unavailable"
+
+    with pytest.raises(ToolExecutorFailure) as captured:
+        await executor.execute(
+            context,
+            {"url": "https://docs.example/guide"},
+            {},
+        )
+
+    assert captured.value.code == "WEB_FETCH_NOT_CONFIGURED"
 
 
 @pytest.mark.asyncio

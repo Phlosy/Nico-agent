@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from nico_agent.models import (
     ModelMessage,
     ModelRequest,
     ModelStreamEventType,
+    ModelToolDefinition,
 )
 from nico_agent.models.providers import (
     AnthropicMessagesProvider,
@@ -52,6 +54,41 @@ def _request(protocol: str, base_url: str, model: str) -> ModelRequest:
 
 def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _tool_request(protocol: str, base_url: str, model: str) -> ModelRequest:
+    return ModelRequest(
+        model=model,
+        messages=(
+            ModelMessage(role="user", content="Search for Nico"),
+            ModelMessage(
+                role="assistant",
+                tool_calls=(
+                    {
+                        "id": "previous-call",
+                        "type": "function",
+                        "function": {"name": "web.search", "arguments": "{}"},
+                    },
+                ),
+            ),
+            ModelMessage(role="tool", content="{}", tool_call_id="previous-call"),
+            ModelMessage(role="user", content="Search again"),
+        ),
+        endpoint=_endpoint(protocol, base_url),
+        tools=(
+            ModelToolDefinition(
+                name="web.search",
+                description="Search the public Web",
+                input_schema={"type": "object"},
+            ),
+        ),
+        max_output_tokens=16,
+    )
+
+
+def _assert_provider_safe_tool_name(value: str) -> None:
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value)
+    assert value != "web.search"
 
 
 @pytest.mark.asyncio
@@ -244,3 +281,124 @@ async def test_openai_discovery_deduplicates_and_truncates() -> None:
 
     assert [model.id for model in result.models] == ["model-a"]
     assert result.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_maps_dotted_tool_names_at_the_wire_boundary() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        wire_name = body["tools"][0]["function"]["name"]
+        _assert_provider_safe_tool_name(wire_name)
+        assert body["messages"][1]["tool_calls"][0]["function"]["name"] == wire_name
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": wire_name, "arguments": "{}"},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+        ]
+        payload = "".join(f"data: {json.dumps(item)}\n\n" for item in chunks)
+        return httpx.Response(200, content=(payload + "data: [DONE]\n\n").encode())
+
+    provider = OpenAICompatibleProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    response = await ModelGateway(ModelProviderRegistry([provider]), max_attempts=1).complete(
+        _tool_request("openai_compatible", "https://models.example/v1", "deepseek-test")
+    )
+
+    assert response.tool_calls[0].name == "web.search"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_maps_dotted_tool_names_at_the_wire_boundary() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        wire_name = body["tools"][0]["name"]
+        _assert_provider_safe_tool_name(wire_name)
+        assert body["messages"][1]["content"][0]["name"] == wire_name
+        payloads = [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": wire_name,
+                    "input": {},
+                },
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 1},
+            },
+            {"type": "message_stop"},
+        ]
+        content = "".join(f"data: {json.dumps(item)}\n\n" for item in payloads)
+        return httpx.Response(200, content=content)
+
+    provider = AnthropicMessagesProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    response = await ModelGateway(ModelProviderRegistry([provider]), max_attempts=1).complete(
+        _tool_request("anthropic_messages", "https://api.anthropic.com", "claude-test")
+    )
+
+    assert response.tool_calls[0].name == "web.search"
+
+
+@pytest.mark.asyncio
+async def test_gemini_maps_dotted_tool_names_at_the_wire_boundary() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        declaration = body["tools"][0]["functionDeclarations"][0]
+        wire_name = declaration["name"]
+        _assert_provider_safe_tool_name(wire_name)
+        assert body["contents"][1]["parts"][0]["functionCall"]["name"] == wire_name
+        chunk = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"functionCall": {"name": wire_name, "args": {}}}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 2,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 3,
+            },
+        }
+        return httpx.Response(200, content=f"data: {json.dumps(chunk)}\n\n")
+
+    provider = GoogleGeminiProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    response = await ModelGateway(ModelProviderRegistry([provider]), max_attempts=1).complete(
+        _tool_request(
+            "google_gemini",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-test",
+        )
+    )
+
+    assert response.tool_calls[0].name == "web.search"

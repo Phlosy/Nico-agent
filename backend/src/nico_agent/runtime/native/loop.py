@@ -72,6 +72,7 @@ from nico_agent.runtime.native.reflection import (
     parse_reflection,
     reflection_response_format,
 )
+from nico_agent.runtime.native.setup_proof import execute_setup_proof
 from nico_agent.tools.errors import ToolApprovalRequired
 
 Emit = Callable[[RuntimeEventType, str | None, dict[str, Any]], Awaitable[None]]
@@ -110,6 +111,13 @@ class NativeAgentLoop:
         )
         token = _intervention_handler.set(handler)
         try:
+            if request.budgets.get("setup_proof") is True:
+                return await execute_setup_proof(
+                    request,
+                    services=services,
+                    emit=emit,
+                    cancelled=cancelled,
+                )
             if request.execution_mode is RuntimeExecutionMode.DIRECT:
                 return await self._execute_direct(request, emit=emit, cancelled=cancelled)
             if request.execution_mode is RuntimeExecutionMode.REACT:

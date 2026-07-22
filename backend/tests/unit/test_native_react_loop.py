@@ -19,6 +19,7 @@ from nico_agent.models.gateway import ModelGateway
 from nico_agent.models.registry import ModelProviderRegistry
 from nico_agent.runtime.contracts import (
     ContextSeed,
+    RuntimeDisposition,
     RuntimeEventType,
     RuntimeExecutionMode,
     RuntimeIntervention,
@@ -31,6 +32,7 @@ from nico_agent.runtime.contracts import (
 )
 from nico_agent.runtime.native.checkpoint import make_react_checkpoint
 from nico_agent.runtime.native.provider import NicoNativeRuntimeProvider
+from nico_agent.tools.errors import ToolApprovalRequired
 
 
 class SequencedModelProvider:
@@ -101,7 +103,7 @@ class RecordingWebToolHandler:
             ),
             RuntimeToolSpec(
                 name="web.fetch",
-                version="1.0.0",
+                version="1.1.0",
                 description="Fetch an observed Web result",
                 input_schema={"type": "object"},
             ),
@@ -142,6 +144,24 @@ class RecordingWebToolHandler:
                 },
             },
         )
+
+
+class ApprovalSuspendingWebToolHandler(RecordingWebToolHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetch_suspended = False
+
+    async def execute_tool(self, intent: RuntimeToolIntent) -> RuntimeToolOutcome:
+        if intent.name == "web.fetch" and not self.fetch_suspended:
+            self.intents.append(intent)
+            self.fetch_suspended = True
+            raise ToolApprovalRequired(
+                approval_id=uuid4(),
+                tool_call_id=uuid4(),
+                run_step_id=uuid4(),
+                risk_level="medium",
+            )
+        return await super().execute_tool(intent)
 
 
 class RecordingCoordinationHandler:
@@ -443,6 +463,101 @@ async def test_react_composes_search_fetch_and_cites_observed_url() -> None:
     assert len(model.requests) == 3
     assert outcome.checkpoint["observed_web_urls"] == ["https://docs.example/nico"]
     assert outcome.checkpoint["citation_repair_attempted"] is False
+
+
+@pytest.mark.asyncio
+async def test_setup_proof_is_platform_orchestrated_without_model_calls() -> None:
+    handler = RecordingWebToolHandler()
+    model = SequencedModelProvider([])
+    provider = _native(model)
+    request = _request(
+        budgets={
+            "setup_proof": True,
+            "tool_allow": ["web.search@1.0.0", "web.fetch@1.1.0"],
+        }
+    )
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=handler),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert [intent.name for intent in handler.intents] == ["web.search", "web.fetch"]
+    assert handler.intents[1].arguments == {
+        "url": handler.source_url,
+        "search_tool_call_id": handler.search_tool_call_id,
+    }
+    assert outcome.output["content"].endswith(handler.source_url)
+    assert outcome.checkpoint["execution_mode"] == "setup_proof"
+    assert outcome.checkpoint["loop_state"] == "completed"
+    assert model.requests == []
+
+
+@pytest.mark.asyncio
+async def test_setup_proof_resumes_the_same_fetch_after_approval() -> None:
+    handler = ApprovalSuspendingWebToolHandler()
+    model = SequencedModelProvider([])
+    provider = _native(model)
+    request = _request(
+        budgets={
+            "setup_proof": True,
+            "tool_allow": ["web.search@1.0.0", "web.fetch@1.1.0"],
+        }
+    )
+    session = await provider.create_session(request)
+
+    suspended = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=handler),
+    )
+
+    assert suspended.disposition is RuntimeDisposition.SUSPENDED
+    assert suspended.checkpoint["loop_state"] == "fetching"
+    assert suspended.wake_condition["type"] == "tool_approval"
+
+    resumed_request = request.model_copy(update={"checkpoint": suspended.checkpoint})
+    resumed_session = await provider.create_session(resumed_request)
+    completed = await provider.execute(
+        resumed_session.external_session_id,
+        resumed_request,
+        RuntimeServices(tool_handler=handler),
+    )
+
+    assert completed.status is RuntimeSessionStatus.COMPLETED
+    assert [intent.name for intent in handler.intents] == [
+        "web.search",
+        "web.fetch",
+        "web.fetch",
+    ]
+    assert handler.intents[1].idempotency_key == handler.intents[2].idempotency_key
+    assert model.requests == []
+
+
+@pytest.mark.asyncio
+async def test_setup_proof_fails_closed_when_exact_web_tools_are_unavailable() -> None:
+    model = SequencedModelProvider([])
+    provider = _native(model)
+    request = _request(
+        budgets={
+            "setup_proof": True,
+            "tool_allow": ["web.search@1.0.0", "web.fetch@1.1.0"],
+        }
+    )
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=RecordingToolHandler()),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.FAILED
+    assert outcome.error["code"] == "SETUP_PROOF_TOOLS_UNAVAILABLE"
+    assert model.requests == []
 
 
 @pytest.mark.asyncio

@@ -36,7 +36,7 @@ class ListingHandler:
             ),
             RuntimeToolSpec(
                 name="web.fetch",
-                version="1.0.0",
+                version="1.1.0",
                 description="Fetch an observed Web source",
                 input_schema={
                     "type": "object",
@@ -105,7 +105,7 @@ async def test_real_hermes_0182_discovers_only_nico_mcp_tools(tmp_path: Path) ->
         assert process.returncode == 0, output
         assert "nico" in output.lower()
         assert "web.search" in output or "nico__web_search__v1_0_0" in output
-        assert "web.fetch" in output or "nico__web_fetch__v1_0_0" in output
+        assert "web.fetch" in output or "nico__web_fetch__v1_1_0" in output
         assert tool_session.token not in output
         assert "terminal" not in output.lower()
     finally:

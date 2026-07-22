@@ -77,6 +77,29 @@ def build_tool_policy_snapshot(
     }
 
 
+def narrow_tool_policy_snapshot(
+    snapshot: dict[str, Any],
+    allowed_references: object,
+) -> dict[str, Any]:
+    """Apply a Run-level allowlist that can only remove Agent-authorized Tools."""
+
+    narrowed = deepcopy(snapshot)
+    requested = _string_set(allowed_references)
+    current = _string_set(snapshot.get("allow"))
+    allow = current & requested
+    configs = _mapping(snapshot.get("tools"))
+    narrowed["allow"] = sorted(allow)
+    narrowed["tools"] = {
+        reference: deepcopy(configs[reference])
+        for reference in sorted(allow)
+        if reference in configs
+    }
+    errors = snapshot.get("errors")
+    narrowed["errors"] = list(errors) if isinstance(errors, list) else []
+    narrowed["errors"].append("Run tool allowlist narrowed the Agent policy")
+    return narrowed
+
+
 def authorize_tool(
     snapshot: dict[str, Any],
     spec: ToolDefinitionSpec,

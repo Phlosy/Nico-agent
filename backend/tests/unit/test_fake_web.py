@@ -5,6 +5,7 @@ import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from nico_agent.models.tool_names import provider_safe_tool_name
 from nico_agent.testing.fake_model import app as model_app
 from nico_agent.testing.fake_web import EVIDENCE_URL
 from nico_agent.testing.fake_web import app as web_app
@@ -41,7 +42,7 @@ async def test_fake_model_scripts_search_fetch_and_observed_url_citation() -> No
     ) as client:
         search_response = await _complete(client, headers, messages)
         search_call = _tool_call(search_response)
-        assert search_call["function"]["name"] == "web.search"
+        assert search_call["function"]["name"] == provider_safe_tool_name("web.search")
 
         messages.extend(
             [
@@ -61,7 +62,7 @@ async def test_fake_model_scripts_search_fetch_and_observed_url_citation() -> No
         fetch_response = await _complete(client, headers, messages)
         fetch_call = _tool_call(fetch_response)
         fetch_arguments = json.loads(fetch_call["function"]["arguments"])
-        assert fetch_call["function"]["name"] == "web.fetch"
+        assert fetch_call["function"]["name"] == provider_safe_tool_name("web.fetch")
         assert fetch_arguments == {
             "url": EVIDENCE_URL,
             "search_tool_call_id": "00000000-0000-4000-8000-000000000001",
@@ -125,6 +126,26 @@ async def test_fake_model_does_not_invent_an_unadvertised_tool() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_fake_model_rejects_provider_invalid_tool_names() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=model_app), base_url="http://model"
+    ) as client:
+        response = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer goal-g-fake-token"},
+            json={
+                "model": "web-e2e-fake",
+                "messages": [{"role": "user", "content": "search"}],
+                "stream": True,
+                "tools": [{"type": "function", "function": {"name": "web.search"}}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid provider Tool function name"
+
+
 async def _complete(client: AsyncClient, headers: dict, messages: list[dict]) -> list[dict]:
     response = await client.post(
         "/v1/chat/completions",
@@ -134,8 +155,14 @@ async def _complete(client: AsyncClient, headers: dict, messages: list[dict]) ->
             "messages": messages,
             "stream": True,
             "tools": [
-                {"type": "function", "function": {"name": "web.search"}},
-                {"type": "function", "function": {"name": "web.fetch"}},
+                {
+                    "type": "function",
+                    "function": {"name": provider_safe_tool_name("web.search")},
+                },
+                {
+                    "type": "function",
+                    "function": {"name": provider_safe_tool_name("web.fetch")},
+                },
             ],
         },
     )

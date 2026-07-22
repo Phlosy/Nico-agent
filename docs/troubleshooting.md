@@ -109,6 +109,7 @@ Start with:
 ```bash
 nico web status
 nico web test
+nico setup --status
 nico doctor
 ```
 
@@ -118,8 +119,29 @@ set `NICO_WEB_PROVIDER_WRITES_ENABLED=true` on the local API/Worker before confi
 not contain both tenant and version grants. Publish with `nico web configure`; changing tenant
 settings alone does not mutate a frozen AgentVersion. `WEB_PROVIDER_RATE_LIMITED` is a bounded
 429 and should be retried after the Provider interval; `WEB_PROVIDER_UNAVAILABLE` indicates
-network/5xx/DNS failure. For local SearXNG, run `make run WEB_SEARCH=searxng` and confirm its
-health before `nico web test`.
+network/5xx/DNS failure. For source development, plain `make run` starts SearXNG by default;
+use `make run WEB_SEARCH=brave` only when intentionally using Brave. Release installations start
+SearXNG with the selected Runtime profile. Confirm `searxng` health before `nico web test`.
+
+`WEB_FETCH_TARGET_DENIED` 且 `getent ahosts <公开域名>` 返回 `198.18.*`，通常表示本机
+代理启用了 Fake-IP。不要允许整个 `198.18.0.0/15` 网段；运行
+`nico setup --reconfigure web` 并选择 `cloudflare` 或 `google` DoH，再发布新的
+AgentVersion。DoH 只改变 DNS 来源，页面目标仍必须通过公网地址与逐跳重定向校验。
+升级到 `web.fetch@1.1.0` 后，旧 AgentVersion 仍冻结在 `1.0.0`；依次重新配置 Web 和
+能力会移除旧引用并发布新版本，平台不会原地改写已启用的 ToolDefinition。
+
+If `setup --status` reports model and Web ready but capabilities incomplete, configure the
+selected Agent rather than editing tenant settings:
+
+```bash
+nico agent capabilities <agent-id>
+```
+
+If verification is failed, rerun `nico setup`. The proof is platform-orchestrated and does not
+depend on the model choosing Search or Fetch. Its failure class distinguishes Provider,
+authorization, approval, exact Tool availability, tool execution, fetch provenance, resource
+bounds and final citation; completed Provider and AgentVersion changes remain usable. A skipped
+Web step is a partial-ready state, not a failure.
 
 `WEB_FETCH_SOURCE_DENIED` means Fetch did not receive the platform `tool_call_id` for a
 successful Search in the same Run, or the URL was not in that result/allowlist. Do not weaken

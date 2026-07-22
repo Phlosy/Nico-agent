@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from nico_agent.models.tool_names import provider_safe_tool_name
 
 app = FastAPI(title="Nico Native Runtime Fake Model", docs_url=None, redoc_url=None)
 
@@ -162,6 +165,7 @@ async def chat_completions(
         raise HTTPException(status_code=401, detail="invalid model credential")
     if not command.stream:
         raise HTTPException(status_code=400, detail="streaming is required")
+    _require_provider_safe_tool_names(command)
 
     async def chunks() -> AsyncIterator[str]:
         tool_observations = sum(message.get("role") == "tool" for message in command.messages)
@@ -214,7 +218,7 @@ async def chat_completions(
         elif _has_tool(command, "file.write") and tool_observations == 0:
             values = _tool_chunks(
                 call_id="goal-h-file-write",
-                name="file.write",
+                name=provider_safe_tool_name("file.write"),
                 arguments={
                     "path": "goal-h/recovery-proof.txt",
                     "content": "written exactly once before worker recovery\n",
@@ -223,7 +227,7 @@ async def chat_completions(
         elif _has_tool(command, "python.execute") and tool_observations == 1:
             values = _tool_chunks(
                 call_id="goal-h-python",
-                name="python.execute",
+                name=provider_safe_tool_name("python.execute"),
                 arguments={"code": "result = {'sum': sum(range(6)), 'proof': 'sandbox'}"},
             )
         elif tool_observations >= 2:
@@ -310,7 +314,7 @@ def _web_e2e_chunks(command: ChatRequest, tool_observations: int) -> list[dict]:
     if tool_observations == 0:
         return _tool_chunks(
             call_id="web-e2e-search",
-            name="web.search",
+            name=provider_safe_tool_name("web.search"),
             arguments={"query": "current Nico offline evidence", "count": 1},
         )
     observations = _tool_observation_payloads(command.messages)
@@ -326,7 +330,7 @@ def _web_e2e_chunks(command: ChatRequest, tool_observations: int) -> list[dict]:
             raise HTTPException(status_code=422, detail="search observation is incomplete")
         return _tool_chunks(
             call_id="web-e2e-fetch",
-            name="web.fetch",
+            name=provider_safe_tool_name("web.fetch"),
             arguments={"url": url, "search_tool_call_id": tool_call_id},
         )
     fetched = observations[-1].get("output")
@@ -352,10 +356,19 @@ def _tool_observation_payloads(messages: list[dict]) -> list[dict]:
 
 
 def _has_tool(command: ChatRequest, name: str) -> bool:
+    wire_name = provider_safe_tool_name(name)
     return any(
-        isinstance(tool, dict) and tool.get("function", {}).get("name") == name
+        isinstance(tool, dict) and tool.get("function", {}).get("name") == wire_name
         for tool in command.tools
     )
+
+
+def _require_provider_safe_tool_names(command: ChatRequest) -> None:
+    for tool in command.tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) is None:
+            raise HTTPException(status_code=422, detail="invalid provider Tool function name")
 
 
 def _goal_j_delay() -> float:

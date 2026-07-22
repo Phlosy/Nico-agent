@@ -11,7 +11,7 @@ NICO_HOME ?= $(HOME)/.nico
 NICO_BIN_DIR ?= $(HOME)/.local/bin
 RUNTIME ?= native
 PROVIDER ?=
-WEB_SEARCH ?= brave
+WEB_SEARCH ?= searxng
 INSTALL_ARGS ?=
 
 BACKEND_IMAGE = nico-agent-backend:$(TAG)

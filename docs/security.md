@@ -87,6 +87,17 @@ Private, loopback, link-local, metadata, reserved, mixed-scope and disallowed-po
 fail closed; only the exact deployment-owned SearXNG endpoint may receive an explicit private
 exception.
 
+For Fake-IP deployments, a frozen `cloudflare` or `google` DNS-over-HTTPS resolver may bootstrap
+through a private/Fake-IP address only for its platform-owned exact HTTPS endpoint. TLS hostname
+verification remains mandatory, arbitrary DoH URLs are not accepted, and every returned page IP
+still passes the normal strict-public and mixed-scope checks before a pinned connection.
+
+Guided setup uses a dedicated, model-free Search → Fetch → Final proof state machine. It can
+invoke only the two exact frozen Web Tool versions, remains subject to normal approval and
+source-provenance checks, and cites only the validated Fetch `final_url`. Fetched page content
+is not sent to the configured model during this setup proof. Ordinary Agent Runs do not enter
+this state machine unless they carry the bounded setup-proof scope.
+
 Search queries and fetched content can contain personal or confidential data and may be sent
 to the configured Provider/source. Human CLI progress, Event/Audit summaries and application
 logs exclude raw Provider payloads and page bodies; ToolCall retains bounded results for the

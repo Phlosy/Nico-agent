@@ -34,6 +34,7 @@ from nico_agent.web_onboarding.contracts import (
     WebPreviewCreate,
     WebProbeCreate,
     WebProviderCandidate,
+    WebSearchPolicy,
 )
 from nico_agent.web_onboarding.service import WebOnboardingService
 
@@ -182,6 +183,7 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
             provider="brave",
             endpoint_key="managed",
             credential_ref="env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST",
+            policy=WebSearchPolicy(dns_resolver="cloudflare"),
             catalog_revision=get_web_provider_catalog(settings).catalog_revision,
         )
         probe = await _verified_web_probe(database, service, context, candidate)
@@ -208,6 +210,8 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
             "web_search_brave_api_key": "env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_TEST"
         }
         assert projected_agent_policy["secrets"] == ["web_search_brave_api_key"]
+        assert projected_tenant_policy["tools"]["web.fetch@1.1.0"]["dns_resolver"] == ("cloudflare")
+        assert projected_agent_policy["tools"]["web.fetch@1.1.0"]["dns_resolver"] == ("cloudflare")
 
         activated = await service.activate(
             context,
@@ -236,6 +240,7 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
             new_version = await session.get(AgentVersion, activated.agent_version_id)
             assert tenant is not None and tenant.revision == tenant_revision + 1
             assert tenant.settings["web_provider"]["provider"] == "brave"
+            assert tenant.settings["web_provider"]["dns_resolver"] == "cloudflare"
             assert agent is not None and agent.current_version_id == new_version.id
             assert old_version is not None and old_version.status == "superseded"
             assert old_version.tool_policy == {
@@ -246,7 +251,7 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
             assert new_version is not None and new_version.status == "published"
             assert new_version.role == "researcher"
             assert new_version.model_name == "test-model"
-            assert {"web.search@1.0.0", "web.fetch@1.0.0"} <= set(new_version.tool_policy["allow"])
+            assert {"web.search@1.0.0", "web.fetch@1.1.0"} <= set(new_version.tool_policy["allow"])
             assert (
                 await session.scalar(
                     select(func.count())
@@ -257,6 +262,87 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
                     )
                 )
                 == 2
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_only_web_activation_does_not_publish_agent_version() -> None:
+    settings = Settings(
+        environment="test",
+        web_provider_writes_enabled=True,
+        _env_file=None,
+    )
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    service = WebOnboardingService(database, settings)
+    try:
+        (
+            tenant_id,
+            tenant_revision,
+            _project_id,
+            agent_id,
+            agent_revision,
+            old_version_id,
+        ) = await _seed_existing_agent(database)
+        context = TenantContext(tenant_id, "web-provider-only-test", uuid4())
+        candidate = WebProviderCandidate(
+            provider="searxng",
+            endpoint_key="configured",
+            catalog_revision=get_web_provider_catalog(settings).catalog_revision,
+        )
+        probe = await _verified_web_probe(database, service, context, candidate)
+        preview = await service.preview_activation(
+            context,
+            WebPreviewCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                scope="provider_only",
+                expected_tenant_revision=tenant_revision,
+            ),
+        )
+        assert "agent_version" not in preview.projection
+        activated = await service.activate(
+            context,
+            WebActivationCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                scope="provider_only",
+                expected_tenant_revision=tenant_revision,
+                preview_hash=preview.preview_hash,
+            ),
+        )
+        repeated = await service.activate(
+            context,
+            WebActivationCreate(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                scope="provider_only",
+                expected_tenant_revision=tenant_revision,
+                preview_hash=preview.preview_hash,
+            ),
+        )
+        assert repeated == activated
+        assert activated.scope == "provider_only"
+        assert activated.agent_version_id is None
+        async with database.tenant_transaction(context) as session:
+            tenant = await session.get(Tenant, tenant_id)
+            agent = await session.get(Agent, agent_id)
+            assert tenant is not None
+            assert tenant.settings["guided_setup"]["web_intent"] == "enabled"
+            assert agent is not None and agent.revision == agent_revision
+            assert agent.current_version_id == old_version_id
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(AgentVersion)
+                    .where(
+                        AgentVersion.tenant_id == tenant_id,
+                        AgentVersion.agent_id == agent_id,
+                    )
+                )
+                == 1
             )
     finally:
         await engine.dispose()

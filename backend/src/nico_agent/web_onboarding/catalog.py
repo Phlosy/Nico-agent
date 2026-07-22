@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from nico_agent.config import Settings
 from nico_agent.web_onboarding.contracts import (
+    WebDnsResolverChoice,
     WebEndpointChoice,
     WebProviderCatalog,
     WebProviderPreset,
 )
 
-CATALOG_REVISION = "2026-07-22"
+CATALOG_REVISION = "2026-07-22.2"
 
 
 def get_web_provider_catalog(settings: Settings) -> WebProviderCatalog:
     defaults = {
+        "dns_resolver": "system",
         "safe_search": "moderate",
         "cache_ttl_seconds": settings.web_search_cache_ttl_seconds,
         "rate_limit_per_minute": 20,
@@ -21,6 +23,28 @@ def get_web_provider_catalog(settings: Settings) -> WebProviderCatalog:
     }
     return WebProviderCatalog(
         catalog_revision=CATALOG_REVISION,
+        dns_resolvers=(
+            WebDnsResolverChoice(
+                key="system",
+                label="System DNS",
+                description=(
+                    "Use the operating-system resolver; choose this when DNS returns real IPs."
+                ),
+            ),
+            WebDnsResolverChoice(
+                key="cloudflare",
+                label="Cloudflare DNS-over-HTTPS",
+                description=(
+                    "Resolve real public IPs through encrypted DNS; compatible with Fake-IP."
+                ),
+                recommended=True,
+            ),
+            WebDnsResolverChoice(
+                key="google",
+                label="Google Public DNS-over-HTTPS",
+                description="Resolve real public IPs through Google Public DNS.",
+            ),
+        ),
         providers=(
             WebProviderPreset(
                 key="brave",

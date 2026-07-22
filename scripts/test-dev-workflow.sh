@@ -33,7 +33,10 @@ RUN_OUTPUT="$("$ROOT_DIR/scripts/local-dev.sh" --dry-run run)"
 assert_contains "$RUN_OUTPUT" 'pip install' 'automatic editable CLI synchronization'
 assert_contains "$RUN_OUTPUT" 'backend\[dev\]' 'automatic editable CLI synchronization'
 assert_contains "$RUN_OUTPUT" 'nico-dev' 'local nico command installation'
-assert_contains "$RUN_OUTPUT" 'up --detach --no-build postgres redis minio minio-init' \
+assert_contains "$RUN_OUTPUT" '--profile web-search-local' \
+  'default SearXNG Compose profile'
+assert_contains "$RUN_OUTPUT" \
+  'up --detach --no-build postgres redis minio minio-init searxng' \
   'local dependency startup'
 assert_contains "$RUN_OUTPUT" '/alembic' 'local migrations'
 assert_contains "$RUN_OUTPUT" 'upgrade\ head' 'local migrations'
@@ -204,6 +207,10 @@ touch "$LIVE_ROOT/frontend/node_modules/.bin/vite"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
+  'if [[ "${1:-}" == "-m" && "${2:-}" == "nico_agent.local_defaults" ]]; then' \
+  '  printf '\''{"skill_policy":{"allowed_skill_ids":[],"enabled":false,"scopes":[]},"tool_policy":{"allow":[],"permissions":[],"secret_refs":{},"tools":{}}}\n'\''' \
+  '  exit 0' \
+  'fi' \
   'if [[ "${1:-}" == "-m" && "${2:-}" == "nico_agent.worker" ]]; then' \
   '  printf "ready\n" > "$NICO_WORKER_HEALTH_MARKER"' \
   '  printf "%s\n" "$$" >> "$FAKE_PROCESS_LOG"' \

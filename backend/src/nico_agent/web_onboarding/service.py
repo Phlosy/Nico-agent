@@ -24,6 +24,7 @@ from nico_agent.domain.models import (
     ProviderProbe,
     Tenant,
 )
+from nico_agent.guided_setup.service import merge_guided_setup_ledger
 from nico_agent.web_onboarding.catalog import get_web_provider_catalog, provider_preset
 from nico_agent.web_onboarding.contracts import (
     WebActivationCreate,
@@ -105,6 +106,12 @@ class WebOnboardingService:
             configured = provider is not None and bool(configured_web.get("endpoint_key"))
             enabled = configured and configured_web.get("enabled") is True
             candidate_hash = configured_web.get("candidate_hash")
+            dns_resolver_value = configured_web.get("dns_resolver")
+            dns_resolver = (
+                dns_resolver_value
+                if dns_resolver_value in {"system", "cloudflare", "google"}
+                else "system"
+            )
 
             tenant_policy_value = settings.get("tool_policy")
             tenant_policy = tenant_policy_value if isinstance(tenant_policy_value, dict) else {}
@@ -170,6 +177,7 @@ class WebOnboardingService:
                     if configured and configured_web.get("endpoint_key")
                     else None
                 ),
+                dns_resolver=dns_resolver,
                 credential_ref=(
                     str(configured_web["credential_ref"])
                     if configured_web.get("credential_ref")
@@ -412,35 +420,39 @@ class WebOnboardingService:
             tenant.settings = deepcopy(projection["tenant"]["settings"])
             tenant.revision += 1
 
-            agent_projection = projection["agent"]
-            agent = await session.scalar(
-                select(Agent)
-                .where(
-                    Agent.tenant_id == context.tenant_id,
-                    Agent.id == UUID(str(agent_projection["id"])),
+            agent = None
+            version = None
+            if command.scope == "provider_and_agent":
+                assert command.target is not None
+                agent_projection = projection["agent"]
+                agent = await session.scalar(
+                    select(Agent)
+                    .where(
+                        Agent.tenant_id == context.tenant_id,
+                        Agent.id == UUID(str(agent_projection["id"])),
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
-            )
-            if agent is None:
-                agent = Agent(
-                    id=UUID(str(agent_projection["id"])),
-                    tenant_id=context.tenant_id,
-                    name=str(agent_projection["name"]),
-                    display_name=str(agent_projection["display_name"]),
-                    description="Created by guided Web Provider setup.",
-                )
-                session.add(agent)
-                await session.flush()
+                if agent is None:
+                    agent = Agent(
+                        id=UUID(str(agent_projection["id"])),
+                        tenant_id=context.tenant_id,
+                        name=str(agent_projection["name"]),
+                        display_name=str(agent_projection["display_name"]),
+                        description="Created by guided Web Provider setup.",
+                    )
+                    session.add(agent)
+                    await session.flush()
 
-            lifecycle = AgentVersionLifecycle(session, context)
-            version_projection = projection["agent_version"]
-            version = await lifecycle.create(
-                agent,
-                AgentVersionCreate.model_validate(version_projection["command"]),
-                version_id=UUID(str(version_projection["id"])),
-            )
-            expected_revision = command.target.expected_agent_revision or agent.revision
-            await lifecycle.publish(agent, version.id, expected_revision=expected_revision)
+                lifecycle = AgentVersionLifecycle(session, context)
+                version_projection = projection["agent_version"]
+                version = await lifecycle.create(
+                    agent,
+                    AgentVersionCreate.model_validate(version_projection["command"]),
+                    version_id=UUID(str(version_projection["id"])),
+                )
+                expected_revision = command.target.expected_agent_revision or agent.revision
+                await lifecycle.publish(agent, version.id, expected_revision=expected_revision)
 
             activated_at = datetime.now(UTC)
             probe.status = "activated"
@@ -448,15 +460,16 @@ class WebOnboardingService:
             probe.activation_correlation_id = context.correlation_id
             probe.revision += 1
             result = WebActivationRead(
+                scope=command.scope,
                 probe_id=probe.id,
                 candidate_hash=probe.candidate_hash,
                 provider=probe.provider_key,
                 tenant_revision=tenant.revision,
-                agent_id=agent.id,
-                agent_revision=agent.revision,
-                agent_version_id=version.id,
-                agent_version=version.version,
-                project_id=command.target.project_id,
+                agent_id=agent.id if agent is not None else None,
+                agent_revision=agent.revision if agent is not None else None,
+                agent_version_id=version.id if version is not None else None,
+                agent_version=version.version if version is not None else None,
+                project_id=(command.target.project_id if command.target is not None else None),
                 activated_at=activated_at,
             )
             session.add(
@@ -492,12 +505,42 @@ class WebOnboardingService:
         tenant = await session.scalar(tenant_statement)
         if tenant is None:
             raise ResourceNotFound("tenant", str(context.tenant_id))
-        if tenant.revision != command.target.expected_tenant_revision:
+        if tenant.revision != command.tenant_revision:
             raise DomainConflict(
                 "REVISION_CONFLICT",
-                f"tenant revision is {tenant.revision}, expected "
-                f"{command.target.expected_tenant_revision}",
+                f"tenant revision is {tenant.revision}, expected {command.tenant_revision}",
             )
+        tenant_settings = self._tenant_settings(tenant.settings, candidate, probe)
+        if command.scope == "provider_only":
+            tenant_settings = merge_guided_setup_ledger(
+                tenant_settings,
+                web_intent="enabled",
+            )
+            projection: dict[str, Any] = {
+                "schema_version": 1,
+                "scope": "provider_only",
+                "tenant": {
+                    "id": str(tenant.id),
+                    "expected_revision": tenant.revision,
+                    "settings": tenant_settings,
+                },
+            }
+            return WebActivationPreview(
+                probe_id=probe.id,
+                candidate_hash=probe.candidate_hash,
+                preview_hash=_preview_hash(probe.id, probe.candidate_hash, projection),
+                expires_at=probe.verified_at + _PREVIEW_TTL,
+                changed_fields=(
+                    "tenant.settings.tool_policy",
+                    "tenant.settings.web_provider",
+                    "tenant.settings.guided_setup.web_intent",
+                    "tenant.revision",
+                    "provider_probe.status",
+                ),
+                projection=projection,
+            )
+
+        assert command.target is not None
         project_statement = select(Project).where(
             Project.tenant_id == context.tenant_id,
             Project.id == command.target.project_id,
@@ -509,7 +552,6 @@ class WebOnboardingService:
         if project is None:
             raise ResourceNotFound("project", str(command.target.project_id))
 
-        tenant_settings = self._tenant_settings(tenant.settings, candidate, probe)
         agent, agent_projection, current = await self._agent_projection(
             session,
             context,
@@ -520,6 +562,7 @@ class WebOnboardingService:
             current.tool_policy if current is not None else {},
             candidate,
         )
+        self._bind_candidate_hash(agent_tool_policy, probe.candidate_hash)
         lifecycle = AgentVersionLifecycle(session, context)
         if current is not None:
             version_command = lifecycle.command_from_version(
@@ -613,6 +656,7 @@ class WebOnboardingService:
         lock_target: bool,
     ) -> tuple[Agent | None, dict[str, Any], AgentVersion | None]:
         target = command.target
+        assert target is not None
         if target.agent_id is not None:
             statement = select(Agent).where(
                 Agent.tenant_id == context.tenant_id,
@@ -959,16 +1003,31 @@ class WebOnboardingService:
     ) -> dict[str, Any]:
         settings = deepcopy(current or {})
         settings["tool_policy"] = _merge_tenant_policy(settings.get("tool_policy", {}), candidate)
+        WebOnboardingService._bind_candidate_hash(
+            settings["tool_policy"],
+            probe.candidate_hash,
+        )
         settings["web_provider"] = {
             "enabled": True,
             "provider": candidate.provider,
             "endpoint_key": candidate.endpoint_key,
+            "dns_resolver": candidate.policy.dns_resolver,
             "credential_ref": candidate.credential_ref,
             "candidate_hash": probe.candidate_hash,
             "verified_probe_id": str(probe.id),
             "verified_at": probe.verified_at.isoformat() if probe.verified_at else None,
         }
         return settings
+
+    @staticmethod
+    def _bind_candidate_hash(policy: dict[str, Any], candidate_hash: str) -> None:
+        tools = policy.get("tools")
+        if not isinstance(tools, dict):
+            return
+        for reference in (_SEARCH_REF, _FETCH_REF):
+            config = tools.get(reference)
+            if isinstance(config, dict):
+                config["candidate_hash"] = candidate_hash
 
     @staticmethod
     async def _activated_result(

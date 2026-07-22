@@ -61,14 +61,15 @@ export NICO_PRODUCTION_TOKEN='由安全存储提供的令牌'
 nico version [--server]
 nico health [--live]
 nico doctor
-nico setup
+nico setup [--status]
 nico provider add|configure|test|list
+nico web configure|status|test|disable
 nico config path|list|show|set|use|delete
 nico project list|get|new|status|members|open|session|timeline|tasks
 nico project member-add|member-state|lead
 nico project sync|cadence|cycles
 nico project guide|escalate|interventions|withdraw|cancel
-nico agent list|get|versions
+nico agent list|get|versions|create|capabilities
 nico task get
 nico run get|runtime|events|watch
 nico chat [MESSAGE]
@@ -87,7 +88,7 @@ nico run runtime <run-id>
 nico run events <run-id>
 ```
 
-## Provider 引导
+## 首次设置与 Provider 引导
 
 Release 安装后直接运行：
 
@@ -95,9 +96,38 @@ Release 安装后直接运行：
 nico setup
 ```
 
+命令先显示模型、Web、Agent 能力、Search → Fetch 验证四行权威状态。已 ready 的步骤
+直接复用，Web 可明确跳过并得到 partial 状态；只有四项都 ready 才报告 full。单纯
+检查不会启动提示或写入状态：
+
+```bash
+nico setup --status
+```
+
+四项全部 ready 后再次交互运行会显示维护菜单，不会重放凭据输入。自动化可以显式
+选择同一维护路径；先前跳过的 Web 也可以直接恢复：
+
+```bash
+nico setup --reconfigure model
+nico setup --reconfigure web
+nico setup --reconfigure capabilities
+nico setup --reconfigure verification
+nico setup --enable-web
+```
+
+最后的在线验证不依赖所选模型自行决定是否调用工具。平台会在一个独立、可恢复的证明
+Run 中依次执行固定的 Search、从其结果中选择一个 URL 执行 Fetch，再生成只包含已抓取
+来源 URL 的 Final 结果。两次调用仍经过 AgentVersion 冻结策略、Tool Gateway、审批、
+来源绑定和审计；普通 `nico chat` 不使用这条专用状态机。
+
+Web 步骤会单独显示 DNS 解析器选择：`system` 使用操作系统 DNS；`cloudflare`
+（交互推荐）和 `google` 使用平台固定的 DNS-over-HTTPS 端点。Clash 等 Fake-IP 环境应
+选择 DoH。该选择会冻结进 Web Provider policy 和随后发布的 AgentVersion；重新选择时
+运行 `nico setup --reconfigure web`，然后按提示发布新的能力版本。
+
 如果当前 Profile 已有一个发布中的 `nico_native` AgentVersion，并且它引用启用、
-经过真实 completion 验证的 endpoint，命令会直接报告 ready；旧式未验证 endpoint、
-Hermes 路由、draft/superseded 版本或 disabled endpoint 不会跳过向导。管理命令为：
+经过真实 completion 验证的 endpoint，模型步骤会直接复用；旧式未验证 endpoint、
+Hermes 路由、draft/superseded 版本或 disabled endpoint 不会跳过向导。模型管理命令为：
 
 ```bash
 nico provider add openai
@@ -123,7 +153,17 @@ nico --json provider add openai \
 
 CLI 先轮询 Worker 探测，再显示服务端生成的完整预览；activation 必须携带该
 preview hash。取消、超时、`Ctrl+C`、预览过期或激活失败都会走同一个本地回滚
-路径。成功后可以直接运行裸 `nico chat`；旧的显式 Project/Agent 入口仍兼容。
+路径。随后选择 Minimal、Web Research、Developer 或 Custom；Custom 支持全选当前
+可用项、清空和逐项选择，不可用项保留原因。medium/high 风险在发布前合并确认，
+实际调用时仍由 Tool Gateway 审批。也可稍后复用同一选择器：
+
+```bash
+nico agent create <name>
+nico agent capabilities <agent-id>
+```
+
+成功后可以直接运行裸 `nico chat`；旧的显式 Project/Agent 入口仍兼容。能力发布会
+生成新 AgentVersion，既有 Conversation 不变，必须新建 Conversation 才会使用新能力。
 
 ## 独立 Session
 
@@ -235,12 +275,13 @@ CLI 断开不会取消审批，也不会隐式批准。再次运行 `nico chat -
 
 ## Web 搜索配置
 
-Web 能力默认不授权。部署先启用 `NICO_WEB_PROVIDER_WRITES_ENABLED=true`，再通过 CLI
-探测 Provider、预览 tenant policy 与新 AgentVersion，并在确认后原子发布：
+Web 能力默认不对 Agent 授权。本地安装已启用 Provider 写入并启动 SearXNG，首选
+`nico setup` 先做 provider-only 激活，再在能力步骤只授权选中的 Agent。独立维护也可
+通过 CLI 探测 Provider、预览 tenant policy 与新 AgentVersion，并在确认后原子发布：
 
 ```bash
-nico web configure searxng --project <project-id> --agent <agent-id>
-nico web configure brave --project <project-id> --agent <agent-id>
+nico web configure searxng --dns-resolver cloudflare --project <project-id> --agent <agent-id>
+nico web configure brave --dns-resolver system --project <project-id> --agent <agent-id>
 nico web status
 nico web test
 nico web disable --agent <agent-id>
@@ -252,6 +293,10 @@ Brave 的 API key 使用隐藏提示和本地 Secret transaction；也可传
 移除 Search/Fetch 权限的新 AgentVersion；旧 Run 仍按首次领取时冻结的策略完成或由
 operator 取消。`nico web status` 区分未配置、未授权、Secret 不可用、Provider
 不可达与最近 probe 失败。`nico doctor` 同时给出 Web 配置和本地 Secret 可用性诊断。
+
+SearXNG 是本机默认项且无需搜索 Key；Brave 不运行本地搜索服务，但需要受保护的 API
+Key。两种路径最终都使用相同的 `web.search`、来源绑定的 `web.fetch`、审批和审计边界。
+DNS 解析器不是模型参数：模型只能提交搜索结果 URL，不能选择或修改 DoH endpoint。
 
 聊天中普通搜索只显示 `Web search`、读取只显示 `Reading source` 及有界终态；审批
 面板只展示截断 query 或 URL origin。原始 query、页面正文、Provider payload、内部

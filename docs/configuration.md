@@ -183,6 +183,11 @@ mixed-scope DNS targets. The local Compose profile binds SearXNG to
 restart the Worker, run `nico web test`, then publish a new AgentVersion if the reference
 itself changed. Never include a raw key in policy JSON, logs or examples.
 
+Public Fetch DNS is selected in the immutable Web policy rather than an environment variable.
+`system` uses host DNS; `cloudflare` and `google` use platform-owned fixed HTTPS endpoints and
+are intended for Fake-IP networks. Deployments cannot supply an arbitrary DoH URL through a
+Tenant or AgentVersion policy.
+
 ### Python Sandbox Runner
 
 | Setting | Default |

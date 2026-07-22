@@ -68,7 +68,7 @@ from nico_agent.runtime.preparation import (
     build_knowledge_policy_snapshot,
 )
 from nico_agent.runtime.registry import RuntimeProviderRegistry
-from nico_agent.tools.policy import build_tool_policy_snapshot
+from nico_agent.tools.policy import build_tool_policy_snapshot, narrow_tool_policy_snapshot
 
 _ACTIVE_RUN_STATUSES = {
     RunStatus.PENDING,
@@ -275,6 +275,11 @@ class RuntimeExecutionService:
                         if isinstance(inherited_knowledge, dict)
                         else build_knowledge_policy_snapshot({}, {}, {})
                     )
+                if "tool_allow" in run.budgets:
+                    tool_snapshot = narrow_tool_policy_snapshot(
+                        tool_snapshot,
+                        run.budgets.get("tool_allow"),
+                    )
                 runtime_session = RuntimeSession(
                     tenant_id=claim.tenant_id,
                     run_id=run.id,
@@ -318,6 +323,11 @@ class RuntimeExecutionService:
                     version.tool_policy,
                     plugin_refs=version.plugin_refs,
                 )
+                if "tool_allow" in run.budgets:
+                    runtime_session.tool_policy_snapshot = narrow_tool_policy_snapshot(
+                        runtime_session.tool_policy_snapshot,
+                        run.budgets.get("tool_allow"),
+                    )
                 runtime_session.revision += 1
             if not runtime_session.coordination_policy_snapshot:
                 project_member_versions = await self._project_member_version_ids(

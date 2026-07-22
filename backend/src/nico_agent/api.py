@@ -18,6 +18,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from nico_agent.agent_capabilities.api import router as agent_capability_router
 from nico_agent.artifact_api import router as artifact_router
 from nico_agent.config import Settings, get_settings
 from nico_agent.conversations.api import router as conversation_router
@@ -26,6 +27,7 @@ from nico_agent.database import Database
 from nico_agent.domain.errors import AccessDenied, DomainError
 from nico_agent.domain_api import router as domain_router
 from nico_agent.growth_api import router as growth_router
+from nico_agent.guided_setup.api import router as guided_setup_router
 from nico_agent.health import (
     HealthServiceProtocol,
     InfrastructureResources,
@@ -195,7 +197,7 @@ def create_app(
             status_code = 409
         elif isinstance(exc, AccessDenied):
             status_code = 403
-        elif exc.code.startswith(("PROVIDER_", "WEB_")):
+        elif exc.code.startswith(("CAPABILITY_", "PROVIDER_", "WEB_")):
             status_code = 409
         elif exc.code == "DATABASE_UNAVAILABLE":
             status_code = 503
@@ -244,12 +246,14 @@ def create_app(
             },
         )
 
+    app.include_router(agent_capability_router)
     app.include_router(project_collaboration_router)
     app.include_router(domain_router)
     app.include_router(conversation_router)
     app.include_router(artifact_router)
     app.include_router(coordination_router)
     app.include_router(growth_router)
+    app.include_router(guided_setup_router)
     app.include_router(model_router)
     app.include_router(plan_router)
     app.include_router(provider_onboarding_router)

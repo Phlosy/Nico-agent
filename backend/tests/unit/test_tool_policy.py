@@ -5,7 +5,11 @@ import pytest
 from nico_agent.tools import ToolDefinitionSpec, ToolIsolation, ToolRetryPolicy
 from nico_agent.tools.contracts import canonical_hash
 from nico_agent.tools.errors import ToolAccessDenied, ToolSecretUnavailable
-from nico_agent.tools.policy import authorize_tool, build_tool_policy_snapshot
+from nico_agent.tools.policy import (
+    authorize_tool,
+    build_tool_policy_snapshot,
+    narrow_tool_policy_snapshot,
+)
 from nico_agent.tools.secrets import EnvironmentSecretResolver, redact_value, resolve_secrets
 
 
@@ -63,6 +67,34 @@ def test_policy_is_exact_intersection_and_agent_config_can_only_restrict() -> No
         "max_bytes": 1000,
         "follow_redirects": False,
     }
+
+
+def test_run_allowlist_can_only_narrow_agent_authorization() -> None:
+    snapshot = build_tool_policy_snapshot(
+        {
+            "tool_policy": {
+                "allow": ["file.read@1.0.0", "web.search@1.0.0"],
+                "permissions": ["filesystem.read", "network.web.search"],
+                "tools": {
+                    "file.read@1.0.0": {"roots": ["workspace"]},
+                    "web.search@1.0.0": {"provider": "searxng"},
+                },
+            }
+        },
+        {
+            "allow": ["file.read@1.0.0", "web.search@1.0.0"],
+            "permissions": ["filesystem.read", "network.web.search"],
+        },
+    )
+
+    narrowed = narrow_tool_policy_snapshot(
+        snapshot,
+        ["web.search@1.0.0", "database.read@1.0.0"],
+    )
+
+    assert narrowed["allow"] == ["web.search@1.0.0"]
+    assert set(narrowed["tools"]) == {"web.search@1.0.0"}
+    assert snapshot["allow"] == ["file.read@1.0.0", "web.search@1.0.0"]
 
 
 def test_missing_wildcard_and_unavailable_plugin_layers_fail_closed() -> None:

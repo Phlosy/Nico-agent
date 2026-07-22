@@ -20,6 +20,13 @@ services:
     build: !reset null
     pull_policy: ${NICO_PULL_POLICY:-always}
 
+  fake-web:
+    build: !reset null
+    pull_policy: ${NICO_PULL_POLICY:-always}
+
+  searxng:
+    profiles: ["native", "hermes"]
+
   worker-state-init:
     build: !reset null
     pull_policy: ${NICO_PULL_POLICY:-always}

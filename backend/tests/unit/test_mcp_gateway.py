@@ -62,7 +62,7 @@ class FakeWebToolHandler:
             ),
             RuntimeToolSpec(
                 name="web.fetch",
-                version="1.0.0",
+                version="1.1.0",
                 description="Fetch an observed Web source",
                 input_schema={"type": "object"},
             ),
@@ -158,7 +158,7 @@ async def test_mcp_web_search_exposes_platform_id_for_follow_up_fetch() -> None:
                 "id": "fetch",
                 "method": "tools/call",
                 "params": {
-                    "name": tools["web.fetch@1.0.0"]["name"],
+                    "name": tools["web.fetch@1.1.0"]["name"],
                     "arguments": {
                         "url": "https://docs.example/nico",
                         "search_tool_call_id": platform_id,
