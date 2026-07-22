@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from nico_agent.conversations.contracts import (
     ConversationCreate,
     ConversationPatch,
+    ConversationQueueResume,
     ConversationTurnCreate,
     ConversationTurnRetry,
 )
@@ -43,3 +44,14 @@ def test_turn_retry_requires_a_run_identity_and_revision() -> None:
     assert command.expected_run_revision == 3
     with pytest.raises(ValidationError):
         ConversationTurnRetry(expected_run_id=uuid4(), expected_run_revision=0)
+
+
+def test_queue_resume_requires_revision_and_bounded_idempotency_key() -> None:
+    command = ConversationQueueResume(expected_revision=4, idempotency_key="resume-1")
+
+    assert command.expected_revision == 4
+    assert command.idempotency_key == "resume-1"
+    with pytest.raises(ValidationError):
+        ConversationQueueResume(expected_revision=0, idempotency_key="resume-1")
+    with pytest.raises(ValidationError):
+        ConversationQueueResume(expected_revision=1, idempotency_key="x" * 201)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -205,6 +206,18 @@ async def test_personal_conversations_are_idempotent_hidden_and_actor_scoped(app
         headers={**first_headers, "Idempotency-Key": "personal-private-turn"},
     )
     assert turn.status_code == 202, turn.text
+    own_queue = await client.get(
+        f"/api/v1/conversations/{first['id']}/queue",
+        headers=first_headers,
+    )
+    assert own_queue.status_code == 200
+    assert own_queue.json()["head_turn"]["id"] == turn.json()["id"]
+    assert (
+        await client.get(
+            f"/api/v1/conversations/{first['id']}/queue",
+            headers=second_headers,
+        )
+    ).status_code == 404
     for resource in ("tasks", "runs"):
         resource_id = turn.json()["task_id" if resource == "tasks" else "run_id"]
         assert (
@@ -318,13 +331,28 @@ async def test_two_turn_conversation_is_atomic_streamable_resumable_and_version_
         "agent_version_id"
     ] == first_version["id"]
 
-    active_conflict = await client.post(
+    queued_early_response = await client.post(
         f"/api/v1/conversations/{conversation['id']}/turns",
         json={"user_input": "too early"},
         headers={**headers, "Idempotency-Key": "turn-early"},
     )
-    assert active_conflict.status_code == 400
-    assert active_conflict.json()["code"] == "CONVERSATION_RUN_ACTIVE"
+    assert queued_early_response.status_code == 202, queued_early_response.text
+    queued_early = queued_early_response.json()
+    assert queued_early["sequence"] == 2
+    queue = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+    assert queue["state"] == "active"
+    assert queue["head_turn"]["id"] == first["id"]
+    assert queue["active_turn"] is None
+    assert [item["id"] for item in queue["queued_turns"]] == [
+        first["id"],
+        queued_early["id"],
+    ]
+    assert queue["queued_count"] == 2
 
     worker = RuntimeWorker(
         app.state.database,
@@ -340,6 +368,15 @@ async def test_two_turn_conversation_is_atomic_streamable_resumable_and_version_
     assert first_done["status"] == first_done["run_status"] == "completed"
     assert first_done["assistant_output"] == {"answer": "first response"}
     assert first_done["usage"]["steps"] == 2
+    queue = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+    assert queue["head_turn"]["id"] == queued_early["id"]
+    assert queue["queued_count"] == 1
+    assert await worker.execute_once() is True
 
     async with client.stream(
         "GET",
@@ -388,8 +425,18 @@ async def test_two_turn_conversation_is_atomic_streamable_resumable_and_version_
             headers=headers,
         )
     ).json()
-    assert [item["sequence"] for item in history] == [1, 2]
+    assert [item["sequence"] for item in history] == [1, 2, 3]
     assert all(item["status"] == "completed" for item in history)
+    queue = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+    assert queue["head_turn"] is None
+    assert queue["active_turn"] is None
+    assert queue["queued_turns"] == []
+    assert queue["queued_count"] == 0
     continued = (
         await client.get(
             f"/api/v1/conversations?status=active&project_id={project['id']}&limit=1",
@@ -506,7 +553,7 @@ async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(app_clien
 @pytest.mark.asyncio
 async def test_failed_conversation_turn_retries_with_frozen_version(app_client) -> None:
     app, client = app_client
-    _, headers = await _bootstrap(client, "ConversationRetry")
+    tenant_id, headers = await _bootstrap(client, "ConversationRetry")
     project, agent, version = await _project_and_agent(
         client,
         headers,
@@ -522,6 +569,13 @@ async def test_failed_conversation_turn_retries_with_frozen_version(app_client) 
     )
     assert accepted.status_code == 202, accepted.text
     first = accepted.json()
+    successor_response = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/turns",
+        json={"user_input": "wait behind the failed turn"},
+        headers={**headers, "Idempotency-Key": "retry-successor"},
+    )
+    assert successor_response.status_code == 202, successor_response.text
+    successor = successor_response.json()
 
     worker = RuntimeWorker(
         app.state.database,
@@ -534,6 +588,17 @@ async def test_failed_conversation_turn_retries_with_frozen_version(app_client) 
     failed = (await client.get(f"/api/v1/conversation-turns/{first['id']}", headers=headers)).json()
     assert failed["status"] == failed["run_status"] == "failed"
     assert failed["error"]["code"] == "EXPECTED_FAILURE"
+    paused = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+    assert paused["state"] == "paused"
+    assert paused["pause_reason"] == "run_failed"
+    assert paused["pause_turn"]["id"] == first["id"]
+    assert paused["head_turn"]["id"] == successor["id"]
+    assert paused["queued_turns"][0]["id"] == successor["id"]
 
     generic_retry = await client.post(
         f"/api/v1/runs/{failed['run_id']}/retry",
@@ -565,6 +630,17 @@ async def test_failed_conversation_turn_retries_with_frozen_version(app_client) 
     retry_task = (await client.get(f"/api/v1/tasks/{retried['task_id']}", headers=headers)).json()
     assert retry_task["status"] == "running"
 
+    recovery_active = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/queue/resume",
+        json={
+            "expected_revision": paused["revision"] + 1,
+            "idempotency_key": "resume-too-soon",
+        },
+        headers=headers,
+    )
+    assert recovery_active.status_code == 400
+    assert recovery_active.json()["code"] == "CONVERSATION_RECOVERY_ACTIVE"
+
     replay = await client.post(
         f"/api/v1/conversation-turns/{first['id']}/retry",
         json={
@@ -582,6 +658,186 @@ async def test_failed_conversation_turn_retries_with_frozen_version(app_client) 
         headers=headers,
     )
     assert cancelled.status_code == 200, cancelled.text
+
+    paused_after_cancel = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+    stale = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/queue/resume",
+        json={
+            "expected_revision": paused_after_cancel["revision"] - 1,
+            "idempotency_key": "resume-retry-queue",
+        },
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "REVISION_CONFLICT"
+    resumed_response = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/queue/resume",
+        json={
+            "expected_revision": paused_after_cancel["revision"],
+            "idempotency_key": "resume-retry-queue",
+        },
+        headers=headers,
+    )
+    assert resumed_response.status_code == 200, resumed_response.text
+    resumed = resumed_response.json()
+    assert resumed["state"] == "active"
+    assert resumed["head_turn"]["id"] == successor["id"]
+    replay_resume = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/queue/resume",
+        json={
+            "expected_revision": paused_after_cancel["revision"],
+            "idempotency_key": "resume-retry-queue",
+        },
+        headers=headers,
+    )
+    assert replay_resume.status_code == 200
+    assert replay_resume.json()["revision"] == resumed["revision"]
+    context = TenantContext(tenant_id, "retry-cleanup", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        await session.execute(
+            update(Run)
+            .where(Run.tenant_id == tenant_id, Run.status == "pending")
+            .values(
+                status="cancelled",
+                ended_at=datetime.now(UTC),
+                revision=Run.revision + 1,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_conversation_queue_capacity_is_atomic_and_reusable(app_client) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "ConversationQueueCapacity")
+    project, agent, _ = await _project_and_agent(client, headers)
+    conversation = await _create_conversation(
+        client, headers, project, agent, key="conversation-capacity"
+    )
+
+    accepted: list[dict] = []
+    for index in range(20):
+        response = await client.post(
+            f"/api/v1/conversations/{conversation['id']}/turns",
+            json={"user_input": f"queued message {index + 1}"},
+            headers={**headers, "Idempotency-Key": f"capacity-{index + 1}"},
+        )
+        assert response.status_code == 202, response.text
+        accepted.append(response.json())
+
+    context = TenantContext(tenant_id, "capacity-test", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        session.add(
+            ConversationAttachment(
+                tenant_id=tenant_id,
+                conversation_id=UUID(conversation["id"]),
+                name="held.txt",
+                content_type="text/plain",
+                object_key="test/capacity/held.txt",
+                sha256="0" * 64,
+                size_bytes=34,
+                uploaded_by=context.actor_id,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                text_excerpt="consume only after capacity exists",
+                idempotency_key="capacity-attachment",
+            )
+        )
+        await session.flush()
+        before = (
+            await session.scalar(select(func.count(Task.id)).where(Task.tenant_id == tenant_id)),
+            await session.scalar(select(func.count(Run.id)).where(Run.tenant_id == tenant_id)),
+            await session.scalar(select(func.count(Event.id)).where(Event.tenant_id == tenant_id)),
+            await session.scalar(
+                select(func.count(AuditRecord.id)).where(AuditRecord.tenant_id == tenant_id)
+            ),
+        )
+
+    full = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/turns",
+        json={"user_input": "one too many"},
+        headers={**headers, "Idempotency-Key": "capacity-21"},
+    )
+    assert full.status_code == 400
+    assert full.json()["code"] == "CONVERSATION_QUEUE_FULL"
+
+    async with app.state.database.tenant_transaction(context) as session:
+        attachment = await session.scalar(
+            select(ConversationAttachment).where(
+                ConversationAttachment.tenant_id == tenant_id,
+                ConversationAttachment.conversation_id == UUID(conversation["id"]),
+                ConversationAttachment.idempotency_key == "capacity-attachment",
+            )
+        )
+        after = (
+            await session.scalar(select(func.count(Task.id)).where(Task.tenant_id == tenant_id)),
+            await session.scalar(select(func.count(Run.id)).where(Run.tenant_id == tenant_id)),
+            await session.scalar(select(func.count(Event.id)).where(Event.tenant_id == tenant_id)),
+            await session.scalar(
+                select(func.count(AuditRecord.id)).where(AuditRecord.tenant_id == tenant_id)
+            ),
+        )
+    assert attachment is not None and attachment.status == "staged"
+    assert after == before
+
+    cancelled = await client.post(
+        f"/api/v1/conversation-turns/{accepted[-1]['id']}/cancel",
+        json={"expected_revision": accepted[-1]["run_revision"]},
+        headers=headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    latest_conversation = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}",
+            headers=headers,
+        )
+    ).json()
+    archive_active = await client.patch(
+        f"/api/v1/conversations/{conversation['id']}",
+        json={
+            "expected_revision": latest_conversation["revision"],
+            "status": "archived",
+        },
+        headers=headers,
+    )
+    assert archive_active.status_code == 400
+    assert archive_active.json()["code"] == "CONVERSATION_RUN_ACTIVE"
+    compact_active = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/compact",
+        json={},
+        headers={**headers, "Idempotency-Key": "capacity-compact-active"},
+    )
+    assert compact_active.status_code == 400
+    assert compact_active.json()["code"] == "CONVERSATION_RUN_ACTIVE"
+    replacement = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/turns",
+        json={"user_input": "replacement message"},
+        headers={**headers, "Idempotency-Key": "capacity-replacement"},
+    )
+    assert replacement.status_code == 202, replacement.text
+    assert replacement.json()["sequence"] == 21
+    async with app.state.database.tenant_transaction(context) as session:
+        attachment = await session.scalar(
+            select(ConversationAttachment).where(
+                ConversationAttachment.tenant_id == tenant_id,
+                ConversationAttachment.conversation_id == UUID(conversation["id"]),
+                ConversationAttachment.idempotency_key == "capacity-attachment",
+            )
+        )
+    assert attachment is not None and attachment.status == "consumed"
+    async with app.state.database.tenant_transaction(context) as session:
+        await session.execute(
+            update(Run)
+            .where(Run.tenant_id == tenant_id, Run.status == "pending")
+            .values(
+                status="cancelled",
+                ended_at=datetime.now(UTC),
+                revision=Run.revision + 1,
+            )
+        )
 
 
 @pytest.mark.asyncio

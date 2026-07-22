@@ -16,6 +16,8 @@ from nico_agent.conversations.contracts import (
     ConversationCompactAccepted,
     ConversationCreate,
     ConversationPatch,
+    ConversationQueueRead,
+    ConversationQueueResume,
     ConversationTurnCreate,
     ConversationTurnRead,
     ConversationTurnRetry,
@@ -41,6 +43,7 @@ from nico_agent.domain.models import (
 from nico_agent.domain.states import (
     AgentStatus,
     AgentVersionStatus,
+    ConversationQueueState,
     ConversationStatus,
     ConversationTurnStatus,
     RunStatus,
@@ -54,6 +57,7 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.CANCELLED.value,
     RunStatus.TIMED_OUT.value,
 }
+_CONVERSATION_QUEUE_CAPACITY = 20
 
 
 class ConversationService:
@@ -282,11 +286,24 @@ class ConversationService:
                     )
                 return await self._turn_view(session, context, existing)
 
-            active_run = await self._last_run(session, conversation)
-            if active_run is not None and active_run.status not in _TERMINAL_RUN_STATUSES:
+            queued_count = await session.scalar(
+                select(func.count(ConversationTurn.id))
+                .join(
+                    Run,
+                    (Run.tenant_id == ConversationTurn.tenant_id)
+                    & (Run.id == ConversationTurn.run_id),
+                )
+                .where(
+                    ConversationTurn.tenant_id == context.tenant_id,
+                    ConversationTurn.conversation_id == conversation.id,
+                    Run.status == RunStatus.PENDING.value,
+                )
+            )
+            if (queued_count or 0) >= _CONVERSATION_QUEUE_CAPACITY:
                 raise DomainConflict(
-                    "CONVERSATION_RUN_ACTIVE",
-                    "wait for or cancel the active turn before submitting another",
+                    "CONVERSATION_QUEUE_FULL",
+                    "conversation queue already contains the maximum 20 unstarted Turns",
+                    details={"capacity": _CONVERSATION_QUEUE_CAPACITY},
                 )
             if await self._active_compaction(session, conversation) is not None:
                 raise DomainConflict(
@@ -660,6 +677,95 @@ class ConversationService:
             ).all()
             return [self._view(turn, run) for turn, run in rows]
 
+    async def get_queue(
+        self,
+        context: TenantContext,
+        conversation_id: UUID,
+    ) -> ConversationQueueRead:
+        async with self.database.tenant_transaction(context) as session:
+            conversation = await self._conversation(session, context, conversation_id)
+            return await self._queue_view(session, conversation)
+
+    async def resume_queue(
+        self,
+        context: TenantContext,
+        conversation_id: UUID,
+        command: ConversationQueueResume,
+    ) -> ConversationQueueRead:
+        async with self.database.tenant_transaction(context) as session:
+            conversation = await self._conversation(
+                session, context, conversation_id, for_update=True
+            )
+            replay = await session.scalar(
+                select(AuditRecord.id).where(
+                    AuditRecord.tenant_id == context.tenant_id,
+                    AuditRecord.action == "conversation.queue.resume",
+                    AuditRecord.resource_type == "conversation",
+                    AuditRecord.resource_id == conversation.id,
+                    AuditRecord.details.contains({"idempotency_key": command.idempotency_key}),
+                )
+            )
+            if replay is not None:
+                return await self._queue_view(session, conversation)
+            require_revision(
+                "conversation",
+                expected=command.expected_revision,
+                actual=conversation.revision,
+            )
+            queue_state = ConversationQueueState(conversation.queue_state)
+            if queue_state is not ConversationQueueState.PAUSED:
+                raise DomainConflict(
+                    "CONVERSATION_QUEUE_NOT_PAUSED",
+                    "conversation queue is not paused",
+                )
+            pause_turn = await session.scalar(
+                select(ConversationTurn).where(
+                    ConversationTurn.tenant_id == context.tenant_id,
+                    ConversationTurn.conversation_id == conversation.id,
+                    ConversationTurn.id == conversation.queue_pause_turn_id,
+                )
+            )
+            if pause_turn is None:
+                raise ResourceNotFound("conversation_turn", str(conversation.queue_pause_turn_id))
+            pause_run = await session.scalar(
+                select(Run).where(
+                    Run.tenant_id == context.tenant_id,
+                    Run.id == pause_turn.run_id,
+                )
+            )
+            if pause_run is None:
+                raise ResourceNotFound("run", str(pause_turn.run_id))
+            if pause_run.status not in _TERMINAL_RUN_STATUSES:
+                raise DomainConflict(
+                    "CONVERSATION_RECOVERY_ACTIVE",
+                    "wait for the pause-causing Turn retry to finish before resuming",
+                )
+
+            previous_reason = conversation.queue_pause_reason
+            previous_turn_id = conversation.queue_pause_turn_id
+            conversation.queue_state = ConversationQueueState.ACTIVE.value
+            conversation.queue_pause_reason = None
+            conversation.queue_pause_turn_id = None
+            conversation.queue_paused_at = None
+            conversation.revision += 1
+            conversation.updated_at = datetime.now(UTC)
+            self._record(
+                session,
+                context,
+                event_type="ConversationQueueResumed",
+                aggregate_type="conversation",
+                aggregate_id=conversation.id,
+                action="conversation.queue.resume",
+                payload={
+                    "idempotency_key": command.idempotency_key,
+                    "previous_pause_reason": previous_reason,
+                    "previous_pause_turn_id": str(previous_turn_id),
+                    "revision": conversation.revision,
+                },
+            )
+            await session.flush()
+            return await self._queue_view(session, conversation)
+
     async def get_turn(self, context: TenantContext, turn_id: UUID) -> ConversationTurnRead:
         async with self.database.tenant_transaction(context) as session:
             turn = await self._turn(session, context, turn_id)
@@ -697,10 +803,14 @@ class ConversationService:
                 raise DomainConflict(
                     "CONVERSATION_ARCHIVED", "cannot retry a turn in an archived conversation"
                 )
-            if conversation.last_turn_id != turn.id:
+            if (
+                ConversationQueueState(conversation.queue_state)
+                is not ConversationQueueState.PAUSED
+                or conversation.queue_pause_turn_id != turn.id
+            ):
                 raise DomainConflict(
-                    "CONVERSATION_TURN_NOT_LATEST",
-                    "only the latest conversation turn can be retried",
+                    "CONVERSATION_RETRY_NOT_PAUSE_CAUSE",
+                    "only the Turn that paused the conversation queue can be retried",
                 )
             if turn.run_id != command.expected_run_id:
                 raise DomainConflict(
@@ -898,6 +1008,52 @@ class ConversationService:
             updated_at=turn.updated_at,
         )
 
+    async def _queue_view(
+        self,
+        session: AsyncSession,
+        conversation: Conversation,
+    ) -> ConversationQueueRead:
+        rows = (
+            await session.execute(
+                select(ConversationTurn, Run)
+                .join(
+                    Run,
+                    (Run.tenant_id == ConversationTurn.tenant_id)
+                    & (Run.id == ConversationTurn.run_id),
+                )
+                .where(
+                    ConversationTurn.tenant_id == conversation.tenant_id,
+                    ConversationTurn.conversation_id == conversation.id,
+                )
+                .order_by(ConversationTurn.sequence)
+            )
+        ).all()
+        views = [(turn, run, self._view(turn, run)) for turn, run in rows]
+        nonterminal = [item for item in views if item[1].status not in _TERMINAL_RUN_STATUSES]
+        queued = [item[2] for item in nonterminal if item[1].status == RunStatus.PENDING.value]
+        active = next(
+            (item[2] for item in nonterminal if item[1].status != RunStatus.PENDING.value),
+            None,
+        )
+        pause = next(
+            (item[2] for item in views if item[0].id == conversation.queue_pause_turn_id),
+            None,
+        )
+        return ConversationQueueRead(
+            conversation_id=conversation.id,
+            revision=conversation.revision,
+            state=conversation.queue_state,
+            pause_reason=conversation.queue_pause_reason,
+            pause_turn_id=conversation.queue_pause_turn_id,
+            paused_at=conversation.queue_paused_at,
+            head_turn=nonterminal[0][2] if nonterminal else None,
+            active_turn=active,
+            pause_turn=pause,
+            queued_turns=queued,
+            queued_count=len(queued),
+            capacity=_CONVERSATION_QUEUE_CAPACITY,
+        )
+
     async def _turn_view(
         self,
         session: AsyncSession,
@@ -913,8 +1069,20 @@ class ConversationService:
 
     @staticmethod
     async def _require_no_active_run(session: AsyncSession, conversation: Conversation) -> None:
-        run = await ConversationService._last_run(session, conversation)
-        if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
+        active_run = await session.scalar(
+            select(Run.id)
+            .join(
+                ConversationTurn,
+                (ConversationTurn.tenant_id == Run.tenant_id) & (ConversationTurn.run_id == Run.id),
+            )
+            .where(
+                ConversationTurn.tenant_id == conversation.tenant_id,
+                ConversationTurn.conversation_id == conversation.id,
+                Run.status.not_in(_TERMINAL_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+        if active_run is not None:
             raise DomainConflict(
                 "CONVERSATION_RUN_ACTIVE", "cannot archive a conversation with an active Run"
             )
@@ -960,22 +1128,6 @@ class ConversationService:
                 "PROJECT_SESSION_CONVERSATION_STALE",
                 "this historical Conversation is read-only; open the current Project Session",
             )
-
-    @staticmethod
-    async def _last_run(session: AsyncSession, conversation: Conversation) -> Run | None:
-        if conversation.last_turn_id is None:
-            return None
-        return await session.scalar(
-            select(Run)
-            .join(
-                ConversationTurn,
-                (ConversationTurn.tenant_id == Run.tenant_id) & (ConversationTurn.run_id == Run.id),
-            )
-            .where(
-                ConversationTurn.tenant_id == conversation.tenant_id,
-                ConversationTurn.id == conversation.last_turn_id,
-            )
-        )
 
     @staticmethod
     async def _active_compaction(session: AsyncSession, conversation: Conversation) -> Run | None:

@@ -8,7 +8,14 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from nico_agent.domain.states import ConversationStatus, ConversationTurnStatus, RunStatus
+from nico_agent.domain.states import (
+    ConversationApprovalMode,
+    ConversationQueuePauseReason,
+    ConversationQueueState,
+    ConversationStatus,
+    ConversationTurnStatus,
+    RunStatus,
+)
 
 
 class FromAttributesModel(BaseModel):
@@ -57,6 +64,11 @@ class ConversationRead(FromAttributesModel):
     summary_input_hash: str | None
     summary_model_call_id: UUID | None
     last_turn_id: UUID | None
+    approval_mode: ConversationApprovalMode
+    queue_state: ConversationQueueState
+    queue_pause_reason: ConversationQueuePauseReason | None
+    queue_pause_turn_id: UUID | None
+    queue_paused_at: datetime | None
     created_by: str
     revision: int
     created_at: datetime
@@ -132,6 +144,26 @@ class ConversationTurnRetry(BaseModel):
     token_budget: int | None = Field(default=None, ge=1)
     timeout_seconds: int | None = Field(default=None, ge=1, le=604_800)
     budgets: dict | None = None
+
+
+class ConversationQueueResume(BaseModel):
+    expected_revision: int = Field(ge=1)
+    idempotency_key: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=200)
+
+
+class ConversationQueueRead(BaseModel):
+    conversation_id: UUID
+    revision: int
+    state: ConversationQueueState
+    pause_reason: ConversationQueuePauseReason | None
+    pause_turn_id: UUID | None
+    paused_at: datetime | None
+    head_turn: ConversationTurnRead | None
+    active_turn: ConversationTurnRead | None
+    pause_turn: ConversationTurnRead | None
+    queued_turns: list[ConversationTurnRead]
+    queued_count: int = Field(ge=0)
+    capacity: int = Field(default=20, ge=1)
 
 
 class ConversationTurnAccepted(ConversationTurnRead):

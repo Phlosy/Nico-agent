@@ -17,6 +17,8 @@ from nico_agent.conversations.contracts import (
     ConversationCompactAccepted,
     ConversationCreate,
     ConversationPatch,
+    ConversationQueueRead,
+    ConversationQueueResume,
     ConversationRead,
     ConversationTurnAccepted,
     ConversationTurnCreate,
@@ -140,6 +142,37 @@ async def list_conversation_turns(
         after_sequence=after_sequence,
         limit=limit,
     )
+
+
+@router.get(
+    "/conversations/{conversation_id}/queue",
+    response_model=ConversationQueueRead,
+)
+async def get_conversation_queue(
+    conversation_id: UUID,
+    service: Service,
+    context: Context,
+):
+    return await service.get_queue(context, conversation_id)
+
+
+@router.post(
+    "/conversations/{conversation_id}/queue/resume",
+    response_model=ConversationQueueRead,
+)
+async def resume_conversation_queue(
+    conversation_id: UUID,
+    command: ConversationQueueResume,
+    service: Service,
+    context: Context,
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", min_length=1, max_length=200),
+    ] = None,
+):
+    if idempotency_key is not None:
+        command = command.model_copy(update={"idempotency_key": idempotency_key})
+    return await service.resume_queue(context, conversation_id, command)
 
 
 @router.post(
