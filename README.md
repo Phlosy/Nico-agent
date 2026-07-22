@@ -384,6 +384,7 @@ Runtime 负责执行 Agent 并返回规范化事件和结果。它不能导入�
 | Nico CLI | Beta | chat、exec/detach/watch、resume/continue/history、summary/context snapshot、attach/download/compact、敏感工具审批与恢复、Rich/coin-cat、JSON/no-color 和 SIGINT 语义已通过真实服务测试 |
 | Python Sandbox | Beta | 已通过真实一次性 Docker 隔离测试；Runner 仍持有 Docker Socket |
 | HTTP Read | Beta | 已实现 GET/HEAD、白名单、DNS/IP、重定向、大小控制和 SSRF 测试 |
+| Web Search / Fetch | Beta | Brave/SearXNG、持久化审批、同 Run 来源授权、抽取和引用检查已通过离线全链路；live Provider 需部署方凭据 |
 | Database Read | Beta | 已实现参数化 SELECT/WITH、最小权限角色检查和行数、时间、输出限制 |
 | Memory Publication | Beta | 已通过 Candidate → Evaluation → 独立 Approval → 发布与检索 E2E |
 | Skill Promotion | Beta | 已通过不可变修订、灰度、推广、禁用和回滚 E2E |
@@ -435,6 +436,8 @@ docker compose --profile hermes up --detach --build worker-hermes
 | `http.read@1.0.0` | 执行 HTTP GET/HEAD | 域名白名单、SSRF 检查、重定向和响应大小限制 |
 | `database.read@1.0.0` | 执行参数化只读查询 | 使用独立最小权限数据源；仅允许单条 SELECT/WITH，并限制行数、时间和输出 |
 | `python.execute@1.0.0` | 执行受限 Python | 一次性非 root 容器、无网络、只读根目录，并限制 CPU、内存、PID、时间和输出 |
+| `web.search@1.0.0` | 使用 Brave 或 SearXNG 搜索当前 Web | Provider 与策略冻结、条件 Secret、cache/限流隔离，结果标为不可信 |
+| `web.fetch@1.0.0` | 读取本 Run 搜索到的来源 | 必须关联 Search ToolCall 或冻结域名；逐跳 SSRF 检查、有界抽取与引用 |
 
 工具默认拒绝。有效权限是 Tenant 策略与不可变 AgentVersion 策略的交集。Secret 通过逻辑引用在 Tool Gateway 内解析，不会进入 Prompt、Event、轨迹或 API 输出。详细说明参见[Tool Gateway 与 Sandbox](docs/tool-gateway.md)。
 

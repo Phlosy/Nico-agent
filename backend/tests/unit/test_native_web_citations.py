@@ -62,9 +62,7 @@ def test_citation_requires_an_exact_observed_url_not_a_prefix() -> None:
     assert not output_has_observed_web_citation(
         {"content": "See https://example.com/source-pretend."}, observed
     )
-    assert not output_has_observed_web_citation(
-        {"content": "No link was included."}, observed
-    )
+    assert not output_has_observed_web_citation({"content": "No link was included."}, observed)
 
 
 def test_old_native_checkpoint_hashes_remain_loadable() -> None:

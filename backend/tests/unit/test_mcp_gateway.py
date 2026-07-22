@@ -168,9 +168,7 @@ async def test_mcp_web_search_exposes_platform_id_for_follow_up_fetch() -> None:
         )
 
         assert platform_id == handler.search_tool_call_id
-        assert fetched["result"]["structuredContent"]["final_url"] == (
-            "https://docs.example/nico"
-        )
+        assert fetched["result"]["structuredContent"]["final_url"] == ("https://docs.example/nico")
         assert [intent.name for intent in handler.intents] == ["web.search", "web.fetch"]
         assert "_nico.tool_call_id" in tools["web.search@1.0.0"]["description"]
     finally:

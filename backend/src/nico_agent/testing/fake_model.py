@@ -209,6 +209,8 @@ async def chat_completions(
             values = _goal_k_chunks(command)
         elif command.model == "goal-j-fake":
             values = _goal_j_chunks(command, tool_observations)
+        elif command.model == "web-e2e-fake":
+            values = _web_e2e_chunks(command, tool_observations)
         elif command.tools and tool_observations == 0:
             values = _tool_chunks(
                 call_id="goal-h-file-write",
@@ -302,6 +304,51 @@ def _goal_k_chunks(command: ChatRequest) -> list[dict]:
     return _text_chunks(
         "Goal K source evidence: reviewed knowledge must be published before runtime reuse."
     )
+
+
+def _web_e2e_chunks(command: ChatRequest, tool_observations: int) -> list[dict]:
+    if tool_observations == 0:
+        return _tool_chunks(
+            call_id="web-e2e-search",
+            name="web.search",
+            arguments={"query": "current Nico offline evidence", "count": 1},
+        )
+    observations = _tool_observation_payloads(command.messages)
+    if tool_observations == 1:
+        search = observations[-1]
+        output = search.get("output")
+        results = output.get("results") if isinstance(output, dict) else None
+        if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+            raise HTTPException(status_code=422, detail="search observation has no result")
+        url = results[0].get("url")
+        tool_call_id = search.get("tool_call_id")
+        if not isinstance(url, str) or not isinstance(tool_call_id, str):
+            raise HTTPException(status_code=422, detail="search observation is incomplete")
+        return _tool_chunks(
+            call_id="web-e2e-fetch",
+            name="web.fetch",
+            arguments={"url": url, "search_tool_call_id": tool_call_id},
+        )
+    fetched = observations[-1].get("output")
+    final_url = fetched.get("final_url") if isinstance(fetched, dict) else None
+    if not isinstance(final_url, str):
+        raise HTTPException(status_code=422, detail="fetch observation has no final URL")
+    return _text_chunks(f"Verified offline Web evidence: {final_url}")
+
+
+def _tool_observation_payloads(messages: list[dict]) -> list[dict]:
+    payloads: list[dict] = []
+    for message in messages:
+        if message.get("role") != "tool" or not isinstance(message.get("content"), str):
+            continue
+        try:
+            payload = json.loads(message["content"])
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="tool observation is not JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="tool observation is not an object")
+        payloads.append(payload)
+    return payloads
 
 
 def _has_tool(command: ChatRequest, name: str) -> bool:

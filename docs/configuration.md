@@ -163,6 +163,26 @@ not trust the rest of the local network by default.
 
 Loopback HTTP requires both platform configuration and an Agent policy opt-in and is intended only for tests. Database read sources must use separately provisioned least-privilege credentials referenced by policy; the platform database credential must not be reused.
 
+### Web search and fetch
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `NICO_WEB_PROVIDER_WRITES_ENABLED` | `false` | Allow transactional Web Provider activation/disable |
+| `NICO_WEB_SEARXNG_ENDPOINT` | `http://127.0.0.1:18888/search` | Deployment-owned SearXNG JSON endpoint |
+| `NICO_WEB_SEARXNG_ALLOW_PRIVATE` | `false` | Permit the exact configured private/loopback endpoint |
+| `NICO_WEB_CONNECT_TIMEOUT_SECONDS` | `5` | Search/fetch connection deadline |
+| `NICO_WEB_READ_TIMEOUT_SECONDS` | `10` | Search/fetch read deadline |
+| `NICO_WEB_SEARCH_MAX_RESPONSE_BYTES` | `524288` | Maximum raw Search response |
+| `NICO_WEB_SEARCH_CACHE_TTL_SECONDS` | `900` | Default semantic Search cache TTL |
+
+`NICO_WEB_SEARXNG_ALLOW_PRIVATE` only relaxes the exact deployment-configured SearXNG
+origin; it does not permit `web.fetch` to access private, loopback, link-local, metadata or
+mixed-scope DNS targets. The local Compose profile binds SearXNG to
+`127.0.0.1:18888`. Brave credentials use an environment reference such as
+`env:NICO_TOOL_SECRET_WEB_SEARCH_BRAVE_LOCAL`; rotate the referenced environment value and
+restart the Worker, run `nico web test`, then publish a new AgentVersion if the reference
+itself changed. Never include a raw key in policy JSON, logs or examples.
+
 ### Python Sandbox Runner
 
 | Setting | Default |

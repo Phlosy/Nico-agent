@@ -169,9 +169,14 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
     database = Database(engine)
     service = WebOnboardingService(database, settings)
     try:
-        tenant_id, tenant_revision, project_id, agent_id, agent_revision, old_version_id = (
-            await _seed_existing_agent(database)
-        )
+        (
+            tenant_id,
+            tenant_revision,
+            project_id,
+            agent_id,
+            agent_revision,
+            old_version_id,
+        ) = await _seed_existing_agent(database)
         context = TenantContext(tenant_id, "web-onboarding-test", uuid4())
         candidate = WebProviderCandidate(
             provider="brave",
@@ -241,9 +246,7 @@ async def test_web_activation_merges_policies_and_publishes_one_immutable_versio
             assert new_version is not None and new_version.status == "published"
             assert new_version.role == "researcher"
             assert new_version.model_name == "test-model"
-            assert {"web.search@1.0.0", "web.fetch@1.0.0"} <= set(
-                new_version.tool_policy["allow"]
-            )
+            assert {"web.search@1.0.0", "web.fetch@1.0.0"} <= set(new_version.tool_policy["allow"])
             assert (
                 await session.scalar(
                     select(func.count())
@@ -272,9 +275,14 @@ async def test_web_activation_rolls_back_tenant_when_version_publish_fails(
     database = Database(engine)
     service = WebOnboardingService(database, settings)
     try:
-        tenant_id, tenant_revision, project_id, agent_id, agent_revision, _ = (
-            await _seed_existing_agent(database)
-        )
+        (
+            tenant_id,
+            tenant_revision,
+            project_id,
+            agent_id,
+            agent_revision,
+            _,
+        ) = await _seed_existing_agent(database)
         context = TenantContext(tenant_id, "web-rollback-test", uuid4())
         candidate = WebProviderCandidate(
             provider="searxng",
@@ -396,9 +404,7 @@ async def test_web_activation_can_publish_a_starter_agent_from_verified_model_ro
             assert version.execution_mode == "react"
             assert version.model_name == "test-model"
             assert version.tool_policy["secrets"] == []
-            assert version.tool_policy["tools"]["web.search@1.0.0"]["provider"] == (
-                "searxng"
-            )
+            assert version.tool_policy["tools"]["web.search@1.0.0"]["provider"] == ("searxng")
     finally:
         await engine.dispose()
 
@@ -452,9 +458,14 @@ async def test_web_status_test_and_disable_preserve_immutable_versions() -> None
     database = Database(engine)
     service = WebOnboardingService(database, settings)
     try:
-        tenant_id, tenant_revision, project_id, agent_id, agent_revision, old_version_id = (
-            await _seed_existing_agent(database)
-        )
+        (
+            tenant_id,
+            tenant_revision,
+            project_id,
+            agent_id,
+            agent_revision,
+            old_version_id,
+        ) = await _seed_existing_agent(database)
         context = TenantContext(tenant_id, "web-disable-test", uuid4())
         candidate = WebProviderCandidate(
             provider="searxng",
@@ -543,9 +554,7 @@ async def test_web_status_test_and_disable_preserve_immutable_versions() -> None
             assert tenant.settings["web_provider"]["enabled"] is False
             assert tenant.settings["tool_policy"]["allow"] == ["file.read@1.0.0"]
             assert agent is not None and agent.current_version_id == disabled_version.id
-            assert original is not None and original.tool_policy["allow"] == [
-                "file.read@1.0.0"
-            ]
+            assert original is not None and original.tool_policy["allow"] == ["file.read@1.0.0"]
             assert web_version is not None
             assert "web.search@1.0.0" in web_version.tool_policy["allow"]
             assert disabled_version is not None

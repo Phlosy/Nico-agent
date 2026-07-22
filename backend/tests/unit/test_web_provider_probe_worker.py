@@ -56,9 +56,7 @@ async def test_web_probe_uses_registry_and_resolves_only_brave_secret() -> None:
         },
     }
 
-    brave_result, brave_verified = await worker._execute(
-        {**base, "provider_key": "brave"}
-    )
+    brave_result, brave_verified = await worker._execute({**base, "provider_key": "brave"})
     searxng_result, searxng_verified = await worker._execute(
         {
             **base,

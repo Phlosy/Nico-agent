@@ -102,6 +102,30 @@ endpoint policy and protocol failures without persisting the upstream response b
 Model discovery failure is non-fatal in the interactive flow: choose a recommended
 or exact manual model ID.
 
+## Web search is unavailable or disabled
+
+Start with:
+
+```bash
+nico web status
+nico web test
+nico doctor
+```
+
+`WEB_PROVIDER_WRITES_DISABLED` means deployment policy has not enabled Web configuration;
+set `NICO_WEB_PROVIDER_WRITES_ENABLED=true` on the local API/Worker before configuring.
+`WEB_SEARCH_NOT_CONFIGURED` or an unauthorized status means the selected AgentVersion does
+not contain both tenant and version grants. Publish with `nico web configure`; changing tenant
+settings alone does not mutate a frozen AgentVersion. `WEB_PROVIDER_RATE_LIMITED` is a bounded
+429 and should be retried after the Provider interval; `WEB_PROVIDER_UNAVAILABLE` indicates
+network/5xx/DNS failure. For local SearXNG, run `make run WEB_SEARCH=searxng` and confirm its
+health before `nico web test`.
+
+`WEB_FETCH_SOURCE_DENIED` means Fetch did not receive the platform `tool_call_id` for a
+successful Search in the same Run, or the URL was not in that result/allowlist. Do not weaken
+SSRF policy to bypass it. After `nico web disable`, existing frozen Runs may still finish with
+their old grant; new Runs must use the newly published Web-disabled version.
+
 ## Project Session is read-only or guidance is rejected
 
 `PROJECT_SESSION_READ_ONLY` 表示成员已 paused/removed，或 Project 已 archived。

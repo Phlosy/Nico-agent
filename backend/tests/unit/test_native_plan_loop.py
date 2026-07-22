@@ -583,8 +583,7 @@ async def test_plan_tool_recovery_reuses_pre_action_idempotency_key() -> None:
     assert len(recovered_handler.intents) == 1
     assert recovered_handler.cached is True
     assert (
-        recovered_handler.intents[0].idempotency_key
-        == initial_handler.intents[0].idempotency_key
+        recovered_handler.intents[0].idempotency_key == initial_handler.intents[0].idempotency_key
     )
     assert recovered_model.requests[0].metadata["call_key"] == (
         "plan:1:step:report:attempt:1:round:2"
@@ -681,9 +680,7 @@ async def test_plan_pending_citation_repair_respects_token_budget() -> None:
         citation_provisional_output=provisional,
         usage={"total_tokens": 50, "model_calls": 3},
     )
-    request = base_request.model_copy(
-        update={"checkpoint": checkpoint.model_dump(mode="json")}
-    )
+    request = base_request.model_copy(update={"checkpoint": checkpoint.model_dump(mode="json")})
     model = SequencedStructuredProvider(
         [{"output": {"content": "Source: https://docs.example/nico"}}]
     )

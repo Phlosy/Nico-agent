@@ -26,8 +26,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_provider_probes_protocol",
         "provider_probes",
-        "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini', "
-        "'web_search')",
+        "protocol IN ('openai_compatible', 'anthropic_messages', 'google_gemini', 'web_search')",
     )
     op.drop_constraint(
         "ck_provider_probes_credential_ref",

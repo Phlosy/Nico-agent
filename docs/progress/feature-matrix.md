@@ -1,6 +1,6 @@
 # 功能矩阵
 
-最后更新：2026-07-19 UTC。`未实现` 表示尚未进入对应 Goal；`不适用` 表示该阶段不以测试占位冒充行为实现。
+最后更新：2026-07-22 UTC。`未实现` 表示尚未进入对应 Goal；`不适用` 表示该阶段不以测试占位冒充行为实现。
 
 | 功能 | 设计完成 | 代码完成 | 单测完成 | 集成测试 | E2E | 文档 | 最终状态 |
 | -- | ---- | ---- | ---- | ---- | --- | -- | ---- |
@@ -24,6 +24,7 @@
 | HermesRuntimeProvider | 已设计 | 默认关闭的 v2 CLI Adapter、0.18.2 fail-closed、resume/取消/脱敏导出、每 Run HOME、仅 Nico MCP 和可选 Compose profile 已实现 | disabled/missing/version/success/failure/cancel/resume/redaction、诚实 capability 与历史 session 已覆盖 | 真实 MCP boundary、legacy telemetry 持久化与 Provider 不改写通过 | 默认栈失败关闭，fake/local Hermes v2 profile 成功，无 Native fallback | Runtime/Tool/配置/部署/故障排查已完成 | Goal L Adapter 已实现；credentialed Hermes inference 未执行 |
 | Tool Registry 与权限交集 | 已设计 | 精确 name@version Registry、不可变 Definition、租户∩AgentVersion 冻结策略、默认拒绝与实现 Hash 校验已实现 | Registry/Hash/权限/Schema/Secret/幂等/重试/取消已覆盖 | PostgreSQL RLS、并发同键、租约恢复、跨租户已通过 | 4 个授权工具经唯一 Gateway 执行已通过 | ADR-0009 与 Tool 文档已完成 | Goal E 已验证 |
 | 文件、HTTP、DB、报告工具 | 已设计 | Run 工作区原子文件/报告、绑定校验 IP 的 GET/HEAD、只读参数化数据库查询已实现 | 路径/链接/竞态/限额、SSRF/DNS/重定向、SQL/角色/输出已覆盖 | 真实 PostgreSQL 只读角色与 HTTP loopback 故障通过 | 文件读写与 JSON 报告 Compose 路径已通过 | 配置、风险和调用示例已完成 | Goal E 已验证 |
+| Web Search / Fetch / citation | 已设计 | Brave/SearXNG、条件 Secret、tenant/策略隔离 cache/limiter、同 Run 来源授权、HTML/文本抽取、Native citation 与 Hermes MCP parity 已实现 | Provider、SSRF/redirect/DNS/大小/注入、cache-before-auth、CLI 配置/进度与引用修复已覆盖 | PostgreSQL provenance/审批/恢复、Redis 隔离/故障、AgentVersion 启停通过 | 离线 configure→publish→approve→search→fetch→cite 全链路通过 | Tool、Runtime、CLI、配置、安全、测试和排障已完成 | Beta；公网多租户认证与 credentialed live smoke 仍待部署方 |
 | Python 沙箱 | 已设计 | 独立认证 Runner、固定 digest、一次性非 root/无网络/只读根容器与 CPU/内存/PID/时间/输出限制已实现 | Runner 合同、认证、payload 与错误已覆盖 | 真实 Docker 隔离、超时、截断、清理已通过 | Gateway→Runner 返回 UID 65534 且零残留容器 | 部署与威胁边界已完成 | Goal E 已验证 |
 | 四类 Memory 与作用域 | 四类型、tenant/project/agent scope 与生命周期已冻结；`team` 仅为兼容保留值 | 三类可验证 scope、候选生成、不可变修订链、原子发布/索引、失效/到期/tombstone、检索及 REST API 已实现；team 失败关闭 | 状态、chunk/embed、反思、验证、生命周期和 OpenAPI 规则已覆盖 | RLS、scope、HTTP 双租户、working TTL、修订/supersede、发布/检索及召回排除通过 | 成功 Run 候选、审批前隔离、发布后召回及第二租户隔离通过 | Goal F 计划、API 与边界已完成 | Goal F 已验证；Team 归属由领域系统负责 |
 | pgvector 语义检索与来源追踪 | scope-first 检索、确定性 chunk/embed、完整来源快照已冻结 | terminal GrowthSource、确定性切片/384 维 embedding、HNSW cosine，以及有界脱敏 TrajectorySnapshot 与精确工具/Runtime 来源已实现 | normalization/chunk/embed、递归脱敏和嵌套 Hash 稳定性通过 | 真实 vector、RLS/scope/来源/失效/不可变及明文 Secret 排除通过 | Compose 发布后真实向量召回、来源摘要和跨租户空结果通过 | ADR-0010 与检索/反思边界已完成 | Goal F 已验证；本地 embedding 为质量基线 |

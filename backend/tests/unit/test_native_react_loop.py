@@ -290,9 +290,7 @@ def _text_response(text: str, request_id: str) -> list[ModelStreamEvent]:
     ]
 
 
-def _named_tool_response(
-    *, call_id: str, name: str, arguments: str
-) -> list[ModelStreamEvent]:
+def _named_tool_response(*, call_id: str, name: str, arguments: str) -> list[ModelStreamEvent]:
     return [
         ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED),
         ModelStreamEvent(
@@ -440,9 +438,7 @@ async def test_react_composes_search_fetch_and_cites_observed_url() -> None:
     )
 
     assert outcome.status is RuntimeSessionStatus.COMPLETED
-    assert outcome.output == {
-        "content": "Current documentation: https://docs.example/nico"
-    }
+    assert outcome.output == {"content": "Current documentation: https://docs.example/nico"}
     assert [intent.name for intent in handler.intents] == ["web.search", "web.fetch"]
     assert len(model.requests) == 3
     assert outcome.checkpoint["observed_web_urls"] == ["https://docs.example/nico"]
@@ -586,9 +582,7 @@ async def test_react_pending_citation_repair_honors_cancel() -> None:
         citation_repair_attempted=True,
         citation_provisional_output={"content": "Initial answer."},
     )
-    request = base_request.model_copy(
-        update={"checkpoint": checkpoint.model_dump(mode="json")}
-    )
+    request = base_request.model_copy(update={"checkpoint": checkpoint.model_dump(mode="json")})
     model = SequencedModelProvider(
         [_text_response("Source: https://docs.example/nico", "web-repair")]
     )

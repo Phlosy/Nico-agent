@@ -92,6 +92,8 @@ AgentVersion 必须重复声明允许集合和权限；Secret 只声明逻辑名
 | `http.read@1.0.0` | `network.http.read` | medium / network | 30s | 仅 GET/HEAD、默认 HTTPS、域名白名单 |
 | `database.read@1.0.0` | `database.read` | medium / read-only DB | 30s | 单条参数化 SELECT/WITH、只读角色 |
 | `python.execute@1.0.0` | `code.python.execute` | high / container | 40s | 一次性固定镜像、无网络的受限 Python |
+| `web.search@1.0.0` | `network.web.search` | medium / network | 30s | Brave 或 SearXNG 的规范化搜索；返回内容标为不可信 |
+| `web.fetch@1.0.0` | `network.web.fetch` | medium / network | 30s | 只读取本 Run 搜索结果或冻结域名白名单中的来源 |
 
 ### 文件与报告
 
@@ -100,6 +102,29 @@ AgentVersion 必须重复声明允许集合和权限；Secret 只声明逻辑名
 ### HTTP 只读
 
 每次请求和每次重定向都重新检查 scheme、host、port、`allowed_domains` 和全部 DNS 结果。loopback、private、link-local、multicast、reserved、unspecified 与 IPv4-mapped IPv6 默认拒绝；连接直接绑定已校验 IP，TLS 仍使用原 hostname 做 SNI/证书验证，从而避免 DNS rebinding。实现不继承代理环境，不允许用户设置 Host/Header，限制连接、读取、重定向、正文、解压后输出和内容类型。仅测试环境可同时由平台配置与策略显式开启 loopback HTTP。
+
+### Web Search 与 Fetch
+
+`web.search` 的 Provider 只来自 Run 冻结的工具配置，当前支持 `brave` 和
+`searxng`，不会让模型选择 endpoint，也不会在失败时静默切换 Provider。Brave
+需要逻辑 Secret `web_search_brave_api_key`；SearXNG 不需要 Secret。两者结果统一为
+title、URL、snippet、发布日期和站点名，并附带
+`external_content.untrusted=true`。Redis cache key 包含 tenant、Provider、策略 Hash
+和规范化请求；分布式限流按 tenant/Provider 隔离。生产 hard limiter 在 Redis
+不可用时失败关闭，Provider 的 429/5xx 只按有界 retry policy 重试。
+
+`web.fetch` 不是开放代理。模型读取搜索结果时必须同时提交该搜索观察中的平台
+`tool_call_id`；Gateway 会在 PostgreSQL 中确认来源属于同一 tenant、同一 Run、成功的
+`web.search` ToolCall，而且目标 URL 确实出现在其不可变结果中。另一条显式路径是
+AgentVersion 中冻结的 `allowed_domains`。cache lookup 发生在来源授权之后；每次
+redirect 都重新做来源授权、DNS/IP、scheme 和 port 检查。HTML、纯文本、Markdown
+和 JSON 在下载完成后由有界 extractor 处理，结果包含最终 URL、内容 Hash、截断状态
+和不可信标记。页面正文不能更改工具权限、审批、Provider、Secret 或 endpoint。
+
+Native ReAct 会保存搜索与抓取观察中的 URL；最终答案使用 Web 证据却没有引用已观察
+URL 时，只允许一次有界 citation repair，仍未通过则返回明确诊断，绝不合成来源。
+Hermes 不启用自身 Web/Browser 工具，只能从每 Run 的 Nico MCP 清单取得同一精确
+schema，并沿用相同 Gateway、审批、来源和审计边界。
 
 ### 数据库只读
 

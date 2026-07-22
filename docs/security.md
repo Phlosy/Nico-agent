@@ -77,6 +77,25 @@ The `sandbox-runner` service mounts `/var/run/docker.sock`. Access to that socke
 - Runtime providers receive only narrow Artifact/Coordination handlers and never
   receive database sessions, MinIO credentials, object keys, or lease tokens.
 
+## Web content and network boundary
+
+Search and fetched page content is always external, untrusted data. It can inform an answer,
+but cannot change the frozen tool allowlist, Provider, endpoint, Secret reference, approval
+requirement or later tool arguments. `web.fetch` requires same-Run Search provenance or a
+frozen domain allowlist before cache access, then revalidates every redirect and DNS result.
+Private, loopback, link-local, metadata, reserved, mixed-scope and disallowed-port targets
+fail closed; only the exact deployment-owned SearXNG endpoint may receive an explicit private
+exception.
+
+Search queries and fetched content can contain personal or confidential data and may be sent
+to the configured Provider/source. Human CLI progress, Event/Audit summaries and application
+logs exclude raw Provider payloads and page bodies; ToolCall retains bounded results for the
+platform's normal database retention and audit lifecycle. Operators must choose cache TTL,
+Provider account retention and tenant usage policy appropriate to their deployment. Brave
+usage may incur account charges and rate limits. No current API Key/JWT boundary protects the
+control plane, so Web access is not production-ready for an untrusted public multi-tenant
+deployment.
+
 The Console Run Inspector is read-only. It recursively removes fields associated with credentials, authorization, lease/MCP tokens, provider state, and hidden reasoning; user/model text is rendered as React text rather than raw HTML. This is defense in depth, not a substitute for authenticated API access or server-side redaction.
 
 Artifact objects remain private in MinIO. PostgreSQL metadata and

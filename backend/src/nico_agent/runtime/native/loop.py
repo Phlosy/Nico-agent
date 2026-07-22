@@ -514,8 +514,7 @@ class NativeAgentLoop:
                     checkpoint.observed_web_urls,
                 )
                 can_repair = not citation_present and (
-                    not token_limit
-                    or int(checkpoint.usage.get("total_tokens") or 0) < token_limit
+                    not token_limit or int(checkpoint.usage.get("total_tokens") or 0) < token_limit
                 )
                 await _emit_citation_evaluation(
                     emit,
@@ -829,7 +828,7 @@ class NativeAgentLoop:
                         "plan_and_execute exhausted its tool-call budget",
                         checkpoint=checkpoint.model_dump(mode="json"),
                         usage=checkpoint.usage,
-                )
+                    )
                 history = tuple(state.get("history", []))
                 observed_web_urls = checkpoint.observed_web_urls
                 for action in sorted(pending, key=lambda item: str(item["call_id"])):
@@ -1738,10 +1737,7 @@ class NativeAgentLoop:
                 can_repair = (
                     not citation_present
                     and checkpoint.iteration < max_iterations
-                    and (
-                        not token_limit
-                        or int(usage.get("total_tokens") or 0) < token_limit
-                    )
+                    and (not token_limit or int(usage.get("total_tokens") or 0) < token_limit)
                 )
                 await _emit_citation_evaluation(
                     emit,

@@ -71,9 +71,7 @@ def test_bridge_uses_stdin_and_fixed_argv_without_rendering_secret(tmp_path, mon
     assert "sk-canary-value" not in repr(attempt)
 
 
-def test_bridge_routes_tool_credentials_through_generic_transaction(
-    tmp_path, monkeypatch
-) -> None:
+def test_bridge_routes_tool_credentials_through_generic_transaction(tmp_path, monkeypatch) -> None:
     root = _installation(tmp_path)
     captured = {}
 
@@ -109,9 +107,7 @@ def test_bridge_routes_tool_credentials_through_generic_transaction(
     assert "brave-canary" not in repr(attempt)
 
 
-def test_bridge_checks_tool_credential_without_returning_its_value(
-    tmp_path, monkeypatch
-) -> None:
+def test_bridge_checks_tool_credential_without_returning_its_value(tmp_path, monkeypatch) -> None:
     root = _installation(tmp_path)
     captured = {}
 

@@ -230,6 +230,31 @@ CLI 断开不会取消审批，也不会隐式批准。再次运行 `nico chat -
 
 请求超过 `NICO_TOOL_APPROVAL_TTL_SECONDS` 后由 Worker 的数据库协调器原子标记为 `expired` 并唤醒 Run。Run 取消时请求转为 `cancelled`。requested 之后只能产生一次 approved、rejected、expired 或 cancelled 终态，所有请求与决定均有 Event 和 AuditRecord。
 
+## Web 搜索配置
+
+Web 能力默认不授权。部署先启用 `NICO_WEB_PROVIDER_WRITES_ENABLED=true`，再通过 CLI
+探测 Provider、预览 tenant policy 与新 AgentVersion，并在确认后原子发布：
+
+```bash
+nico web configure searxng --project <project-id> --agent <agent-id>
+nico web configure brave --project <project-id> --agent <agent-id>
+nico web status
+nico web test
+nico web disable --agent <agent-id>
+```
+
+Brave 的 API key 使用隐藏提示和本地 Secret transaction；也可传
+`--credential-ref env:NICO_TOOL_SECRET_<NAME>`，但不能把 key 值放在命令行。
+`web test` 只创建持久化 probe，不发布版本。`web disable` 先显示 projection，再发布
+移除 Search/Fetch 权限的新 AgentVersion；旧 Run 仍按首次领取时冻结的策略完成或由
+operator 取消。`nico web status` 区分未配置、未授权、Secret 不可用、Provider
+不可达与最近 probe 失败。`nico doctor` 同时给出 Web 配置和本地 Secret 可用性诊断。
+
+聊天中普通搜索只显示 `Web search`、读取只显示 `Reading source` 及有界终态；审批
+面板只展示截断 query 或 URL origin。原始 query、页面正文、Provider payload、内部
+事件名与 checkpoint 不进入 human 滚动区。需要完整持久化事实时使用 `/tools`、
+`/audit` 或 `--json`。
+
 恢复指定会话、继续最近的活跃会话或只读检查：
 
 ```bash

@@ -51,6 +51,9 @@ jobs:
       - name: Run deterministic Provider onboarding
         run: scripts/e2e-provider-onboarding.sh
 
+      - name: Run offline Web search and fetch acceptance
+        run: scripts/e2e-web-tools.sh
+
       - name: Lint GitHub Actions workflows
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 

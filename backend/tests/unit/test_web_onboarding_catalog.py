@@ -59,8 +59,6 @@ def test_candidate_requires_brave_secret_and_rejects_searxng_secret() -> None:
 
 
 def test_policy_canonicalizes_allowed_domains() -> None:
-    policy = WebSearchPolicy(
-        allowed_domains=("Docs.Example.com.", "docs.example.com")
-    )
+    policy = WebSearchPolicy(allowed_domains=("Docs.Example.com.", "docs.example.com"))
 
     assert policy.allowed_domains == ("docs.example.com",)

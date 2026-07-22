@@ -28,6 +28,12 @@ ReAct 模式执行有界的“模型推理 -> Tool Gateway -> 工具观察 -> �
 
 ReAct 在工具外部作用前保存带完整性 Hash 的 schema v2 checkpoint，工具成功后先提交 ToolCall/RunStep/Event/Audit，再保存观察 checkpoint。Worker 接管过期租约时会把未终结 ModelCall 标为 `interrupted`，使用新的 replay call key 重试；ToolCall 使用稳定 idempotency key 查询权威结果，已成功的文件、Python 或其他副作用不会再次执行。每个执行尝试使用独立的进程内 session id，旧租约持有者的迟到 cancel/release 不会误伤接管者。
 
+Web 工具沿用同一恢复协议。`web.search` 的成功 ToolCall ID 会进入模型观察，模型只有
+把这个平台 ID 传给 `web.fetch` 才能读取对应来源；checkpoint/Worker 接管不会改变
+该关联。Native 累积成功 Search/Fetch 观察中的规范化 URL，并在终结前执行确定性
+引用校验。引用缺失时最多增加一次不带工具权限的修复 ModelCall。Hermes 自带的 Web
+能力保持关闭，只能经 Nico MCP 调用相同工具，因此没有第二套网络或授权路径。
+
 medium/high ToolCall 在副作用前创建 ToolApprovalRequest，并让 Native ReAct/Plan 返回 suspended outcome。Worker 保存同一 checkpoint、清除租约并进入 `waiting_for_approval`。approved/rejected/expired 决定把 Run 置回可领取状态；恢复时 approved 调用继续执行，其他终态作为失败工具观察返回给模型。决策可能早于 Worker 最后一笔 suspension 写入，因此挂起逻辑会重读持久化审批状态，避免丢失快速唤醒。审批行锁不参与 Run 锁顺序，防止操作者决策与挂起事务死锁。
 
 Plan-and-Execute 使用结构化 Planner 生成最多由预算约束的 DAG，每次初始规划或 Replan 都追加独立 Plan revision，旧 revision 不覆盖。每个 PlanStep 产生独立 ModelCall、RunStep 与确定性 step validation；步骤可以调用冻结策略授权的精确版本工具，并复用同一个 Tool Gateway、权限交集、幂等键和审计链。工具副作用前强制保存 schema v3 checkpoint，工具 RunStep 挂到对应 Plan 执行步骤。失败后 Reflection 只能返回 `retry`、`replan` 或 `fail`。Replan 会终结旧 revision 并创建新 revision，不修改已经完成的步骤事实。

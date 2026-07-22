@@ -617,13 +617,17 @@ class WebOnboardingService:
                         AgentVersion.id == agent.current_version_id,
                     )
                 )
-            return agent, {
-                "id": str(agent.id),
-                "name": agent.name,
-                "display_name": agent.display_name,
-                "existing": True,
-                "expected_revision": agent.revision,
-            }, current
+            return (
+                agent,
+                {
+                    "id": str(agent.id),
+                    "name": agent.name,
+                    "display_name": agent.display_name,
+                    "existing": True,
+                    "expected_revision": agent.revision,
+                },
+                current,
+            )
 
         assert target.starter_agent_name is not None
         name_exists = await session.scalar(
@@ -641,13 +645,17 @@ class WebOnboardingService:
             NAMESPACE_URL,
             f"nico:web-agent:{context.tenant_id}:{command.probe_id}:{target.starter_agent_name}",
         )
-        return None, {
-            "id": str(agent_id),
-            "name": target.starter_agent_name,
-            "display_name": target.starter_agent_display_name,
-            "existing": False,
-            "expected_revision": 1,
-        }, None
+        return (
+            None,
+            {
+                "id": str(agent_id),
+                "name": target.starter_agent_name,
+                "display_name": target.starter_agent_display_name,
+                "existing": False,
+                "expected_revision": 1,
+            },
+            None,
+        )
 
     def _candidate_from_settings(self, value: Any) -> WebProviderCandidate:
         settings = value if isinstance(value, dict) else {}
@@ -682,9 +690,7 @@ class WebOnboardingService:
                 cache_ttl_seconds=search.get("cache_ttl_seconds", 900),
                 rate_limit_per_minute=search.get("rate_limit_per_minute", 20),
                 allowed_domains=tuple(
-                    item
-                    for item in fetch.get("allowed_domains", [])
-                    if isinstance(item, str)
+                    item for item in fetch.get("allowed_domains", []) if isinstance(item, str)
                 ),
             ),
             catalog_revision=get_web_provider_catalog(self.settings).catalog_revision,
@@ -929,9 +935,7 @@ class WebOnboardingService:
         probe: ProviderProbe,
     ) -> dict[str, Any]:
         settings = deepcopy(current or {})
-        settings["tool_policy"] = _merge_tenant_policy(
-            settings.get("tool_policy", {}), candidate
-        )
+        settings["tool_policy"] = _merge_tenant_policy(settings.get("tool_policy", {}), candidate)
         settings["web_provider"] = {
             "enabled": True,
             "provider": candidate.provider,
@@ -984,9 +988,7 @@ def _merge_tenant_policy(
     tools[_FETCH_REF] = fetch_config
     policy["tools"] = tools
     secret_refs = (
-        deepcopy(policy.get("secret_refs"))
-        if isinstance(policy.get("secret_refs"), dict)
-        else {}
+        deepcopy(policy.get("secret_refs")) if isinstance(policy.get("secret_refs"), dict) else {}
     )
     if candidate.credential_ref is not None:
         secret_refs[_BRAVE_SECRET] = candidate.credential_ref
@@ -1050,9 +1052,7 @@ def _remove_tenant_web_policy(value: Any) -> dict[str, Any]:
     tools.pop(_FETCH_REF, None)
     policy["tools"] = tools
     secret_refs = (
-        deepcopy(policy.get("secret_refs"))
-        if isinstance(policy.get("secret_refs"), dict)
-        else {}
+        deepcopy(policy.get("secret_refs")) if isinstance(policy.get("secret_refs"), dict) else {}
     )
     secret_refs.pop(_BRAVE_SECRET, None)
     policy["secret_refs"] = secret_refs
@@ -1073,9 +1073,7 @@ def _remove_agent_web_policy(value: Any) -> dict[str, Any]:
     tools.pop(_SEARCH_REF, None)
     tools.pop(_FETCH_REF, None)
     policy["tools"] = tools
-    policy["secrets"] = [
-        item for item in _strings(policy.get("secrets")) if item != _BRAVE_SECRET
-    ]
+    policy["secrets"] = [item for item in _strings(policy.get("secrets")) if item != _BRAVE_SECRET]
     return policy
 
 
