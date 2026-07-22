@@ -30,6 +30,7 @@ from nico_agent.domain.states import (
     ToolApprovalStatus,
     ToolCallStatus,
 )
+from nico_agent.tool_approvals.service import ToolApprovalService
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
     ToolExecutionContext,
@@ -376,6 +377,12 @@ class ToolGateway:
         context = TenantContext(claim.tenant_id, f"worker:{worker_id}", request.correlation_id)
         async with self.database.tenant_transaction(context) as session:
             run = await self._owned_run(session, claim, worker_id)
+            runtime_projection = await session.scalar(
+                select(RuntimeSession).where(
+                    RuntimeSession.tenant_id == claim.tenant_id,
+                    RuntimeSession.run_id == claim.run_id,
+                )
+            )
             if request.checkpoint is not None:
                 await self._persist_pre_action_checkpoint(session, run, request.checkpoint)
             definition = await self._definition(session, context, executor, run.id)
@@ -457,6 +464,7 @@ class ToolGateway:
             authorization: ToolAuthorization | None = None
             secrets: dict[str, str] = {}
             approval_required = False
+            policy_auto_approval: dict[str, Any] | None = None
             run_scope_grant: ToolApprovalRequest | None = None
             try:
                 authorization = await self._authorization(session, claim, executor.spec, definition)
@@ -467,7 +475,12 @@ class ToolGateway:
                             executor.spec.name, executor.spec.version
                         )
                     run_scope_grant = await self._run_scope_grant(session, claim, definition.id)
-                    approval_required = run_scope_grant is None
+                    if run_scope_grant is None:
+                        policy = self._tool_approval_policy(runtime_projection)
+                        if self._policy_auto_approves(policy, executor.spec.risk.value):
+                            policy_auto_approval = policy
+                        else:
+                            approval_required = True
                 if not approval_required:
                     secrets = resolve_secrets(self.secret_resolver, authorization.secret_refs)
             except ToolError as exc:
@@ -511,12 +524,6 @@ class ToolGateway:
                 f"tool:{request.idempotency_key}"
                 if len(request.idempotency_key) <= 195
                 else f"tool:{canonical_hash(request.idempotency_key)}"
-            )
-            runtime_projection = await session.scalar(
-                select(RuntimeSession).where(
-                    RuntimeSession.tenant_id == claim.tenant_id,
-                    RuntimeSession.run_id == claim.run_id,
-                )
             )
             parent_step_id = None
             if checkpoint_iteration is not None:
@@ -667,11 +674,57 @@ class ToolGateway:
                     run_step_id=step.id,
                     risk_level=approval.risk_level,
                 )
+            if policy_auto_approval is not None:
+                await ToolApprovalService.create_policy_approval(
+                    session,
+                    context,
+                    call=call,
+                    risk_level=executor.spec.risk.value,
+                    requester=request.caller,
+                    arguments_redacted=redact_value(request.arguments),
+                    arguments_hash=arguments_hash,
+                    ttl_seconds=self.approval_ttl_seconds,
+                    policy=policy_auto_approval,
+                )
             if run_scope_grant is not None:
                 self._record_approval_grant_reused(session, context, run_scope_grant, call)
             run.status = RunStatus.WAITING_FOR_TOOL.value
             run.revision += 1
             return self._prepared(call, executor, authorization, request, context, secrets)
+
+    @staticmethod
+    def _tool_approval_policy(runtime_session: RuntimeSession | None) -> dict[str, Any]:
+        if runtime_session is None:
+            return {
+                "mode": "ask",
+                "source": "deployment_default",
+                "conversation_id": None,
+            }
+        candidate = runtime_session.execution_manifest.get("tool_approval_policy")
+        if not isinstance(candidate, dict) or candidate.get("mode") not in {
+            "ask",
+            "auto-medium",
+            "auto-all",
+        }:
+            return {
+                "mode": "ask",
+                "source": "deployment_default",
+                "conversation_id": None,
+            }
+        source = candidate.get("source")
+        return {
+            "mode": candidate["mode"],
+            "source": source
+            if source in {"conversation", "deployment_default"}
+            else "deployment_default",
+            "conversation_id": candidate.get("conversation_id"),
+        }
+
+    @staticmethod
+    def _policy_auto_approves(policy: dict[str, Any], risk_level: str) -> bool:
+        return policy["mode"] == "auto-all" or (
+            policy["mode"] == "auto-medium" and risk_level == "medium"
+        )
 
     @staticmethod
     async def _run_scope_grant(

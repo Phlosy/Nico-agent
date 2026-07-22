@@ -25,6 +25,7 @@ from nico_agent.domain.models import (
     RuntimeSession,
     Task,
     Tenant,
+    ToolApprovalRequest,
     ToolCall,
     ToolDefinition,
 )
@@ -40,9 +41,12 @@ from nico_agent.tools import (
     ToolIsolation,
     ToolRegistry,
     ToolRetryPolicy,
+    ToolRisk,
 )
+from nico_agent.tools.contracts import canonical_hash
 from nico_agent.tools.errors import (
     ToolAccessDenied,
+    ToolApprovalRequired,
     ToolExecutorFailure,
     ToolIdempotencyConflict,
     ToolLeaseLost,
@@ -59,6 +63,7 @@ def _spec(
     *,
     timeout_seconds: int = 5,
     retry_policy: ToolRetryPolicy | None = None,
+    risk: ToolRisk = ToolRisk.LOW,
 ) -> ToolDefinitionSpec:
     return ToolDefinitionSpec(
         name="test.echo",
@@ -88,6 +93,7 @@ def _spec(
         timeout_seconds=timeout_seconds,
         retry_policy=retry_policy or ToolRetryPolicy(max_attempts=1),
         isolation=ToolIsolation.IN_PROCESS,
+        risk=risk,
         secret_names=frozenset({"authorization"}),
     )
 
@@ -252,6 +258,164 @@ def _gateway(
             else environment
         ),
     )
+
+
+def _checkpoint(tool_name: str) -> dict[str, Any]:
+    value = {
+        "schema_version": 2,
+        "execution_mode": "react",
+        "loop_state": "waiting_for_tool",
+        "pending_actions": [{"kind": "tool", "name": tool_name}],
+    }
+    return {**value, "checkpoint_hash": canonical_hash(value)}
+
+
+async def _set_approval_mode(database: Database, run_id, mode: str) -> str:
+    conversation_id = str(uuid4())
+    async with database.admin_transaction() as session:
+        runtime_session = await session.scalar(
+            select(RuntimeSession).where(RuntimeSession.run_id == run_id)
+        )
+        assert runtime_session is not None
+        runtime_session.execution_manifest = {
+            **runtime_session.execution_manifest,
+            "tool_approval_policy": {
+                "mode": mode,
+                "source": "conversation",
+                "conversation_id": conversation_id,
+            },
+        }
+    return conversation_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "risk", "requires_human"),
+    [
+        ("ask", ToolRisk.MEDIUM, True),
+        ("auto-medium", ToolRisk.MEDIUM, False),
+        ("auto-medium", ToolRisk.HIGH, True),
+        ("auto-all", ToolRisk.HIGH, False),
+    ],
+)
+async def test_conversation_policy_auto_approves_only_configured_risks(
+    mode: str,
+    risk: ToolRisk,
+    requires_human: bool,
+) -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    spec = _spec(risk=risk)
+    executor = _Executor(spec)
+    worker_id = f"gateway-policy-{mode}-{risk.value}-{uuid4()}"
+    try:
+        claim = await _seed_gateway_run(database, spec, worker_id=worker_id)
+        conversation_id = await _set_approval_mode(database, claim.run_id, mode)
+        request = ToolGatewayRequest(
+            tool_name=spec.name,
+            tool_version=spec.version,
+            arguments={"mode": "success"},
+            idempotency_key=f"policy-{mode}-{risk.value}",
+            caller="runtime:mock",
+            checkpoint=_checkpoint(spec.name),
+        )
+        gateway = _gateway(database, executor)
+
+        if requires_human:
+            with pytest.raises(ToolApprovalRequired):
+                await gateway.execute(claim, worker_id=worker_id, request=request)
+        else:
+            result = await gateway.execute(claim, worker_id=worker_id, request=request)
+            assert result.status is ToolCallStatus.SUCCEEDED
+            assert executor.calls == 1
+
+        async with database.admin_transaction() as session:
+            approval = await session.scalar(
+                select(ToolApprovalRequest).where(ToolApprovalRequest.run_id == claim.run_id)
+            )
+            events = list(
+                await session.scalars(
+                    select(Event).where(
+                        Event.run_id == claim.run_id,
+                        Event.aggregate_type == "tool_approval_request",
+                    )
+                )
+            )
+            audits = (
+                list(
+                    await session.scalars(
+                        select(AuditRecord).where(
+                            AuditRecord.resource_type == "tool_approval_request",
+                            AuditRecord.resource_id == approval.id,
+                        )
+                    )
+                )
+                if approval is not None
+                else []
+            )
+        assert approval is not None
+        if requires_human:
+            assert approval.status == "requested"
+            assert {event.event_type for event in events} == {"ApprovalRequested"}
+        else:
+            assert approval.status == "approved"
+            assert approval.allowed_scope == "once"
+            assert approval.decided_by == "policy:conversation"
+            assert approval.decision["source"] == "conversation"
+            assert approval.decision["conversation_id"] == conversation_id
+            assert {event.event_type for event in events} == {"ToolApprovalPolicyApproved"}
+            assert {audit.action for audit in audits} == {"tool.approval.policy_approved"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("authorize", "environment"), [(False, None), (True, {})])
+async def test_auto_all_never_approves_unauthorized_or_secret_incomplete_calls(
+    authorize: bool,
+    environment: dict[str, str] | None,
+) -> None:
+    settings = Settings(environment="test", _env_file=None)
+    engine = create_async_engine(settings.resolved_database_url)
+    database = Database(engine)
+    spec = _spec(risk=ToolRisk.MEDIUM)
+    executor = _Executor(spec)
+    worker_id = f"gateway-policy-denial-{uuid4()}"
+    try:
+        claim = await _seed_gateway_run(
+            database,
+            spec,
+            worker_id=worker_id,
+            authorize=authorize,
+        )
+        await _set_approval_mode(database, claim.run_id, "auto-all")
+        result = await _gateway(database, executor, environment=environment).execute(
+            claim,
+            worker_id=worker_id,
+            request=ToolGatewayRequest(
+                tool_name=spec.name,
+                tool_version=spec.version,
+                arguments={"mode": "success"},
+                idempotency_key="policy-denied",
+                caller="runtime:mock",
+                checkpoint=_checkpoint(spec.name),
+            ),
+        )
+        assert result.status is ToolCallStatus.FAILED
+        assert result.error is not None
+        expected = "TOOL_ACCESS_DENIED" if not authorize else "TOOL_SECRET_UNAVAILABLE"
+        assert result.error["code"] == expected
+        assert executor.calls == 0
+        async with database.admin_transaction() as session:
+            approvals = await session.scalar(
+                select(func.count(ToolApprovalRequest.id)).where(
+                    ToolApprovalRequest.run_id == claim.run_id
+                )
+            )
+        assert approvals == 0
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

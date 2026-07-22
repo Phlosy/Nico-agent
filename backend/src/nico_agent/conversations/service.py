@@ -24,7 +24,7 @@ from nico_agent.conversations.contracts import (
 )
 from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database, TenantContext
-from nico_agent.domain.errors import DomainConflict, ResourceNotFound
+from nico_agent.domain.errors import AccessDenied, DomainConflict, ResourceNotFound
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
@@ -43,6 +43,7 @@ from nico_agent.domain.models import (
 from nico_agent.domain.states import (
     AgentStatus,
     AgentVersionStatus,
+    ConversationApprovalMode,
     ConversationQueueState,
     ConversationStatus,
     ConversationTurnStatus,
@@ -61,8 +62,16 @@ _CONVERSATION_QUEUE_CAPACITY = 20
 
 
 class ConversationService:
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        approval_locked_risks: frozenset[str] = frozenset(),
+    ) -> None:
+        if not approval_locked_risks <= {"medium", "high"}:
+            raise ValueError("approval_locked_risks may contain only medium and high")
         self.database = database
+        self.approval_locked_risks = approval_locked_risks
 
     async def create(self, context: TenantContext, command: ConversationCreate) -> Conversation:
         async with self.database.tenant_transaction(context) as session:
@@ -242,6 +251,25 @@ class ConversationService:
                 conversation.status = command.status.value
             if command.title is not None:
                 conversation.title = command.title
+            approval_mode_changed = (
+                command.approval_mode is not None
+                and command.approval_mode.value != conversation.approval_mode
+            )
+            previous_approval_mode = conversation.approval_mode
+            if command.approval_mode is not None:
+                if conversation.created_by != context.actor_id:
+                    raise AccessDenied(
+                        "CONVERSATION_APPROVAL_MODE_FORBIDDEN",
+                        "only the Conversation creator may change its approval mode",
+                    )
+                conflicts = self._locked_mode_risks(command.approval_mode)
+                if conflicts:
+                    raise DomainConflict(
+                        "CONVERSATION_APPROVAL_MODE_LOCKED",
+                        "deployment policy requires approval for risks this mode would allow",
+                        details={"locked_risks": sorted(conflicts)},
+                    )
+                conversation.approval_mode = command.approval_mode.value
             conversation.revision += 1
             self._record(
                 session,
@@ -252,8 +280,30 @@ class ConversationService:
                 action="conversation.update",
                 payload={"status": conversation.status, "revision": conversation.revision},
             )
+            if approval_mode_changed:
+                self._record(
+                    session,
+                    context,
+                    event_type="ConversationApprovalModeChanged",
+                    aggregate_type="conversation",
+                    aggregate_id=conversation.id,
+                    action="conversation.approval_mode.change",
+                    payload={
+                        "previous_mode": previous_approval_mode,
+                        "approval_mode": conversation.approval_mode,
+                        "revision": conversation.revision,
+                    },
+                )
             await session.flush()
             return conversation
+
+    def _locked_mode_risks(self, mode: ConversationApprovalMode) -> frozenset[str]:
+        auto_approved = {
+            ConversationApprovalMode.ASK: frozenset(),
+            ConversationApprovalMode.AUTO_MEDIUM: frozenset({"medium"}),
+            ConversationApprovalMode.AUTO_ALL: frozenset({"medium", "high"}),
+        }[mode]
+        return auto_approved & self.approval_locked_risks
 
     async def create_turn(
         self,

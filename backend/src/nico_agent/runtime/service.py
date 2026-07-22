@@ -46,7 +46,13 @@ from nico_agent.domain.models import (
     Tenant,
     ToolApprovalRequest,
 )
-from nico_agent.domain.states import ModelCallStatus, RunStatus, RunStepStatus, TaskStatus
+from nico_agent.domain.states import (
+    ConversationApprovalMode,
+    ModelCallStatus,
+    RunStatus,
+    RunStepStatus,
+    TaskStatus,
+)
 from nico_agent.projects.interventions import ProjectInterventionService
 from nico_agent.projects.metadata import is_managed_project
 from nico_agent.projects.orchestration import ProjectOrchestrationService
@@ -161,8 +167,16 @@ class PreparedRuntime:
 class RuntimeExecutionService:
     """Owns all ORM writes; providers receive immutable DTOs only."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        approval_locked_risks: frozenset[str] = frozenset(),
+    ) -> None:
+        if not approval_locked_risks <= {"medium", "high"}:
+            raise ValueError("approval_locked_risks may contain only medium and high")
         self.database = database
+        self.approval_locked_risks = approval_locked_risks
         self.preparation = RuntimePreparationService(database)
 
     async def prepare_claim(
@@ -242,6 +256,7 @@ class RuntimeExecutionService:
                     )
 
             if runtime_session is None:
+                tool_approval_policy = await self._tool_approval_policy(session, run)
                 project_member_versions = await self._project_member_version_ids(
                     session,
                     task,
@@ -295,7 +310,10 @@ class RuntimeExecutionService:
                     capabilities=sorted(capability.value for capability in descriptor.capabilities),
                     execution_mode=execution_mode.value,
                     loop_state="initializing",
-                    execution_manifest=self._execution_manifest(version),
+                    execution_manifest={
+                        **self._execution_manifest(version),
+                        "tool_approval_policy": tool_approval_policy,
+                    },
                     model_endpoint_snapshot=model_endpoint_snapshot,
                     tool_policy_snapshot=tool_snapshot,
                     coordination_policy_snapshot=coordination_snapshot,
@@ -1522,6 +1540,45 @@ class RuntimeExecutionService:
                 str(version.model_endpoint_id) if version.model_endpoint_id else None
             ),
             "model": version.model_name or version.model_config_json.get("model"),
+        }
+
+    async def _tool_approval_policy(
+        self,
+        session: AsyncSession,
+        run: Run,
+    ) -> dict[str, Any]:
+        conversation = await session.scalar(
+            select(Conversation)
+            .join(
+                ConversationTurn,
+                (ConversationTurn.tenant_id == Conversation.tenant_id)
+                & (ConversationTurn.conversation_id == Conversation.id),
+            )
+            .where(
+                ConversationTurn.tenant_id == run.tenant_id,
+                ConversationTurn.run_id == run.id,
+            )
+        )
+        mode = (
+            ConversationApprovalMode(conversation.approval_mode)
+            if conversation is not None
+            else ConversationApprovalMode.ASK
+        )
+        auto_approved = {
+            ConversationApprovalMode.ASK: frozenset(),
+            ConversationApprovalMode.AUTO_MEDIUM: frozenset({"medium"}),
+            ConversationApprovalMode.AUTO_ALL: frozenset({"medium", "high"}),
+        }[mode]
+        conflicts = auto_approved & self.approval_locked_risks
+        if conflicts:
+            raise ValueError(
+                "conversation approval mode conflicts with deployment-locked risks: "
+                + ", ".join(sorted(conflicts))
+            )
+        return {
+            "mode": mode.value,
+            "source": "conversation" if conversation is not None else "deployment_default",
+            "conversation_id": str(conversation.id) if conversation is not None else None,
         }
 
     @staticmethod

@@ -38,7 +38,10 @@ def get_service(request: Request) -> ConversationService:
     database: Database | None = request.app.state.database
     if database is None:
         raise DomainError("DATABASE_UNAVAILABLE", "the conversation database is unavailable")
-    return ConversationService(database)
+    return ConversationService(
+        database,
+        approval_locked_risks=frozenset(request.app.state.settings.tool_approval_locked_risks),
+    )
 
 
 Service = Annotated[ConversationService, Depends(get_service)]

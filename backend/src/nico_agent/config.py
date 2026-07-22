@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     web_provider_writes_enabled: bool = False
     native_post_tool_delay_seconds: float = Field(default=0, ge=0, le=300)
     tool_approval_required_risks: list[Literal["medium", "high"]] = ["medium", "high"]
+    tool_approval_locked_risks: list[Literal["medium", "high"]] = []
     tool_approval_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     database_tool_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     database_tool_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
@@ -154,6 +155,8 @@ class Settings(BaseSettings):
             raise ValueError("worker heartbeat must be shorter than the Run lease")
         if self.workspace_max_file_bytes > self.workspace_max_total_bytes:
             raise ValueError("workspace file limit cannot exceed its total limit")
+        if not set(self.tool_approval_locked_risks) <= set(self.tool_approval_required_risks):
+            raise ValueError("locked Tool risks must also be configured to require approval")
         if (
             self.environment == "production"
             and self.sandbox_runner_token == "nico-sandbox-development-token"

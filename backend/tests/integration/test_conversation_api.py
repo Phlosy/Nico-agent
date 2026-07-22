@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 
 from nico_agent.api import create_app
 from nico_agent.config import Settings
-from nico_agent.database import TenantContext
+from nico_agent.database import RunClaim, TenantContext
 from nico_agent.domain.models import (
     Artifact,
     AuditRecord,
@@ -21,10 +21,12 @@ from nico_agent.domain.models import (
     Event,
     Project,
     Run,
+    RuntimeSession,
     Task,
 )
 from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
 from nico_agent.runtime.executor import RuntimeWorker
+from nico_agent.runtime.service import RuntimeExecutionService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -291,6 +293,193 @@ async def test_personal_mode_rejects_explicit_project_and_project_mode_stays_com
     )
     assert explicit.status_code == 201, explicit.text
     assert explicit.json()["project_id"] == legacy["project_id"] == project["id"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_approval_mode_is_creator_owned_and_deployment_locked(
+    app_client,
+) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "ConversationApprovalMode")
+    project, agent, _ = await _project_and_agent(client, headers)
+    conversation = await _create_conversation(
+        client, headers, project, agent, key="conversation-approval-mode"
+    )
+    assert conversation["approval_mode"] == "ask"
+
+    changed = await client.patch(
+        f"/api/v1/conversations/{conversation['id']}",
+        json={
+            "expected_revision": conversation["revision"],
+            "approval_mode": "auto-medium",
+        },
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["approval_mode"] == "auto-medium"
+
+    denied = await client.patch(
+        f"/api/v1/conversations/{conversation['id']}",
+        json={
+            "expected_revision": changed.json()["revision"],
+            "approval_mode": "auto-all",
+        },
+        headers={**headers, "X-Actor-ID": "conversation-observer"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "CONVERSATION_APPROVAL_MODE_FORBIDDEN"
+
+    context = TenantContext(tenant_id, "approval-audit", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        audit = await session.scalar(
+            select(AuditRecord).where(
+                AuditRecord.tenant_id == tenant_id,
+                AuditRecord.resource_id == UUID(conversation["id"]),
+                AuditRecord.action == "conversation.approval_mode.change",
+            )
+        )
+    assert audit is not None
+    assert audit.details["previous_mode"] == "ask"
+    assert audit.details["approval_mode"] == "auto-medium"
+
+    locked_app = create_app(
+        settings=Settings(
+            environment="test",
+            tool_approval_locked_risks=["high"],
+            _env_file=None,
+        )
+    )
+    async with locked_app.router.lifespan_context(locked_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=locked_app),
+            base_url="http://locked.test",
+        ) as locked_client:
+            _, locked_headers = await _bootstrap(locked_client, "ConversationLockedMode")
+            locked_project, locked_agent, _ = await _project_and_agent(
+                locked_client, locked_headers
+            )
+            locked_conversation = await _create_conversation(
+                locked_client,
+                locked_headers,
+                locked_project,
+                locked_agent,
+                key="conversation-locked-mode",
+            )
+            locked = await locked_client.patch(
+                f"/api/v1/conversations/{locked_conversation['id']}",
+                json={
+                    "expected_revision": locked_conversation["revision"],
+                    "approval_mode": "auto-all",
+                },
+                headers=locked_headers,
+            )
+            assert locked.status_code == 409
+            assert locked.json()["code"] == "CONVERSATION_APPROVAL_MODE_LOCKED"
+            allowed = await locked_client.patch(
+                f"/api/v1/conversations/{locked_conversation['id']}",
+                json={
+                    "expected_revision": locked_conversation["revision"],
+                    "approval_mode": "auto-medium",
+                },
+                headers=locked_headers,
+            )
+            assert allowed.status_code == 200, allowed.text
+
+
+@pytest.mark.asyncio
+async def test_runtime_session_freezes_conversation_approval_mode(app_client) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "ConversationApprovalFreeze")
+    project, agent, _ = await _project_and_agent(client, headers)
+    conversation = await _create_conversation(
+        client, headers, project, agent, key="conversation-approval-freeze"
+    )
+    first = (
+        await client.post(
+            f"/api/v1/conversations/{conversation['id']}/turns",
+            json={"user_input": "freeze ask"},
+            headers={**headers, "Idempotency-Key": "approval-freeze-1"},
+        )
+    ).json()
+    worker_id = f"approval-freeze-{uuid4()}"
+
+    async def prepare(run_id: str) -> RuntimeSession:
+        lease_token = uuid4()
+        context = TenantContext(tenant_id, worker_id, uuid4())
+        async with app.state.database.tenant_transaction(context) as session:
+            run = await session.scalar(select(Run).where(Run.id == UUID(run_id)).with_for_update())
+            assert run is not None
+            run.lease_owner = worker_id
+            run.lease_token = lease_token
+            run.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
+        claim = RunClaim(
+            run_id=UUID(run_id),
+            tenant_id=tenant_id,
+            lease_token=lease_token,
+            previous_status="pending",
+        )
+        await RuntimeExecutionService(app.state.database).prepare_claim(
+            claim,
+            worker_id=worker_id,
+            registry=RuntimeProviderRegistry([MockRuntimeProvider()]),
+        )
+        async with app.state.database.tenant_transaction(context) as session:
+            runtime_session = await session.scalar(
+                select(RuntimeSession).where(RuntimeSession.run_id == UUID(run_id))
+            )
+        assert runtime_session is not None
+        return runtime_session
+
+    first_session = await prepare(first["run_id"])
+    assert first_session.execution_manifest["tool_approval_policy"]["mode"] == "ask"
+
+    latest = (
+        await client.get(f"/api/v1/conversations/{conversation['id']}", headers=headers)
+    ).json()
+    changed = await client.patch(
+        f"/api/v1/conversations/{conversation['id']}",
+        json={"expected_revision": latest["revision"], "approval_mode": "auto-all"},
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    context = TenantContext(tenant_id, worker_id, uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        await session.execute(
+            update(Run)
+            .where(Run.id == UUID(first["run_id"]))
+            .values(
+                status="completed",
+                result={"answer": "done"},
+                ended_at=datetime.now(UTC),
+                lease_owner=None,
+                lease_token=None,
+                lease_expires_at=None,
+                revision=Run.revision + 1,
+            )
+        )
+    second_response = await client.post(
+        f"/api/v1/conversations/{conversation['id']}/turns",
+        json={"user_input": "freeze auto all"},
+        headers={**headers, "Idempotency-Key": "approval-freeze-2"},
+    )
+    assert second_response.status_code == 202, second_response.text
+    second_session = await prepare(second_response.json()["run_id"])
+
+    assert first_session.execution_manifest["tool_approval_policy"]["mode"] == "ask"
+    assert second_session.execution_manifest["tool_approval_policy"]["mode"] == "auto-all"
+    async with app.state.database.tenant_transaction(context) as session:
+        await session.execute(
+            update(Run)
+            .where(Run.id == UUID(second_response.json()["run_id"]))
+            .values(
+                status="cancelled",
+                ended_at=datetime.now(UTC),
+                lease_owner=None,
+                lease_token=None,
+                lease_expires_at=None,
+                revision=Run.revision + 1,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -761,7 +950,7 @@ async def test_conversation_queue_capacity_is_atomic_and_reusable(app_client) ->
         json={"user_input": "one too many"},
         headers={**headers, "Idempotency-Key": "capacity-21"},
     )
-    assert full.status_code == 400
+    assert full.status_code == 409
     assert full.json()["code"] == "CONVERSATION_QUEUE_FULL"
 
     async with app.state.database.tenant_transaction(context) as session:

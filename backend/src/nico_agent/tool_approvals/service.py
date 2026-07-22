@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -40,6 +40,89 @@ _TERMINAL_RUNS = {
 class ToolApprovalService:
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    @staticmethod
+    async def create_policy_approval(
+        session: AsyncSession,
+        context: TenantContext,
+        *,
+        call: ToolCall,
+        risk_level: str,
+        requester: str,
+        arguments_redacted: dict,
+        arguments_hash: str,
+        ttl_seconds: int,
+        policy: dict,
+    ) -> ToolApprovalRequest:
+        """Persist an auditable, one-call approval granted by frozen policy."""
+
+        now = datetime.now(UTC)
+        actor = "policy:conversation"
+        approval = ToolApprovalRequest(
+            tenant_id=context.tenant_id,
+            run_id=call.run_id,
+            run_step_id=call.run_step_id,
+            tool_call_id=call.id,
+            tool_definition_id=call.tool_definition_id,
+            risk_level=risk_level,
+            requester=requester,
+            arguments_redacted=arguments_redacted,
+            arguments_hash=arguments_hash,
+            expires_at=now + timedelta(seconds=ttl_seconds),
+        )
+        session.add(approval)
+        await session.flush()
+        approval.status = ToolApprovalStatus.APPROVED.value
+        approval.allowed_scope = ToolApprovalScope.ONCE.value
+        approval.decided_by = actor
+        approval.decision = {
+            "status": ToolApprovalStatus.APPROVED.value,
+            "scope": ToolApprovalScope.ONCE.value,
+            "reason": "approved by frozen Conversation policy",
+            "source": policy["source"],
+            "conversation_id": policy.get("conversation_id"),
+            "approval_mode": policy["mode"],
+        }
+        approval.decision_idempotency_key = f"policy:{call.id}"
+        approval.decided_at = now
+        approval.revision += 1
+        await session.flush()
+        payload = {
+            "approval_id": str(approval.id),
+            "tool_call_id": str(call.id),
+            "tool": f"{call.tool_name}@{call.tool_version}",
+            "risk_level": risk_level,
+            "status": approval.status,
+            "allowed_scope": approval.allowed_scope,
+            "decided_by": actor,
+            "source": policy["source"],
+            "conversation_id": policy.get("conversation_id"),
+            "approval_mode": policy["mode"],
+        }
+        session.add(
+            Event(
+                tenant_id=context.tenant_id,
+                event_type="ToolApprovalPolicyApproved",
+                aggregate_type="tool_approval_request",
+                aggregate_id=approval.id,
+                run_id=call.run_id,
+                actor_id=actor,
+                payload=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+        session.add(
+            AuditRecord(
+                tenant_id=context.tenant_id,
+                action="tool.approval.policy_approved",
+                resource_type="tool_approval_request",
+                resource_id=approval.id,
+                actor_id=actor,
+                details=payload,
+                correlation_id=context.correlation_id,
+            )
+        )
+        return approval
 
     async def get(self, context: TenantContext, approval_id: UUID) -> ToolApprovalRead:
         async with self.database.tenant_transaction(context) as session:

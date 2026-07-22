@@ -43,10 +43,11 @@ class ConversationPatch(BaseModel):
     expected_revision: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
     status: ConversationStatus | None = None
+    approval_mode: ConversationApprovalMode | None = None
 
     @model_validator(mode="after")
     def require_change(self) -> ConversationPatch:
-        if self.title is None and self.status is None:
+        if self.title is None and self.status is None and self.approval_mode is None:
             raise ValueError("at least one conversation field must be changed")
         return self
 

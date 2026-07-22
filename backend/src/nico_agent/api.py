@@ -193,6 +193,8 @@ def create_app(
             "PROJECT_NOT_MANAGED",
             "PROJECT_SESSION_CONVERSATION_STALE",
             "TOOL_APPROVAL_ALREADY_DECIDED",
+            "CONVERSATION_APPROVAL_MODE_LOCKED",
+            "CONVERSATION_QUEUE_FULL",
         }:
             status_code = 409
         elif isinstance(exc, AccessDenied):

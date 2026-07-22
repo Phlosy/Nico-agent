@@ -48,6 +48,7 @@ These variables are present in `.env.example` and consumed by `docker-compose.ym
 | `NICO_WORKER_CONCURRENCY` | `1` | Execution loops in the Worker process |
 | `NICO_WORKER_ID` | `nico-worker` | Worker identity prefix |
 | `NICO_TOOL_APPROVAL_REQUIRED_RISKS` | `["medium","high"]` | Tool risk levels that require a durable human decision; use `[]` only in controlled compatibility tests |
+| `NICO_TOOL_APPROVAL_LOCKED_RISKS` | `[]` | Risk levels that Conversation policy may not auto-approve; each value must also appear in `NICO_TOOL_APPROVAL_REQUIRED_RISKS` |
 | `NICO_TOOL_APPROVAL_TTL_SECONDS` | `900` | Requested approval lifetime before Worker reconciliation expires and wakes the Run |
 | `NICO_HERMES_COMMAND` | `hermes` | Hermes CLI command parsed by the adapter |
 | `NICO_HERMES_ENABLED` | `false` | Explicitly register the optional Hermes adapter |

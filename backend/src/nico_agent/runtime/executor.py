@@ -45,6 +45,7 @@ class RuntimeWorker:
         heartbeat_seconds: float = 10,
         tool_gateway: ToolGateway | None = None,
         artifact_service: ArtifactService | None = None,
+        approval_locked_risks: frozenset[str] = frozenset(),
     ) -> None:
         if lease_seconds < 5:
             raise ValueError("lease_seconds must be at least 5")
@@ -55,7 +56,10 @@ class RuntimeWorker:
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.heartbeat_seconds = heartbeat_seconds
-        self.service = RuntimeExecutionService(database)
+        self.service = RuntimeExecutionService(
+            database,
+            approval_locked_risks=approval_locked_risks,
+        )
         self.coordination_service = CoordinationService(database)
         self.intervention_service = ProjectInterventionService(database)
         self.tool_gateway = tool_gateway

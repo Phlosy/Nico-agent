@@ -13,6 +13,7 @@ def test_settings_use_safe_local_defaults() -> None:
     assert settings.minio_url == "http://localhost:9000"
     assert settings.dependency_timeout_seconds == 2.0
     assert settings.tool_approval_required_risks == ["medium", "high"]
+    assert settings.tool_approval_locked_risks == []
     assert settings.tool_approval_ttl_seconds == 900
 
 
@@ -52,3 +53,18 @@ def test_production_rejects_default_infrastructure_credentials() -> None:
     )
     assert settings.sandbox_runner_token == "production-runner-token-replaced"
     assert settings.minio_secret_key == "production-minio-secret-replaced"
+
+
+def test_locked_tool_risks_must_also_require_approval() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            tool_approval_required_risks=["medium"],
+            tool_approval_locked_risks=["high"],
+            _env_file=None,
+        )
+
+    settings = Settings(
+        tool_approval_locked_risks=["high"],
+        _env_file=None,
+    )
+    assert settings.tool_approval_locked_risks == ["high"]

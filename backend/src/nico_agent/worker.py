@@ -307,6 +307,7 @@ async def worker_main(settings: Settings | None = None) -> None:
                     heartbeat_seconds=runtime_settings.worker_heartbeat_seconds,
                     tool_gateway=tool_gateway,
                     artifact_service=artifact_service,
+                    approval_locked_risks=frozenset(runtime_settings.tool_approval_locked_risks),
                 ),
                 stopping,
                 poll_interval_seconds=runtime_settings.worker_poll_interval_seconds,
