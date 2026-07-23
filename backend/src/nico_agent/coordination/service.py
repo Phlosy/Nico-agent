@@ -49,6 +49,8 @@ from nico_agent.domain.states import (
     require_revision,
 )
 from nico_agent.projects.metadata import is_managed_project
+from nico_agent.runtime.contracts import RuntimeLoopState
+from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.runtime.preparation import narrow_knowledge_policy
 
 _DELEGATABLE_RUN_STATUSES = {
@@ -461,17 +463,22 @@ class CoordinationService:
             for run in runs:
                 if RunStatus(run.status) in terminal:
                     continue
-                run.status = RunStatus.CANCELLED.value
+                await RunLifecycleAuthority.transition(
+                    session,
+                    context,
+                    run,
+                    target=RunStatus.CANCELLED,
+                    reason="coordination_tree_cancelled",
+                    metadata={"root_run_id": str(root.id)},
+                    loop_state=RuntimeLoopState.CANCELLED,
+                    event_type="RunCancelled",
+                    action="coordination.lifecycle.cancel",
+                    occurred_at=now,
+                )
                 run.error = {
                     "code": "RUN_TREE_CANCELLED",
                     "message": "the Run or one of its ancestors was cancelled",
                 }
-                run.ended_at = now
-                run.revision += 1
-                run.lease_owner = None
-                run.lease_token = None
-                run.lease_expires_at = None
-                run.heartbeat_at = None
                 runtime = await session.scalar(
                     select(RuntimeSession)
                     .where(
@@ -486,6 +493,7 @@ class CoordinationService:
                     "cancelled",
                 }:
                     runtime.status = "cancelled"
+                    runtime.loop_state = RuntimeLoopState.CANCELLED.value
                     runtime.ended_at = now
                     runtime.revision += 1
                 task = await session.scalar(

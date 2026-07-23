@@ -27,6 +27,7 @@ from nico_agent.domain.states import (
     ToolCallStatus,
     require_revision,
 )
+from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.tool_approvals.contracts import ToolApprovalDecision, ToolApprovalRead
 
 _TERMINAL_RUNS = {
@@ -364,8 +365,26 @@ class ToolApprovalService:
                 step.revision += 1
 
         if run.status == RunStatus.WAITING_FOR_APPROVAL.value:
-            run.status = RunStatus.RUNNING.value
-            run.revision += 1
+            lifecycle_context = TenantContext(
+                context.tenant_id,
+                actor,
+                context.correlation_id,
+            )
+            await RunLifecycleAuthority.transition(
+                session,
+                lifecycle_context,
+                run,
+                target=RunStatus.RUNNING,
+                reason="tool_approval_decided",
+                metadata={
+                    "approval_id": str(approval.id),
+                    "tool_call_id": str(call.id),
+                    "approval_status": status.value,
+                    "allowed_scope": scope.value,
+                },
+                event_type="RunWoken",
+                action="tool.approval.lifecycle.wake",
+            )
         if runtime_session is not None:
             runtime_session.provider_state = {
                 **runtime_session.provider_state,

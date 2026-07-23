@@ -50,7 +50,6 @@ from nico_agent.domain.states import (
     AGENT_TRANSITIONS,
     PROJECT_TRANSITIONS,
     RUN_STEP_TRANSITIONS,
-    RUN_TRANSITIONS,
     TASK_TRANSITIONS,
     AgentStatus,
     ProjectSessionStatus,
@@ -64,6 +63,7 @@ from nico_agent.domain.states import (
 )
 from nico_agent.projects.metadata import is_managed_project
 from nico_agent.runtime.contracts import RuntimeTrajectory
+from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 
 
 class ControlPlaneService:
@@ -620,23 +620,37 @@ class ControlPlaneService:
     ) -> Run:
         async with self.database.tenant_transaction(context) as session:
             run = await self._run(session, context, run_id, for_update=True)
-            require_revision("run", expected=command.expected_revision, actual=run.revision)
-            current = RunStatus(run.status)
-            run.status = transition_state("run", current, command.target, RUN_TRANSITIONS).value
             now = datetime.now(UTC)
-            if current is RunStatus.PENDING and command.target is RunStatus.PLANNING:
-                run.started_at = now
+            event_type = {
+                RunStatus.PLANNING: "RunPlanningStarted",
+                RunStatus.RUNNING: "RunStarted",
+                RunStatus.COMPLETED: "RunCompleted",
+                RunStatus.FAILED: "RunFailed",
+                RunStatus.CANCELLED: "RunCancelled",
+                RunStatus.TIMED_OUT: "RunTimedOut",
+            }.get(command.target, "RunStatusChanged")
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                run,
+                target=command.target,
+                reason=f"control_plane_{command.target.value}",
+                metadata={
+                    "error_code": (
+                        command.error.get("code") if isinstance(command.error, dict) else None
+                    )
+                },
+                expected_revision=command.expected_revision,
+                event_type=event_type,
+                action="run.transition",
+                occurred_at=now,
+            )
             if command.target in {
                 RunStatus.COMPLETED,
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
                 RunStatus.TIMED_OUT,
             }:
-                run.ended_at = now
-                run.lease_owner = None
-                run.lease_token = None
-                run.lease_expires_at = None
-                run.heartbeat_at = None
                 if command.target is RunStatus.CANCELLED:
                     runtime_session = await session.scalar(
                         select(RuntimeSession)
@@ -704,7 +718,6 @@ class ControlPlaneService:
                 run.result = command.result
             if command.error is not None:
                 run.error = command.error
-            run.revision += 1
             if command.target is RunStatus.COMPLETED:
                 task = await self._task(session, context, run.task_id, for_update=True)
                 if TaskStatus(task.status) is TaskStatus.RUNNING:
@@ -741,15 +754,6 @@ class ControlPlaneService:
                         "task.cancel",
                         run_id=run.id,
                     )
-            event_type = {
-                RunStatus.PLANNING: "RunPlanningStarted",
-                RunStatus.RUNNING: "RunStarted",
-                RunStatus.COMPLETED: "RunCompleted",
-                RunStatus.FAILED: "RunFailed",
-                RunStatus.CANCELLED: "RunCancelled",
-                RunStatus.TIMED_OUT: "RunTimedOut",
-            }.get(command.target, "RunStatusChanged")
-            self._record_change(session, context, run, event_type, "run.transition", run_id=run.id)
             await session.flush()
             return run
 

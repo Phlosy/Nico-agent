@@ -95,15 +95,25 @@ class RuntimeDisposition(StrEnum):
 
 
 class RuntimeLoopState(StrEnum):
+    """Detailed execution state projected beneath the public Run lifecycle."""
+
     INITIALIZING = "initializing"
     PLANNING = "planning"
     REASONING = "reasoning"
+    EXECUTING = "executing"
+    SEARCHING = "searching"
+    FETCHING = "fetching"
     WAITING_FOR_TOOL = "waiting_for_tool"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_USER_INPUT = "waiting_for_user_input"
     OBSERVING = "observing"
     DELEGATING = "delegating"
     WAITING_FOR_SUBAGENT = "waiting_for_subagent"
     REFLECTING = "reflecting"
     FINALIZING = "finalizing"
+    CANCELLING = "cancelling"
+    PAUSED = "paused"
+    BUDGET_EXHAUSTED = "budget_exhausted"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

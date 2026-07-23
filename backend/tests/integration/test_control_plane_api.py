@@ -308,6 +308,16 @@ async def test_task_multiple_runs_steps_events_and_audit(client: AsyncClient) ->
         json={"target": "running", "expected_revision": planning.json()["revision"]},
         headers=headers,
     )
+    reserved_user_input = await client.post(
+        f"/api/v1/runs/{first_run['id']}/transition",
+        json={
+            "target": "waiting_for_user_input",
+            "expected_revision": running.json()["revision"],
+        },
+        headers=headers,
+    )
+    assert reserved_user_input.status_code == 409
+    assert reserved_user_input.json()["code"] == "INVALID_STATE_TRANSITION"
     step_response = await client.post(
         f"/api/v1/runs/{first_run['id']}/steps",
         json={"sequence": 1, "kind": "reasoning", "input": {"question": "why"}},
@@ -391,6 +401,13 @@ async def test_task_multiple_runs_steps_events_and_audit(client: AsyncClient) ->
         "StepCompleted",
         "RunFailed",
     }
+    lifecycle_payloads = [
+        item["payload"]
+        for item in events
+        if "source" in item["payload"] and "target" in item["payload"]
+    ]
+    assert lifecycle_payloads
+    assert all(payload["status"] == payload["target"] for payload in lifecycle_payloads)
     audit = (await client.get("/api/v1/audit?limit=100", headers=headers)).json()
     assert {item["action"] for item in audit} >= {
         "task.create",

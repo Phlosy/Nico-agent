@@ -792,10 +792,15 @@ class Run(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'planning', 'running', 'waiting_for_tool', "
-            "'waiting_for_approval', 'waiting_for_subagent', 'paused', "
+            "'waiting_for_approval', 'waiting_for_user_input', "
+            "'waiting_for_subagent', 'paused', "
             "'completed', 'failed', 'cancelled', "
             "'timed_out')",
             name="ck_runs_status",
+        ),
+        CheckConstraint(
+            "octet_length(lifecycle_metadata::text) <= 16384",
+            name="ck_runs_lifecycle_metadata_size",
         ),
         CheckConstraint("checkpoint_schema_version > 0", name="ck_runs_checkpoint_schema"),
         CheckConstraint("checkpoint_revision >= 0", name="ck_runs_checkpoint_revision"),
@@ -863,6 +868,11 @@ class Run(Base, TimestampMixin):
     cost: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    lifecycle_reason: Mapped[str | None] = mapped_column(String(150))
+    lifecycle_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    lifecycle_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

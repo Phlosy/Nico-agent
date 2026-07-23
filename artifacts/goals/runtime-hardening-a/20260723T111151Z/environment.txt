@@ -1,0 +1,37 @@
+2026-07-23T11:12:49Z
+b44639c4d3a3c7c9db354c5a009a8195bc9a1c59
+A  artifacts/goals/runtime-hardening-a/20260723T102816Z/acceptance-summary.md
+A  artifacts/goals/runtime-hardening-a/20260723T102816Z/commands.txt
+A  artifacts/goals/runtime-hardening-a/20260723T102816Z/environment.txt
+A  artifacts/goals/runtime-hardening-a/20260723T102816Z/error-records.md
+A  artifacts/goals/runtime-hardening-a/20260723T102816Z/manifest.sha256
+A  artifacts/goals/runtime-hardening-a/20260723T111151Z/acceptance-summary.md
+A  artifacts/goals/runtime-hardening-a/20260723T111151Z/commands.md
+A  artifacts/goals/runtime-hardening-a/20260723T111151Z/error-records.md
+A  artifacts/goals/runtime-hardening-a/20260723T111151Z/review-summary.md
+A  backend/migrations/versions/20260723_0027_runtime_lifecycle_authority.py
+M  backend/src/nico_agent/control_plane.py
+M  backend/src/nico_agent/coordination/service.py
+M  backend/src/nico_agent/domain/models.py
+M  backend/src/nico_agent/domain/states.py
+M  backend/src/nico_agent/runtime/contracts.py
+A  backend/src/nico_agent/runtime/lifecycle.py
+M  backend/src/nico_agent/runtime/service.py
+M  backend/src/nico_agent/tool_approvals/service.py
+M  backend/src/nico_agent/tools/gateway.py
+M  backend/tests/integration/test_control_plane_api.py
+M  backend/tests/integration/test_infrastructure.py
+A  backend/tests/integration/test_runtime_lifecycle.py
+A  backend/tests/unit/test_runtime_lifecycle.py
+A  docs/brainstorms/2026-07-23-agent-runtime-execution-architecture-requirements.md
+A  docs/handoffs/2026-07-23-runtime-hardening-goal-a-handoff.md
+A  docs/plans/2026-07-23-001-refactor-agent-runtime-execution-hardening-plan.md
+M  docs/progress/goal-status.md
+M  docs/runtime.md
+M  docs/state-machines.md
+M  scripts/test.sh
+A  scripts/verify-runtime-hardening-goal-a-mixed-version.sh
+A  scripts/verify-runtime-hardening-goal-a.sh
+?? artifacts/goals/runtime-hardening-a/20260723T111151Z/environment.txt
+?? artifacts/goals/runtime-hardening-a/20260723T111151Z/verify.log
+Python 3.12.7

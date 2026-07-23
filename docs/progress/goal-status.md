@@ -1,6 +1,6 @@
 # Goal 状态
 
-最后更新：2026-07-19 UTC
+最后更新：2026-07-23 UTC
 
 | Goal | 状态 | 完成比例 | 验收结果 | 证据目录 | 当前阻塞 |
 | ---- | -- | ---: | ---- | ---- | ---- |
@@ -22,5 +22,10 @@
 | CLI-D | Verified | 100% | exec/input/output/detach、run watch/cursor、24 条 slash commands、Rich 视图、header 与 coin-cat 已实现；280 后端单测、11 前端测试/构建、78 集成、迁移往返、CLI-B/C 回归与 CLI-D PTY E2E 全绿 | `artifacts/goals/cli-goal-d/20260719T111600Z/` | 无；summary、附件与审批按阶段属于 CLI-E/F |
 | CLI-E | Verified | 100% | summary 独立 Run/ModelCall、冻结上下文选择、ContextSnapshot、受控附件物化、`/attach`、`/compact`、`/download` 已实现；283 项后端单测、11 项前端测试/构建、80 项真实集成、迁移往返、CLI-B/C/D 回归与 CLI-E PTY E2E 全绿 | `artifacts/goals/cli-goal-e/20260719T115130Z/` | 无；工具审批按阶段属于 CLI-F |
 | CLI-F | Verified | 100% | 持久化工具审批、风险策略、Worker 挂起/唤醒、超时恢复、once/run/reject 决策、审计及 CLI 断线续接已实现；288 项后端单测、11 项前端测试/构建、81 项真实集成、完整迁移往返与 CLI-B/C/D/E/F Compose/PTY E2E 全绿 | `artifacts/goals/cli-goal-f/20260719T122323Z/` | 无；正式 API 身份认证仍是平台既有缺口，不阻塞受信网络 CLI-F |
+| RH-A (U1) | Verified | 100% | Goal A verifier、665 项后端单测、11 项前端测试/构建、152 项真实集成、0027 迁移往返、7 项旧应用/新 schema 混跑、权限与审批竞态回归全绿 | `artifacts/goals/runtime-hardening-a/20260723T111151Z/` | 无；按 Goal 边界停止在 U1，未进入 U2 |
 
 状态只允许 `Not Started`、`In Progress`、`Blocked`、`Implemented`、`Verified`。Goal G–L 采用 `docs/plans/2026-07-18-001-nico-native-runtime-architecture-migration-plan.md` 的迁移路线；六个阶段的代码、迁移、测试、Compose 验收、文档和 Handoff 已全部交付。Goal G–L 保留 95% 是对未提供外部凭据的诚实标记，不是未完成的仓库实现项。CLI-A–F 采用 `docs/plans/2026-07-19-001-nico-cli-first-class-interface-plan.md`，六个阶段均已按顺序完成实现与验收。领域 Team/Workflow 不属于 Nico core。
+
+RH-A–RH-I2 采用 Runtime Hardening 统一计划。`Implemented` 表示该 U-ID 的代码、迁移
+和 focused proof 已完成；只有计划规定的全量 gate 与证据复核完成后才升为
+`Verified`。一个 Goal 只处理一个 U-ID。

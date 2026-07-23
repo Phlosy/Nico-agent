@@ -1,0 +1,14 @@
+Focused commands observed during U1:
+
+.venv/bin/pytest -q backend/tests/unit/test_domain_states.py backend/tests/unit/test_runtime_contract_v2.py backend/tests/unit/test_tool_approvals.py
+.venv/bin/pytest -q backend/tests/unit/test_runtime_lifecycle.py
+.venv/bin/pytest -q backend/tests/unit/test_runtime_lifecycle.py backend/tests/unit/test_domain_states.py backend/tests/unit/test_tool_approvals.py backend/tests/unit/test_worker.py backend/tests/unit/test_runtime_preparation.py backend/tests/unit/test_runtime_contract_v2.py
+.venv/bin/ruff check <U1 production, migration, unit and integration paths>
+.venv/bin/python -m compileall -q backend/src/nico_agent backend/migrations/versions/20260723_0027_runtime_lifecycle_authority.py
+.venv/bin/alembic -c backend/alembic.ini upgrade 20260722_0026
+.venv/bin/alembic -c backend/alembic.ini upgrade 20260723_0027
+.venv/bin/alembic -c backend/alembic.ini downgrade 20260722_0026
+.venv/bin/alembic -c backend/alembic.ini upgrade 20260723_0027
+.venv/bin/pytest -q backend/tests/integration/test_runtime_lifecycle.py backend/tests/integration/test_runtime_leasing.py backend/tests/integration/test_coordination_service.py -k 'not content_addressed_artifact' backend/tests/integration/test_tool_persistence.py
+.venv/bin/pytest -q backend/tests/integration/test_tool_gateway.py
+.venv/bin/pytest -q backend/tests/integration/test_runtime_worker.py::test_mock_failure_and_unknown_provider_become_terminal

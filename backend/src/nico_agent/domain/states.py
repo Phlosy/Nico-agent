@@ -116,6 +116,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     WAITING_FOR_TOOL = "waiting_for_tool"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_USER_INPUT = "waiting_for_user_input"
     WAITING_FOR_SUBAGENT = "waiting_for_subagent"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -384,6 +385,9 @@ RUN_TRANSITIONS = {
         RunStatus.FAILED,
         RunStatus.CANCELLED,
     },
+    # Reserved for the U3 durable request/answer/wake protocol. Keeping the
+    # enum/schema value additive must not make it executable in U1.
+    RunStatus.WAITING_FOR_USER_INPUT: set(),
     RunStatus.WAITING_FOR_SUBAGENT: {
         RunStatus.RUNNING,
         RunStatus.FAILED,

@@ -6,6 +6,26 @@
 
 能力通过 `RuntimeProviderDescriptor.capabilities` 明示，`implementation` 区分 native、adapter 与 test，`compatibility` 声明可恢复的 Provider/协议版本和执行模式。缺少能力必须抛出稳定的 `RUNTIME_CAPABILITY_UNSUPPORTED`，不能返回伪成功。事件使用单调 `sequence` 和平台枚举；应用服务检查连续性、幂等忽略已提交事件，再映射为 RunStep/Event/Audit。
 
+## Run lifecycle authority
+
+Runtime 控制的 Run 状态变化统一调用 `runtime/lifecycle.py`。它接收调用方的
+AsyncSession、TenantContext 和已锁定 Run，在同一事务验证 source/target、revision
+与可选租约 owner/token，然后原子保存 coarse status、reason、脱敏 metadata、
+revision、Event、Audit 和领取语义。它不创建、提交或回滚事务。
+
+数据库中的 `claim_next_run()` 保留 0026 的 Conversation queue head、priority 和
+异常 head pause 规则。`reconcile_expired_tool_approvals()` 与
+`reconcile_coordination_waiters()` 是具名 SQL lifecycle 端口；它们调用与 Python
+相同版本的转换/claimability 合同，wake 只在预期等待状态仍成立时成功。SQL 端口
+只授予最小权限 claimer role。Runtime Provider v2、冻结 execution manifest、
+Tool Gateway 和 PostgreSQL lease 继续保持原有权威边界。
+
+迁移 0027 是 expand-only：旧 Run 自动得到空 lifecycle metadata 和 revision 0，
+旧应用可忽略新列。代码 rollback 保留已经写入的 lifecycle reason/Event/Audit；
+生产环境使用 forward-fix，不通过 destructive schema downgrade 删除这些事实。
+`waiting_for_user_input` 仅为 U3 的 schema/read 兼容预留，当前没有 handler、wake API
+或通用 external wait。
+
 ## Provider 选择
 
 新建 AgentVersion 的正式默认值是 `runtime_provider=nico_native` 和 `execution_mode=direct`。为兼容历史数据，旧版本仍依次读取 `run_config.runtime_provider`、`model_config.runtime_provider`，均缺省时解析为 `mock`；显式选择不会被静默替换。每次解析把 source、legacy 标记和兼容元数据写入 RuntimeSession；legacy 分支追加 `LegacyRuntimeProviderResolved` Event/Audit。生产 Worker 不注册 Mock，避免测试执行器被误用为真实推理。

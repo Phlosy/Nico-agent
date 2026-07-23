@@ -32,6 +32,8 @@ from nico_agent.domain.states import (
     ToolCallStatus,
     conversation_auto_approved_risks,
 )
+from nico_agent.runtime.contracts import RuntimeLoopState
+from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.tool_approvals.service import ToolApprovalService
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
@@ -379,6 +381,21 @@ class ToolGateway:
         context = TenantContext(claim.tenant_id, f"worker:{worker_id}", request.correlation_id)
         async with self.database.tenant_transaction(context) as session:
             run = await self._owned_run(session, claim, worker_id)
+            if RunStatus(run.status) is RunStatus.PLANNING:
+                await RunLifecycleAuthority.transition(
+                    session,
+                    context,
+                    run,
+                    target=RunStatus.RUNNING,
+                    reason="tool_dispatch_started",
+                    metadata={"tool": f"{request.tool_name}@{request.tool_version}"},
+                    loop_state=RuntimeLoopState.REASONING,
+                    lease_owner=worker_id,
+                    lease_token=claim.lease_token,
+                    event_type="RunStarted",
+                    action="tool.lifecycle.start",
+                    clear_lease=False,
+                )
             runtime_projection = await session.scalar(
                 select(RuntimeSession).where(
                     RuntimeSession.tenant_id == claim.tenant_id,
@@ -411,8 +428,24 @@ class ToolGateway:
                     )
                 )
                 if approval is not None and approval.status == ToolApprovalStatus.REQUESTED.value:
-                    run.status = RunStatus.WAITING_FOR_APPROVAL.value
-                    run.revision += 1
+                    if RunStatus(run.status) is not RunStatus.WAITING_FOR_APPROVAL:
+                        await RunLifecycleAuthority.transition(
+                            session,
+                            context,
+                            run,
+                            target=RunStatus.WAITING_FOR_APPROVAL,
+                            reason="tool_approval_pending",
+                            metadata={
+                                "approval_id": str(approval.id),
+                                "tool_call_id": str(existing.id),
+                            },
+                            loop_state=RuntimeLoopState.WAITING_FOR_APPROVAL,
+                            lease_owner=worker_id,
+                            lease_token=claim.lease_token,
+                            event_type="RunWaitingForApproval",
+                            action="tool.lifecycle.wait_approval",
+                            clear_lease=False,
+                        )
                     return _ApprovalPending(
                         approval_id=approval.id,
                         tool_call_id=existing.id,
@@ -451,8 +484,20 @@ class ToolGateway:
                 step.revision += 1
                 authorization = await self._authorization(session, claim, executor.spec, definition)
                 secrets = resolve_secrets(self.secret_resolver, authorization.secret_refs)
-                run.status = RunStatus.WAITING_FOR_TOOL.value
-                run.revision += 1
+                if RunStatus(run.status) is not RunStatus.WAITING_FOR_TOOL:
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.WAITING_FOR_TOOL,
+                        reason="tool_execution_started",
+                        metadata={"tool_call_id": str(existing.id)},
+                        loop_state=RuntimeLoopState.WAITING_FOR_TOOL,
+                        lease_owner=worker_id,
+                        lease_token=claim.lease_token,
+                        event_type="RunWaitingForTool",
+                        action="tool.lifecycle.wait_tool",
+                    )
                 return self._prepared(
                     existing,
                     executor,
@@ -664,8 +709,24 @@ class ToolGateway:
                 )
                 session.add(approval)
                 await session.flush()
-                run.status = RunStatus.WAITING_FOR_APPROVAL.value
-                run.revision += 1
+                await RunLifecycleAuthority.transition(
+                    session,
+                    context,
+                    run,
+                    target=RunStatus.WAITING_FOR_APPROVAL,
+                    reason="tool_approval_requested",
+                    metadata={
+                        "approval_id": str(approval.id),
+                        "tool_call_id": str(call.id),
+                        "risk_level": approval.risk_level,
+                    },
+                    loop_state=RuntimeLoopState.WAITING_FOR_APPROVAL,
+                    lease_owner=worker_id,
+                    lease_token=claim.lease_token,
+                    event_type="RunWaitingForApproval",
+                    action="tool.lifecycle.wait_approval",
+                    clear_lease=False,
+                )
                 if runtime_projection is not None:
                     runtime_projection.loop_state = "waiting_for_approval"
                     runtime_projection.revision += 1
@@ -690,8 +751,19 @@ class ToolGateway:
                 )
             if run_scope_grant is not None:
                 self._record_approval_grant_reused(session, context, run_scope_grant, call)
-            run.status = RunStatus.WAITING_FOR_TOOL.value
-            run.revision += 1
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                run,
+                target=RunStatus.WAITING_FOR_TOOL,
+                reason="tool_execution_started",
+                metadata={"tool_call_id": str(call.id)},
+                loop_state=RuntimeLoopState.WAITING_FOR_TOOL,
+                lease_owner=worker_id,
+                lease_token=claim.lease_token,
+                event_type="RunWaitingForTool",
+                action="tool.lifecycle.wait_tool",
+            )
             return self._prepared(call, executor, authorization, request, context, secrets)
 
     @staticmethod
@@ -931,8 +1003,23 @@ class ToolGateway:
             step.error = error
             step.ended_at = now
             step.revision += 1
-            run.status = RunStatus.RUNNING.value
-            run.revision += 1
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                run,
+                target=RunStatus.RUNNING,
+                reason="tool_execution_finished",
+                metadata={
+                    "tool_call_id": str(call.id),
+                    "tool_status": status.value,
+                    "error_code": error.get("code") if error else None,
+                },
+                lease_owner=worker_id,
+                lease_token=claim.lease_token,
+                event_type="RunWoken",
+                action="tool.lifecycle.wake",
+                clear_lease=False,
+            )
             self._record(
                 session,
                 context,

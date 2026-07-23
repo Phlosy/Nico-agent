@@ -1,0 +1,5 @@
+UTC evidence timestamp: 2026-07-23T10:28:16Z
+Migration predecessor: 20260722_0026
+Migration head: 20260723_0027
+Execution mode: native inline, no commit/stage/full-suite authority
+PostgreSQL: real Docker dependency in isolated databases

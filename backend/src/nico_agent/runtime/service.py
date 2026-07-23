@@ -62,6 +62,7 @@ from nico_agent.runtime.contracts import (
     RuntimeEvent,
     RuntimeEventType,
     RuntimeExecutionMode,
+    RuntimeLoopState,
     RuntimeProviderDescriptor,
     RuntimeResult,
     RuntimeSessionHandle,
@@ -70,6 +71,7 @@ from nico_agent.runtime.contracts import (
     RuntimeTrajectory,
 )
 from nico_agent.runtime.errors import RuntimeLeaseLost, RuntimeRecoveryUnsupported
+from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.runtime.preparation import (
     RuntimePreparationService,
     build_knowledge_policy_snapshot,
@@ -436,18 +438,17 @@ class RuntimeExecutionService:
                 )
 
             if RunStatus(run.status) is RunStatus.PENDING:
-                run.status = RunStatus.PLANNING.value
-                run.started_at = run_started_at
-                run.revision += 1
-                self._record(
+                await RunLifecycleAuthority.transition(
                     session,
                     context,
+                    run,
+                    target=RunStatus.PLANNING,
+                    reason="runtime_claim_prepared",
+                    metadata={"worker_id": worker_id, "recovering": recovering},
+                    loop_state=RuntimeLoopState.INITIALIZING,
                     event_type="RunPlanningStarted",
-                    aggregate_type="run",
-                    aggregate_id=run.id,
                     action="runtime.claim",
-                    payload={"worker_id": worker_id, "revision": run.revision},
-                    run_id=run.id,
+                    occurred_at=run_started_at,
                 )
                 if inbound_delegation is not None and inbound_delegation.status == "accepted":
                     inbound_delegation.status = "running"
@@ -662,13 +663,42 @@ class RuntimeExecutionService:
                 runtime_session.status = RuntimeSessionStatus.RUNNING.value
                 runtime_session.started_at = runtime_session.started_at or event.occurred_at
                 if RunStatus(run.status) in {RunStatus.PLANNING, RunStatus.PAUSED}:
-                    run.status = RunStatus.RUNNING.value
-                    run.revision += 1
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.RUNNING,
+                        reason=(
+                            "runtime_provider_started"
+                            if event.type is RuntimeEventType.RUN_STARTED
+                            else "runtime_provider_resumed"
+                        ),
+                        metadata={"provider_sequence": event.sequence},
+                        event_type=(
+                            "RunStarted"
+                            if event.type is RuntimeEventType.RUN_STARTED
+                            else "RunResumed"
+                        ),
+                        action="runtime.event.lifecycle",
+                        clear_lease=False,
+                        occurred_at=event.occurred_at,
+                    )
             elif event.type is RuntimeEventType.RUN_PAUSED:
                 runtime_session.status = RuntimeSessionStatus.PAUSED.value
                 if RunStatus(run.status) is RunStatus.RUNNING:
-                    run.status = RunStatus.PAUSED.value
-                    run.revision += 1
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.PAUSED,
+                        reason="runtime_provider_paused",
+                        metadata={"provider_sequence": event.sequence},
+                        loop_state=RuntimeLoopState.PAUSED,
+                        event_type="RunPaused",
+                        action="runtime.event.lifecycle",
+                        clear_lease=False,
+                        occurred_at=event.occurred_at,
+                    )
             elif event.type is RuntimeEventType.STEP_STARTED:
                 await self._step_started(session, run, runtime_session, event)
             elif event.type is RuntimeEventType.STEP_COMPLETED:
@@ -764,6 +794,42 @@ class RuntimeExecutionService:
                 RuntimeSessionStatus.COMPLETED: RunStatus.COMPLETED,
                 RuntimeSessionStatus.CANCELLED: RunStatus.CANCELLED,
             }.get(result.status, RunStatus.FAILED)
+            loop_state = (
+                RuntimeLoopState.TIMED_OUT
+                if target is RunStatus.TIMED_OUT
+                else {
+                    RuntimeSessionStatus.COMPLETED: RuntimeLoopState.COMPLETED,
+                    RuntimeSessionStatus.CANCELLED: RuntimeLoopState.CANCELLED,
+                }.get(result.status, RuntimeLoopState.FAILED)
+            )
+            lifecycle_reason = {
+                RunStatus.COMPLETED: "runtime_completed",
+                RunStatus.CANCELLED: "runtime_cancelled",
+                RunStatus.TIMED_OUT: "runtime_timed_out",
+            }.get(target, "runtime_failed")
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                run,
+                target=target,
+                reason=lifecycle_reason,
+                metadata={
+                    "provider": prepared.provider_name,
+                    "error_code": (
+                        result.error.get("code") if isinstance(result.error, dict) else None
+                    ),
+                },
+                loop_state=loop_state,
+                lease_owner=worker_id,
+                lease_token=prepared.claim.lease_token,
+                event_type={
+                    RunStatus.COMPLETED: "RunCompleted",
+                    RunStatus.CANCELLED: "RunCancelled",
+                    RunStatus.TIMED_OUT: "RunTimedOut",
+                }.get(target, "RunFailed"),
+                action="runtime.complete",
+                occurred_at=now,
+            )
             runtime_session.status = result.status.value
             runtime_session.loop_state = (
                 "timed_out"
@@ -781,14 +847,10 @@ class RuntimeExecutionService:
             )
             runtime_session.ended_at = now
             runtime_session.revision += 1
-            run.status = target.value
             run.result = result.output
             run.error = result.error
             run.cost = result.usage
             run.checkpoint = result.checkpoint
-            run.ended_at = now
-            run.revision += 1
-            self._clear_lease(run)
 
             await self._finalize_knowledge_usages(
                 session,
@@ -882,20 +944,6 @@ class RuntimeExecutionService:
                 run,
                 narrative_output=(result.output if target is RunStatus.COMPLETED else None),
             )
-            self._record(
-                session,
-                context,
-                event_type={
-                    RunStatus.COMPLETED: "RunCompleted",
-                    RunStatus.CANCELLED: "RunCancelled",
-                    RunStatus.TIMED_OUT: "RunTimedOut",
-                }.get(target, "RunFailed"),
-                aggregate_type="run",
-                aggregate_id=run.id,
-                action="runtime.complete",
-                payload={"status": run.status, "revision": run.revision},
-                run_id=run.id,
-            )
             await session.flush()
             return True
 
@@ -959,18 +1007,47 @@ class RuntimeExecutionService:
                     raise ValueError("tool approval suspension has no durable request")
                 # A fast operator decision may race this final suspension write.
                 # Preserve that wake-up by leaving an already-decided Run claimable.
-                run.status = (
-                    RunStatus.WAITING_FOR_APPROVAL.value
-                    if approval.status == "requested"
-                    else RunStatus.RUNNING.value
-                )
                 runtime_session.loop_state = "waiting_for_approval"
+                if (
+                    approval.status != "requested"
+                    and RunStatus(run.status) is RunStatus.WAITING_FOR_APPROVAL
+                ):
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.RUNNING,
+                        reason="tool_approval_decided_before_suspend",
+                        metadata={"approval_id": str(approval.id)},
+                        event_type="RunWoken",
+                        action="runtime.suspend.fast_wake",
+                    )
             else:
-                run.status = RunStatus.WAITING_FOR_SUBAGENT.value
+                if RunStatus(run.status) is not RunStatus.WAITING_FOR_SUBAGENT:
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.WAITING_FOR_SUBAGENT,
+                        reason="runtime_waiting_for_subagent",
+                        metadata={
+                            "wake_type": str(wake_type)[:100] if wake_type is not None else None
+                        },
+                        loop_state=RuntimeLoopState.WAITING_FOR_SUBAGENT,
+                        event_type="RunWaitingForSubagent",
+                        action="runtime.suspend",
+                    )
             run.checkpoint = checkpoint
             run.cost = usage
+            # Checkpoint persistence is a separate Run fact revision. Lifecycle
+            # revisions change only when the coarse status changes.
             run.revision += 1
-            self._clear_lease(run)
+            if wake_type == "tool_approval":
+                # An approval decision can wake the Run before this transaction
+                # acquires its lock. The wake preserves the live handshake lease
+                # so persistence above remains authorized; release it only after
+                # the checkpoint, usage, and trajectory recovery boundary exists.
+                RunLifecycleAuthority.clear_lease(run)
             self._record(
                 session,
                 context,
@@ -1197,9 +1274,16 @@ class RuntimeExecutionService:
             and parent is not None
             and RunStatus(parent.status) is RunStatus.WAITING_FOR_SUBAGENT
         ):
-            parent.status = RunStatus.RUNNING.value
-            parent.revision += 1
-            self._clear_lease(parent)
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                parent,
+                target=RunStatus.RUNNING,
+                reason="coordination_children_terminal",
+                metadata={"child_run_id": str(run.id)},
+                event_type="RunWoken",
+                action="coordination.child_wake",
+            )
             parent_runtime = await session.scalar(
                 select(RuntimeSession)
                 .where(
@@ -1283,11 +1367,35 @@ class RuntimeExecutionService:
                 return False
             if RunStatus(run.status) in _TERMINAL_RUN_STATUSES:
                 return False
-            run.status = RunStatus.FAILED.value
+            if RunStatus(run.status) is RunStatus.PENDING:
+                await RunLifecycleAuthority.transition(
+                    session,
+                    context,
+                    run,
+                    target=RunStatus.PLANNING,
+                    reason="runtime_preparation_started",
+                    metadata={"worker_id": worker_id},
+                    loop_state=RuntimeLoopState.INITIALIZING,
+                    lease_owner=worker_id,
+                    lease_token=claim.lease_token,
+                    event_type="RunPlanningStarted",
+                    action="runtime.prepare.start",
+                    clear_lease=False,
+                )
+            await RunLifecycleAuthority.transition(
+                session,
+                context,
+                run,
+                target=RunStatus.FAILED,
+                reason="runtime_preparation_failed",
+                metadata={"error_code": code},
+                loop_state=RuntimeLoopState.FAILED,
+                lease_owner=worker_id,
+                lease_token=claim.lease_token,
+                event_type="RunFailed",
+                action="runtime.prepare.fail",
+            )
             run.error = {"code": code, "message": message}
-            run.ended_at = datetime.now(UTC)
-            run.revision += 1
-            self._clear_lease(run)
             task = await session.scalar(
                 select(Task)
                 .where(Task.tenant_id == claim.tenant_id, Task.id == run.task_id)
@@ -1301,16 +1409,6 @@ class RuntimeExecutionService:
                 context,
                 run,
                 narrative_output=None,
-            )
-            self._record(
-                session,
-                context,
-                event_type="RunFailed",
-                aggregate_type="run",
-                aggregate_id=run.id,
-                action="runtime.prepare.fail",
-                payload={"status": run.status, "code": code, "revision": run.revision},
-                run_id=run.id,
             )
             await session.flush()
             return True
@@ -2594,13 +2692,6 @@ class RuntimeExecutionService:
     @staticmethod
     def _event_name(event_type: RuntimeEventType) -> str:
         return "Runtime" + "".join(part.title() for part in event_type.value.split("."))
-
-    @staticmethod
-    def _clear_lease(run: Run) -> None:
-        run.lease_owner = None
-        run.lease_token = None
-        run.lease_expires_at = None
-        run.heartbeat_at = None
 
     @staticmethod
     def _record(
