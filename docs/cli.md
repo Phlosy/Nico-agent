@@ -236,7 +236,8 @@ Session 一样成为下一条持久 Turn；只有显式 `/guide` 才绑定当前
 不带 `MESSAGE` 时进入普通滚动式交互，适合 SSH 和日志复制。模型执行期间输入框
 保持可用；按 Enter 会立即把文本保存为下一条服务端 Turn，而不等待当前回答。
 Conversation 同一时刻只执行一个 Run，后续消息严格按 sequence 串行领取；退出 CLI
-不会删除队列。底部状态栏持续显示完整或确定性缩写后的模型、当前 Run 冻结权限、
+不会删除队列。空闲时提交显示 `Submitted · turn #N`；仅当前面确有活动或排队 Turn
+时显示 `Queued · turn #N`，其中 N 是持久化 Turn 序号而不是队列长度。底部状态栏持续显示完整或确定性缩写后的模型、当前 Run 冻结权限、
 下一 Run 权限、执行阶段和排队数量。输入历史保存在平台默认用户数据目录，目录权限
 为 `0700`、文件为 `0600`。快捷键语义如下：
 
@@ -319,10 +320,12 @@ SearXNG 是本机默认项且无需搜索 Key；Brave 不运行本地搜索服�
 Key。两种路径最终都使用相同的 `web.search`、来源绑定的 `web.fetch`、审批和审计边界。
 DNS 解析器不是模型参数：模型只能提交搜索结果 URL，不能选择或修改 DoH endpoint。
 
-聊天中普通搜索只显示 `Web search`、读取只显示 `Reading source` 及有界终态；审批
-面板只展示截断 query 或 URL origin。原始 query、页面正文、Provider payload、内部
-事件名与 checkpoint 不进入 human 滚动区。需要完整持久化事实时使用 `/tools`、
-`/audit` 或 `--json`。
+聊天运行中只在临时状态或 footer 显示 `Web search`、`Reading source`；终结时把
+成功搜索、已读来源和可恢复失败压缩成一条 `Web research` 摘要。单个来源的
+`WEB_FETCH_SOURCE_DENIED`、不可达或 HTTP 错误不会用连续红色行淹没回答，但仍完整
+保存在 ToolCall/Event/Audit 中。审批面板只展示截断 query 或 URL origin。原始 query、
+页面正文、Provider payload、内部事件名与 checkpoint 不进入 human 滚动区。需要完整
+持久化事实时使用 `/tools`、`/audit` 或 `--json`。
 
 恢复指定会话、继续最近的活跃会话或只读检查：
 
@@ -346,6 +349,10 @@ nico conversation history <conversation-id>
 Event，按 sequence 去重，并在流结束后通过 Turn API 校准最终结果。终端断线不改变
 服务端权威状态。
 
+普通 Conversation Turn 默认最多 12 轮模型迭代和 8 次工具调用；显式 API 预算可以
+覆盖该值。Worker 在首次领取时冻结 Run 开始 UTC 时间，模型可直接换算用户请求的
+时区，不应仅为“今天日期”或“当前时间”启动 Web 搜索。
+
 human 模式不会把持久化事件流原样打印到对话中。普通 Task、Run、RuntimeSession、计划、步骤、ContextSnapshot、ModelCall 和 checkpoint 生命周期只用于审计与显式检查命令；聊天滚动区只显示最终回答、真实工具动作、审批、可用 Artifact，以及失败或取消。由于模型增量事件无法可靠区分最终正文与中间结构化输出，CLI 等 Turn 终态校准后再渲染 `assistant_output`。`--json` 仍返回完整事件数组供自动化消费。
 
 ### 执行中的反馈
@@ -365,7 +372,11 @@ human 模式不会把持久化事件流原样打印到对话中。普通 Task、
 并显示本次等待的经过时间。连接暂时中断时，同一行显示有界重连次数；连接恢复后
 自动消失。
 
-滚动区只保留有长期价值的结果：每个工具调用至多一条终态、已保存的 Artifact、审批面板、失败或取消，以及最终回答。能够由同一工具调用的开始和结束事件精确关联时才显示耗时。模型增量、私有推理、内部事件名、sequence、内部 ID、原始工具参数和返回 payload 都不会出现在 human 输出中；需要审计时使用 `/inspect`、`/plan`、`/steps`、`/tools`、`/audit` 等显式命令。
+滚动区只保留有长期价值的结果：非 Web 工具每个调用至多一条终态，Web 尝试按 Run
+汇总；另外保留已保存的 Artifact、审批面板、Run 失败或取消，以及最终回答。能够由
+同一工具调用的开始和结束事件精确关联时才显示耗时。模型增量、私有推理、内部事件名、
+sequence、内部 ID、原始工具参数和返回 payload 都不会出现在 human 输出中；需要审计
+时使用 `/inspect`、`/plan`、`/steps`、`/tools`、`/audit` 等显式命令。
 
 输出重定向或非 TTY 环境不播放 spinner，也不连续打印阶段变化：只输出一次初始等待提示、有界重连提示和上述持久结果。`--json` 合同不变，仍只输出一个 JSON 文档及真实事件数组；临时状态和连接提示不会被伪造成事件写入 JSON。
 

@@ -432,6 +432,7 @@ async def test_runtime_session_freezes_conversation_approval_mode(app_client) ->
 
     first_session = await prepare(first["run_id"])
     assert first_session.execution_manifest["tool_approval_policy"]["mode"] == "ask"
+    assert first_session.execution_manifest["run_started_at"].endswith("+00:00")
 
     latest = (
         await client.get(f"/api/v1/conversations/{conversation['id']}", headers=headers)

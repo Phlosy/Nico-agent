@@ -26,6 +26,7 @@ def test_conversation_contracts_are_bounded_and_generate_idempotency_keys() -> N
     assert command.title == "New conversation"
     assert command.idempotency_key
     assert turn.idempotency_key
+    assert turn.budgets == {"max_iterations": 12, "max_tool_calls": 8}
     assert ConversationStatus.ACTIVE.value == "active"
     assert ConversationTurnStatus.WAITING_FOR_APPROVAL.value == "waiting_for_approval"
 

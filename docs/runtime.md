@@ -26,6 +26,12 @@
 
 ReAct 模式执行有界的“模型推理 -> Tool Gateway -> 工具观察 -> 下一轮推理”循环。模型只能调用冻结策略中授权的精确 `name@version` 工具；每轮受 `max_iterations`、`max_tool_calls` 和 token budget 限制。模型协议错误、无权限工具、空最终输出和预算耗尽都会以稳定错误失败关闭。Direct 模式仍不执行 Tool Call，收到此类输出会以 `MODE_CAPABILITY_VIOLATION` 失败。
 
+RuntimeSession 的 execution manifest 会冻结 Run 首次开始的 UTC 时间，并把它作为平台
+可信事实加入 Native 各阶段 Context。模型应直接换算所需时区，不为当前日期或时间
+单独联网。ReAct 指令同时要求使用完成任务所需的最少工具：简单事实通常在一个相关
+来源成功后终结，不因已有证据之外的单个来源失败重复等价搜索。普通 Conversation
+默认再以 12 轮、8 次工具调用约束该行为；显式任务预算仍可覆盖。
+
 ReAct 在工具外部作用前保存带完整性 Hash 的 schema v2 checkpoint，工具成功后先提交 ToolCall/RunStep/Event/Audit，再保存观察 checkpoint。Worker 接管过期租约时会把未终结 ModelCall 标为 `interrupted`，使用新的 replay call key 重试；ToolCall 使用稳定 idempotency key 查询权威结果，已成功的文件、Python 或其他副作用不会再次执行。每个执行尝试使用独立的进程内 session id，旧租约持有者的迟到 cancel/release 不会误伤接管者。
 
 Web 工具沿用同一恢复协议。`web.search` 的成功 ToolCall ID 会进入模型观察，模型只有

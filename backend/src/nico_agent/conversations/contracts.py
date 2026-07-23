@@ -17,6 +17,11 @@ from nico_agent.domain.states import (
     RunStatus,
 )
 
+DEFAULT_CONVERSATION_BUDGETS = {
+    "max_iterations": 12,
+    "max_tool_calls": 8,
+}
+
 
 class FromAttributesModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -82,7 +87,7 @@ class ConversationTurnCreate(BaseModel):
     max_steps: int = Field(default=64, ge=1, le=10_000)
     token_budget: int | None = Field(default=None, ge=1)
     timeout_seconds: int | None = Field(default=None, ge=1, le=604_800)
-    budgets: dict = Field(default_factory=dict)
+    budgets: dict = Field(default_factory=lambda: dict(DEFAULT_CONVERSATION_BUDGETS))
 
 
 class ConversationCompact(BaseModel):

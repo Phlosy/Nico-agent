@@ -144,6 +144,12 @@ class InteractiveChatSession:
     async def submit_message(self, message: str) -> dict[str, Any]:
         if not message.strip():
             raise CliError("EMPTY_CHAT_MESSAGE", "chat message cannot be empty", exit_code=2)
+        was_busy = bool(
+            self.queue.get("active_turn")
+            or self.queue.get("head_turn")
+            or self.queue.get("pause_turn")
+            or int(self.queue.get("queued_count") or 0)
+        )
         turn = await self._api_call(
             lambda: self.client.create_conversation_turn(
                 self.conversation["id"],
@@ -152,8 +158,9 @@ class InteractiveChatSession:
             )
         )
         sequence = turn.get("sequence")
-        queued = f"Queued message #{sequence}" if sequence is not None else "Queued message"
-        await run_in_terminal(lambda: self.runner.renderer.notice(queued))
+        state = "Queued" if was_busy else "Submitted"
+        notice = f"{state} · turn #{sequence}" if sequence is not None else state
+        await run_in_terminal(lambda: self.runner.renderer.notice(notice))
         await self._refresh_state()
         await self._ensure_watch()
         return turn
@@ -449,6 +456,7 @@ class InteractiveChatSession:
                     continue
                 self.queue = queue
                 self._watch_run_id = None
+                await run_in_terminal(self.progress.stop)
                 turn_id = str(turn.get("id") or "")
                 if turn_id and turn_id not in self._rendered_turns:
                     self._rendered_turns.add(turn_id)

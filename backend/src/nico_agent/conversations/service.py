@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.conversations.contracts import (
+    DEFAULT_CONVERSATION_BUDGETS,
     ConversationCompact,
     ConversationCompactAccepted,
     ConversationCreate,
@@ -415,7 +416,7 @@ class ConversationService:
                 max_steps=command.max_steps,
                 token_budget=command.token_budget,
                 timeout_seconds=command.timeout_seconds,
-                budgets=command.budgets,
+                budgets={**DEFAULT_CONVERSATION_BUDGETS, **command.budgets},
             )
             now = datetime.now(UTC)
             staged = list(

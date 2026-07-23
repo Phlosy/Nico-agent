@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from nico_agent.runtime.contracts import RuntimeSessionRequest
-from nico_agent.runtime.native.context import build_native_context
+from nico_agent.runtime.native.context import build_native_context, build_phase_context
 from nico_agent.runtime.preparation import (
     RuntimePreparationService,
     build_knowledge_policy_snapshot,
@@ -224,3 +224,40 @@ def test_frozen_published_knowledge_is_untrusted_and_rebuildable() -> None:
     assert context.skill_refs[0]["skill_version_id"] == str(skill_version_id)
     assert f"memory:{memory_id}:v2:{memory_hash}" in context.source_refs
     assert context.content_hash == build_native_context(request, mode="direct").content_hash
+
+
+def test_native_context_exposes_a_frozen_authoritative_run_time() -> None:
+    request = RuntimeSessionRequest(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        task_id=uuid4(),
+        agent_id=uuid4(),
+        agent_version_id=uuid4(),
+        task_title="Tell the time",
+        task_input={"message": "当前北京时间"},
+        role="assistant",
+        mandate="Help accurately",
+        execution_manifest={"run_started_at": "2026-07-23T07:07:12.365729+00:00"},
+    )
+
+    context = build_native_context(request, mode="react")
+    phase_context = build_phase_context(
+        request,
+        phase="planning",
+        instruction="Plan the task.",
+        payload={},
+        version=1,
+    )
+    system = context.messages[0].content or ""
+    phase_system = phase_context.messages[0].content or ""
+    instruction = context.messages[1].content or ""
+
+    assert "2026-07-23T07:07:12.365729+00:00" in system
+    assert "2026-07-23T07:07:12.365729+00:00" in phase_system
+    assert "authoritative for current date and time" in system
+    assert "authoritative for current date and time" in phase_system
+    assert "Do not use Web search solely to discover the current date or time" in system
+    assert "Use the fewest tool calls needed" in instruction
+    assert "one successful relevant tool result is normally sufficient" in instruction
+    assert "Search-to-Fetch" in instruction
+    assert context.content_hash == build_native_context(request, mode="react").content_hash

@@ -1088,6 +1088,9 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert watcher.release.is_set() is False
     assert [first["sequence"], second["sequence"]] == [4, 5]
     assert client.submitted_messages == ["second message", "third message"]
+    rendered = session.runner.output.stdout.getvalue()
+    assert "Queued · turn #4" in rendered
+    assert "Queued · turn #5" in rendered
     footer = session.footer()
     footer_text = fragment_list_to_text(footer)
     assert "deepseek-v4-pro" in footer_text
@@ -1097,6 +1100,23 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     await session.close()
     assert watcher.closed is True
     assert client.cancelled == []
+
+
+async def test_interactive_session_marks_an_idle_turn_as_submitted(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+
+    submitted = await session.submit_message("first message")
+
+    assert submitted["sequence"] == 4
+    rendered = session.runner.output.stdout.getvalue()
+    assert "Submitted · turn #4" in rendered
+    assert "Queued message" not in rendered
+    await session.close()
 
 
 async def test_interactive_approval_preserves_exact_draft_and_rejects_invalid_choice(

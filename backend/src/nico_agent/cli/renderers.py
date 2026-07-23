@@ -369,6 +369,27 @@ class ExecutionRenderer:
         line.append(message, style="dim")
         self.output.out.print(line)
 
+    def web_summary(self, *, searches: int, sources: int, skipped: int) -> None:
+        if self.output.json_mode or searches + sources + skipped == 0:
+            return
+        line = Text("  ")
+        if searches + sources > 0:
+            line.append("✓ ", style="green")
+        else:
+            line.append("! ", style="yellow")
+        line.append("Web research")
+        details: list[str] = []
+        if searches:
+            details.append(f"{searches} {_plural(searches, 'search', 'searches')}")
+        if sources:
+            details.append(f"{sources} {_plural(sources, 'source read', 'sources read')}")
+        if skipped:
+            details.append(f"{skipped} skipped")
+        if details:
+            line.append(" · ", style="dim")
+            line.append(" · ".join(details), style="dim")
+        self.output.out.print(line)
+
     def final(self, turn: Mapping[str, Any]) -> None:
         if self.output.json_mode:
             return
@@ -524,6 +545,9 @@ class ExecutionProgress:
         self._connection: str | None = None
         self._tool_started_at: dict[str, float] = {}
         self._reported_reconnects: set[tuple[int, int]] = set()
+        self._web_searches = 0
+        self._web_sources = 0
+        self._web_skipped = 0
         self._live: Live | None = None
         self._running = False
         self._stopped = False
@@ -587,6 +611,7 @@ class ExecutionProgress:
             return
         self.pause()
         self._stopped = True
+        self._flush_web_summary()
 
     def event(self, event: Mapping[str, Any]) -> None:
         event_type = str(event.get("type") or event.get("event_type") or "")
@@ -600,11 +625,27 @@ class ExecutionProgress:
             self._set_activity("Running", detail or "tool")
             return
         if normalized_type in _TOOL_TERMINAL_EVENTS:
-            duration = None
+            started_at = None
             if key := _tool_event_key(payload):
                 started_at = self._tool_started_at.pop(key, None)
-                if started_at is not None:
-                    duration = max(0.0, self._clock() - started_at)
+            if web_kind := _web_tool_kind(payload):
+                if normalized_type == "ToolCallSucceeded":
+                    if web_kind == "search":
+                        self._web_searches += 1
+                    else:
+                        self._web_sources += 1
+                    self._set_activity("Continuing")
+                    return
+                if web_kind == "fetch" and normalized_type in {
+                    "ToolCallFailed",
+                    "ToolCallTimedOut",
+                }:
+                    self._web_skipped += 1
+                    self._set_activity("Continuing")
+                    return
+            duration = (
+                max(0.0, self._clock() - started_at) if started_at is not None else None
+            )
             self.renderer.event(event, duration_seconds=duration)
             self._set_activity("Continuing")
             return
@@ -679,6 +720,13 @@ class ExecutionProgress:
     def _set_activity(self, label: str, detail: str | None = None) -> None:
         self._activity_label = label
         self._activity_detail = _safe_value(detail) if detail else None
+
+    def _flush_web_summary(self) -> None:
+        self.renderer.web_summary(
+            searches=self._web_searches,
+            sources=self._web_sources,
+            skipped=self._web_skipped,
+        )
 
     def _renderable(self) -> Spinner:
         width = max(1, self.output.out.width - 2)
@@ -788,6 +836,14 @@ def execution_event_has_durable_output(event: Mapping[str, Any]) -> bool:
 
     event_type = str(event.get("type") or event.get("event_type") or "")
     normalized_type = event_type.replace("_", "")
+    if (
+        normalized_type == "ToolCallSucceeded"
+        and _web_tool_kind(_event_payload(event)) is not None
+    ) or (
+        normalized_type in {"ToolCallFailed", "ToolCallTimedOut"}
+        and _web_tool_kind(_event_payload(event)) == "fetch"
+    ):
+        return False
     return normalized_type in (
         _TOOL_TERMINAL_EVENTS | _VISIBLE_ARTIFACT_EVENTS | _VISIBLE_RUN_EVENTS
     )
@@ -801,6 +857,17 @@ def _safe_tool_detail(payload: Mapping[str, Any]) -> str:
     if reference.startswith("web.fetch@") or reference == "web.fetch":
         return "Reading source"
     return value
+
+
+def _web_tool_kind(payload: Mapping[str, Any]) -> str | None:
+    reference = _safe_value(
+        payload.get("tool") or payload.get("tool_name") or payload.get("name")
+    ).lower()
+    if reference.startswith("web.search@") or reference == "web.search":
+        return "search"
+    if reference.startswith("web.fetch@") or reference == "web.fetch":
+        return "fetch"
+    return None
 
 
 def _approval_preview(approval: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -841,6 +908,10 @@ def _duration_text(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.1f}s"
+
+
+def _plural(value: int, singular: str, plural: str) -> str:
+    return singular if value == 1 else plural
 
 
 def _elapsed_text(value: float) -> str:

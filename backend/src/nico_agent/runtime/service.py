@@ -238,6 +238,7 @@ class RuntimeExecutionService:
                 )
             )
             recovering = claim.previous_status != RunStatus.PENDING.value
+            run_started_at = run.started_at or datetime.now(UTC)
             if recovering:
                 if runtime_session is None:
                     raise RuntimeRecoveryUnsupported(
@@ -316,6 +317,7 @@ class RuntimeExecutionService:
                     execution_manifest={
                         **self._execution_manifest(version),
                         "tool_approval_policy": tool_approval_policy,
+                        "run_started_at": run_started_at.astimezone(UTC).isoformat(),
                     },
                     model_endpoint_snapshot=model_endpoint_snapshot,
                     tool_policy_snapshot=tool_snapshot,
@@ -349,6 +351,12 @@ class RuntimeExecutionService:
                         runtime_session.tool_policy_snapshot,
                         run.budgets.get("tool_allow"),
                     )
+                runtime_session.revision += 1
+            if "run_started_at" not in runtime_session.execution_manifest:
+                runtime_session.execution_manifest = {
+                    **runtime_session.execution_manifest,
+                    "run_started_at": run_started_at.astimezone(UTC).isoformat(),
+                }
                 runtime_session.revision += 1
             if not runtime_session.coordination_policy_snapshot:
                 project_member_versions = await self._project_member_version_ids(
@@ -429,7 +437,7 @@ class RuntimeExecutionService:
 
             if RunStatus(run.status) is RunStatus.PENDING:
                 run.status = RunStatus.PLANNING.value
-                run.started_at = datetime.now(UTC)
+                run.started_at = run_started_at
                 run.revision += 1
                 self._record(
                     session,

@@ -267,10 +267,42 @@ def test_web_progress_is_semantic_and_omits_query_url_and_result() -> None:
         )
 
     rendered = stdout.getvalue()
-    assert "✓ Web search (1.2s)" in rendered
+    assert "✓ Web research · 1 search" in rendered
+    assert "Web search (1.2s)" not in rendered
     assert "private research query" not in rendered
     assert "secret.example" not in rendered
     assert "token=private" not in rendered
+
+
+def test_web_progress_summarizes_recovered_source_failures_once() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    with renderer.progress() as progress:
+        for event_type, tool, code in (
+            ("ToolCallSucceeded", "web.search@1.0.0", None),
+            ("ToolCallSucceeded", "web.fetch@1.1.0", None),
+            ("ToolCallFailed", "web.fetch@1.1.0", "WEB_FETCH_SOURCE_DENIED"),
+            ("ToolCallFailed", "web.fetch@1.1.0", "WEB_FETCH_UNAVAILABLE"),
+        ):
+            progress.event(
+                {
+                    "type": event_type,
+                    "payload": {
+                        "tool_call_id": f"call-{tool}-{code}",
+                        "tool": tool,
+                        "code": code,
+                    },
+                }
+            )
+
+    rendered = stdout.getvalue()
+    assert "✓ Web research · 1 search · 1 source read · 2 skipped" in rendered
+    assert "WEB_FETCH_SOURCE_DENIED" not in rendered
+    assert "WEB_FETCH_UNAVAILABLE" not in rendered
+    assert rendered.count("Web research") == 1
 
 
 def test_web_approval_shows_only_bounded_query_or_origin() -> None:
@@ -437,8 +469,17 @@ def test_only_curated_durable_events_interrupt_the_interactive_composer() -> Non
     assert not execution_event_has_durable_output(
         {"type": "ToolCallStarted", "payload": {"tool": "web.search@1.0.0"}}
     )
-    assert execution_event_has_durable_output(
+    assert not execution_event_has_durable_output(
         {"type": "ToolCallSucceeded", "payload": {"tool": "web.search@1.0.0"}}
+    )
+    assert execution_event_has_durable_output(
+        {"type": "ToolCallSucceeded", "payload": {"tool": "file.read@1.0.0"}}
+    )
+    assert execution_event_has_durable_output(
+        {
+            "type": "ToolCallRejected",
+            "payload": {"tool": "web.fetch@1.1.0", "code": "TOOL_APPROVAL_REJECTED"},
+        }
     )
     assert execution_event_has_durable_output(
         {"type": "ArtifactAvailable", "payload": {"name": "report.md"}}
