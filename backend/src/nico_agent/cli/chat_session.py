@@ -20,7 +20,7 @@ from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.renderers import (
     ExecutionProgress,
-    chat_footer_status,
+    chat_footer_fragments,
     execution_event_has_durable_output,
 )
 from nico_agent.cli.slash import parse_slash
@@ -205,19 +205,26 @@ class InteractiveChatSession:
         )
         await self._refresh_state()
 
-    def footer(self) -> str:
+    def footer(self) -> FormattedText:
         width = shutil.get_terminal_size((80, 24)).columns
-        return chat_footer_status(
-            model=self.model,
-            current_approval_mode=self.current_approval_mode,
-            next_approval_mode=self.next_approval_mode,
-            activity=self.progress.status_text(max(10, width // 3)),
-            queued_count=int(self.queue.get("queued_count") or 0),
-            queue_state=str(self.queue.get("state") or "active"),
-            pause_reason=(
-                str(self.queue["pause_reason"]) if self.queue.get("pause_reason") else None
-            ),
-            width=width,
+        return FormattedText(
+            [
+                (f"class:bottom-toolbar.{style}", text)
+                for style, text in chat_footer_fragments(
+                    model=self.model,
+                    current_approval_mode=self.current_approval_mode,
+                    next_approval_mode=self.next_approval_mode,
+                    activity=self.progress.status_text(max(10, width // 3)),
+                    queued_count=int(self.queue.get("queued_count") or 0),
+                    queue_state=str(self.queue.get("state") or "active"),
+                    pause_reason=(
+                        str(self.queue["pause_reason"])
+                        if self.queue.get("pause_reason")
+                        else None
+                    ),
+                    width=width,
+                )
+            ]
         )
 
     async def decide_approval(self, approval: dict[str, Any], answer: str) -> bool:

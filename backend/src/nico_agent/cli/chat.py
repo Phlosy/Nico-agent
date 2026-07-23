@@ -296,7 +296,14 @@ class ChatRunner:
         session = PromptSession(
             history=FileHistory(str(self._secure_history_file())),
             key_bindings=_key_bindings(),
-            completer=WordCompleter([f"/{name}" for name in COMMANDS], sentence=True),
+            completer=WordCompleter(
+                [f"/{name}" for name in COMMANDS],
+                sentence=True,
+                meta_dict={
+                    f"/{name}": description
+                    for name, (_group, description) in COMMANDS.items()
+                },
+            ),
             multiline=False,
             style=_chat_style(no_color=self.output.no_color),
         )
@@ -863,13 +870,39 @@ def _chat_style(*, no_color: bool) -> Style:
             {
                 "nico.prompt": "bold",
                 "nico.approval": "bold",
-                "bottom-toolbar": "reverse",
+                "completion-menu.completion": "fg:ansidefault bg:ansidefault noreverse",
+                "completion-menu.completion.current": (
+                    "fg:ansidefault bg:ansidefault bold noreverse"
+                ),
+                "completion-menu.meta.completion": (
+                    "fg:ansidefault bg:ansidefault dim noreverse"
+                ),
+                "completion-menu.meta.completion.current": (
+                    "fg:ansidefault bg:ansidefault noreverse"
+                ),
+                "bottom-toolbar": "fg:ansidefault bg:ansidefault noreverse",
+                "bottom-toolbar.label": "dim",
+                "bottom-toolbar.model": "bold",
+                "bottom-toolbar.permission": "bold",
+                "bottom-toolbar.queue": "bold",
             }
         )
     return Style.from_dict(
         {
             "nico.prompt": "bold #d0a84e",
             "nico.approval": "bold #ffaf5f",
-            "bottom-toolbar": "bg:#22313c #d7e0e7",
+            "completion-menu.completion": "bg:#17242c #c8d4dc",
+            "completion-menu.completion.current": "bg:#334957 #f0c66b bold",
+            "completion-menu.meta.completion": "bg:#17242c #7895ac",
+            "completion-menu.meta.completion.current": "bg:#334957 #d6e0e6",
+            "scrollbar.background": "bg:#17242c",
+            "scrollbar.button": "bg:#7895ac",
+            "bottom-toolbar": "bg:ansidefault #607786 noreverse",
+            "bottom-toolbar.label": "#607786",
+            "bottom-toolbar.model": "bold #f0c66b",
+            "bottom-toolbar.permission": "bold #8fb3cc",
+            "bottom-toolbar.activity": "#c8d4dc",
+            "bottom-toolbar.queue": "bold #f0c66b",
+            "bottom-toolbar.separator": "#3f5668",
         }
     )

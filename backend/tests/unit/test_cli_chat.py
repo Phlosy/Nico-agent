@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import fragment_list_to_text
 
-from nico_agent.cli.chat import ChatRunner
+from nico_agent.cli.chat import ChatRunner, _chat_style
 from nico_agent.cli.chat_session import InteractiveChatSession
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.output import Output
@@ -1085,8 +1088,12 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert watcher.release.is_set() is False
     assert [first["sequence"], second["sequence"]] == [4, 5]
     assert client.submitted_messages == ["second message", "third message"]
-    assert "deepseek-v4-pro" in session.footer()
-    assert "ask→auto-all" in session.footer()
+    footer = session.footer()
+    footer_text = fragment_list_to_text(footer)
+    assert "deepseek-v4-pro" in footer_text
+    assert "ask→auto-all" in footer_text
+    assert ("class:bottom-toolbar.model", "deepseek-v4-pro") in footer
+    assert ("class:bottom-toolbar.permission", "ask→auto-all") in footer
     await session.close()
     assert watcher.closed is True
     assert client.cancelled == []
@@ -1300,6 +1307,7 @@ async def test_interactive_watcher_converts_transport_races_to_safe_cli_errors(
 def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Path) -> None:
     runner = _runner(FakeChatClient(), tmp_path, json_mode=False)
     called: dict[str, Any] = {}
+    prompt_options: dict[str, Any] = {}
 
     class RecordingSessionController:
         def __init__(self, selected_runner, conversation, prompt_session, *, metadata) -> None:
@@ -1316,7 +1324,11 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
             called["ran"] = True
 
     monkeypatch.setattr("nico_agent.cli.chat.InteractiveChatSession", RecordingSessionController)
-    monkeypatch.setattr("nico_agent.cli.chat.PromptSession", lambda **_kwargs: FakePromptSession())
+    def prompt_session(**kwargs):
+        prompt_options.update(kwargs)
+        return FakePromptSession()
+
+    monkeypatch.setattr("nico_agent.cli.chat.PromptSession", prompt_session)
     monkeypatch.setattr(
         runner,
         "_metadata",
@@ -1339,3 +1351,29 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
     assert called["ran"] is True
     assert called["conversation"] == conversation
     assert called["metadata"]["model"] == "deepseek-v4-pro"
+    completions = list(
+        prompt_options["completer"].get_completions(
+            Document("/"), CompleteEvent(completion_requested=True)
+        )
+    )
+    assert any(
+        completion.text == "/help" and completion.display_meta_text == "显示命令帮助"
+        for completion in completions
+    )
+
+
+def test_chat_theme_styles_completion_menu_and_footer_without_reverse_video() -> None:
+    color = _chat_style(no_color=False)
+    selected = color.get_attrs_for_style_str("class:completion-menu.completion.current")
+    toolbar = color.get_attrs_for_style_str("class:bottom-toolbar")
+    model = color.get_attrs_for_style_str("class:bottom-toolbar.model")
+    permission = color.get_attrs_for_style_str("class:bottom-toolbar.permission")
+
+    assert selected.bgcolor == "334957"
+    assert selected.color == "f0c66b"
+    assert toolbar.bgcolor == "ansidefault"
+    assert model.color == "f0c66b"
+    assert permission.color == "8fb3cc"
+
+    no_color = _chat_style(no_color=True)
+    assert no_color.get_attrs_for_style_str("class:bottom-toolbar").reverse is False

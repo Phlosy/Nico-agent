@@ -686,7 +686,7 @@ class ExecutionProgress:
         return Spinner("dots", status, style="#7895ac")
 
 
-def chat_footer_status(
+def chat_footer_fragments(
     *,
     model: str,
     current_approval_mode: str | None,
@@ -696,8 +696,8 @@ def chat_footer_status(
     queue_state: str,
     pause_reason: str | None,
     width: int,
-) -> str:
-    """Compose a width-bounded footer from already-curated session facts."""
+) -> list[tuple[str, str]]:
+    """Compose styled, width-bounded footer fragments from curated session facts."""
 
     available = max(1, width)
     safe_model = _safe_value(model, limit=200) or "default"
@@ -712,12 +712,20 @@ def chat_footer_status(
         queue = f"queue paused ({pause_reason or 'attention required'})"
     elif queued_count > 0:
         queue = f"queued {queued_count}"
-    segments = [f"model {safe_model}", f"permission {permission}", safe_activity]
+    segments = [
+        ("label", "model "),
+        ("model", safe_model),
+        ("separator", "  │  "),
+        ("label", "permission "),
+        ("permission", permission),
+        ("separator", "  │  "),
+        ("activity", safe_activity),
+    ]
     if queue:
-        segments.append(queue)
-    verbose = "  │  ".join(segments)
+        segments.extend([("separator", "  │  "), ("queue", queue)])
+    verbose = "".join(text for _style, text in segments)
     if len(verbose) <= available:
-        return verbose
+        return segments
 
     current_short = _APPROVAL_MODE_SHORT.get(current_approval_mode or "", "-")
     next_short = _APPROVAL_MODE_SHORT.get(next_approval_mode, "-")
@@ -728,15 +736,51 @@ def chat_footer_status(
     )
     phase = safe_activity.split(" ", 1)[0]
     phase_short = _ACTIVITY_SHORT.get(phase, phase.lower())
-    compact_segments = [permission_short, phase_short]
+    compact_segments = [
+        ("permission", permission_short),
+        ("activity", phase_short),
+    ]
     if queue_state == "paused":
-        compact_segments.append("paused")
+        compact_segments.append(("queue", "paused"))
     elif queued_count > 0:
-        compact_segments.append(f"q{queued_count}")
-    suffix = " │ " + " │ ".join(compact_segments)
+        compact_segments.append(("queue", f"q{queued_count}"))
+    suffix = " │ " + " │ ".join(text for _style, text in compact_segments)
     model_width = max(1, available - len(suffix))
-    compact = f"{_ellipsize(safe_model, model_width)}{suffix}"
-    return _ellipsize(compact, available)
+    fragments = [("model", _ellipsize(safe_model, model_width))]
+    for style, text in compact_segments:
+        fragments.extend([("separator", " │ "), (style, text)])
+    compact = "".join(text for _style, text in fragments)
+    if len(compact) <= available:
+        return fragments
+    return [("model", _ellipsize(compact, available))]
+
+
+def chat_footer_status(
+    *,
+    model: str,
+    current_approval_mode: str | None,
+    next_approval_mode: str,
+    activity: str,
+    queued_count: int,
+    queue_state: str,
+    pause_reason: str | None,
+    width: int,
+) -> str:
+    """Compose a plain-text footer for non-interactive projections and tests."""
+
+    return "".join(
+        text
+        for _style, text in chat_footer_fragments(
+            model=model,
+            current_approval_mode=current_approval_mode,
+            next_approval_mode=next_approval_mode,
+            activity=activity,
+            queued_count=queued_count,
+            queue_state=queue_state,
+            pause_reason=pause_reason,
+            width=width,
+        )
+    )
 
 
 def execution_event_has_durable_output(event: Mapping[str, Any]) -> bool:
