@@ -64,7 +64,15 @@ nico --version
 `nico 0.2.0 (dev-bc21ef0-dirty)`。若 `~/.local/bin` 不在 `PATH`，按启动日志提示
 加入 `PATH`，或继续使用 `make cli ARGS=chat`。
 
-CLI 不是常驻服务，因此不放进 Compose。只启动或停止数据依赖：
+CLI 不是常驻服务，因此不放进 Compose。开发生命周期命令为：
+
+```bash
+make run    # 启动或补齐基础服务，并从源码运行 Nico
+make stop   # 只停止 Sandbox Runner、API、Worker 和 Web
+make clean  # 停止全部开发服务并移除容器，保留数据卷
+```
+
+只启动或停止 Compose 基础服务时仍可使用：
 
 ```bash
 make infra-up
@@ -72,7 +80,8 @@ make infra-down
 ```
 
 本地源码端口为 API `8000`、Web `5173`、Sandbox Runner `8090`；PostgreSQL、
-Redis、MinIO 继续使用下表中的 Compose 宿主端口。`make infra-down` 保留数据卷。
+Redis、MinIO 继续使用下表中的 Compose 宿主端口。`make stop` 不调用 Compose；
+`make infra-down` 和 `make clean` 都保留数据卷，避免普通服务清理误删开发数据。
 
 源码模式不会产生应用镜像。需要显式构建开发镜像时使用 `make dev-images`；三个
 镜像共用 `branch-commit[-DTN_SUB][-dirty]` Tag。正式发布镜像仍只使用 `vX.Y.Z`。

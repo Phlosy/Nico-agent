@@ -24,7 +24,8 @@ assert_not_contains() {
 }
 
 HELP="$(make --no-print-directory -C "$ROOT_DIR" help)"
-for target in 'make dev-setup' 'make infra-up' 'make run' 'make cli' 'make demo' 'make infra-down' \
+for target in 'make dev-setup' 'make infra-up' 'make run' 'make stop' 'make clean' \
+  'make cli' 'make demo' 'make infra-down' \
   'make dev-images' 'make version' 'make version-set' 'make tag'; do
   assert_contains "$HELP" "$target" "Make help"
 done
@@ -51,6 +52,18 @@ assert_not_contains "$RUN_OUTPUT" 'docker build' 'local development path'
 assert_not_contains "$RUN_OUTPUT" 'compose build' 'local development path'
 assert_not_contains "$RUN_OUTPUT" ' up --build' 'local development path'
 assert_not_contains "$RUN_OUTPUT" ' up --detach --build' 'local development path'
+
+STOP_OUTPUT="$("$ROOT_DIR/scripts/local-dev.sh" --dry-run stop)"
+assert_contains "$STOP_OUTPUT" 'kill -TERM DEVELOPMENT_SUPERVISOR_PID' \
+  'source service shutdown'
+assert_not_contains "$STOP_OUTPUT" 'compose' 'source service shutdown infrastructure isolation'
+
+CLEAN_OUTPUT="$("$ROOT_DIR/scripts/local-dev.sh" --dry-run clean)"
+assert_contains "$CLEAN_OUTPUT" 'kill -TERM DEVELOPMENT_SUPERVISOR_PID' \
+  'full local shutdown source services'
+assert_contains "$CLEAN_OUTPUT" '--profile \* down --remove-orphans' \
+  'full local shutdown Compose services'
+assert_not_contains "$CLEAN_OUTPUT" '--volumes' 'full local shutdown data preservation'
 
 SEARXNG_RUN_OUTPUT="$(NICO_DEV_WEB_SEARCH=searxng \
   "$ROOT_DIR/scripts/local-dev.sh" --dry-run run)"
@@ -164,6 +177,14 @@ assert_not_contains "$INFRA_DOWN_COMMANDS" ' down ' 'volume-preserving dependenc
 assert_not_contains "$INFRA_DOWN_COMMANDS" '--volumes' 'volume-preserving dependency shutdown'
 
 : > "$FAKE_DOCKER_LOG"
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" PATH="$FAKE_BIN:$PATH" \
+  "$ROOT_DIR/scripts/local-dev.sh" clean >/dev/null
+CLEAN_COMMANDS="$(cat "$FAKE_DOCKER_LOG")"
+assert_contains "$CLEAN_COMMANDS" '--profile * down --remove-orphans' \
+  'live full development service shutdown'
+assert_not_contains "$CLEAN_COMMANDS" '--volumes' 'live full shutdown data preservation'
+
+: > "$FAKE_DOCKER_LOG"
 EXPECTED_DEV_TAG="$($ROOT_DIR/scripts/version.sh development)"
 FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
   make --no-print-directory -C "$ROOT_DIR" dev-images DOCKER="$FAKE_BIN/docker" >/dev/null
@@ -228,6 +249,7 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s|%s\n" "${NICO_MODEL_ENDPOINT_WRITES_ENABLED:-unset}" "${NICO_WEB_PROVIDER_WRITES_ENABLED:-unset}" >> "$FAKE_POLICY_LOG"' \
   'printf "%s\n" "$$" >> "$FAKE_PROCESS_LOG"' \
+  'if [[ "${FAKE_PRESERVE_COMMAND:-}" == true ]]; then sleep 30; exit 0; fi' \
   'exec sleep 30' > "$LIVE_ROOT/.venv/bin/uvicorn"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -255,6 +277,52 @@ chmod 755 \
   "$LIVE_ROOT/frontend/node_modules/.bin/vite" \
   "$LIVE_BIN/npm" \
   "$LIVE_BIN/curl"
+
+mkdir -p "$LIVE_ROOT/.nico/dev/run"
+printf '%s\n' "$$" > "$LIVE_ROOT/.nico/dev/run/supervisor.pid"
+if "$LIVE_ROOT/scripts/local-dev.sh" stop > "$TEMPORARY/foreign-stop.log" 2>&1; then
+  fail 'make stop accepted a PID that was not the local source supervisor'
+fi
+assert_contains "$(cat "$TEMPORARY/foreign-stop.log")" 'refusing to stop PID' \
+  'foreign PID shutdown guard'
+rm -f "$LIVE_ROOT/.nico/dev/run/supervisor.pid"
+
+DECOY_PROCESS_LOG="$TEMPORARY/decoy-process.log"
+DECOY_POLICY_LOG="$TEMPORARY/decoy-policy.log"
+: > "$DECOY_PROCESS_LOG"
+: > "$DECOY_POLICY_LOG"
+setsid env -u NICO_DEV_ROOT \
+  FAKE_PRESERVE_COMMAND=true \
+  FAKE_PROCESS_LOG="$DECOY_PROCESS_LOG" \
+  FAKE_POLICY_LOG="$DECOY_POLICY_LOG" \
+  "$LIVE_ROOT/.venv/bin/uvicorn" nico_agent.main:app &
+DECOY_PROCESS_PID=$!
+for _attempt in {1..20}; do
+  [[ -s "$DECOY_PROCESS_LOG" ]] && break
+  sleep 0.1
+done
+"$LIVE_ROOT/scripts/local-dev.sh" stop >/dev/null
+kill -0 "$DECOY_PROCESS_PID" 2>/dev/null || \
+  fail 'make stop killed a command-line match without Nico development ownership'
+kill -TERM -- "-$DECOY_PROCESS_PID"
+wait "$DECOY_PROCESS_PID" 2>/dev/null || true
+
+: > "$DECOY_PROCESS_LOG"
+NICO_DEV_ROOT="$LIVE_ROOT" \
+  FAKE_PRESERVE_COMMAND=true \
+  FAKE_PROCESS_LOG="$DECOY_PROCESS_LOG" \
+  FAKE_POLICY_LOG="$DECOY_POLICY_LOG" \
+  setsid "$LIVE_ROOT/.venv/bin/uvicorn" nico_agent.main:app &
+LEGACY_SOURCE_PID=$!
+for _attempt in {1..20}; do
+  [[ -s "$DECOY_PROCESS_LOG" ]] && break
+  sleep 0.1
+done
+"$LIVE_ROOT/scripts/local-dev.sh" stop >/dev/null
+if kill -0 "$LEGACY_SOURCE_PID" 2>/dev/null; then
+  fail 'make stop did not recover an owned legacy source process'
+fi
+wait "$LEGACY_SOURCE_PID" 2>/dev/null || true
 
 : > "$FAKE_PROCESS_LOG"
 : > "$TEMPORARY/policy.log"
@@ -356,18 +424,129 @@ assert_contains "$(cat "$TEMPORARY/concurrent-run.log")" 'already active' \
   'concurrent make run guard'
 kill -0 "$SUPERVISOR_PID" || fail 'concurrent make run disturbed the active supervisor'
 
-kill -TERM "$SUPERVISOR_PID"
+: > "$FAKE_DOCKER_LOG"
+"$LIVE_ROOT/scripts/local-dev.sh" stop >/dev/null
 set +e
 wait "$SUPERVISOR_PID"
 SUPERVISOR_STATUS=$?
 set -e
 [[ "$SUPERVISOR_STATUS" -eq 143 ]] || \
-  fail "local source supervisor returned $SUPERVISOR_STATUS after SIGTERM"
+  fail "local source supervisor returned $SUPERVISOR_STATUS after make stop"
+[[ ! -e "$LIVE_ROOT/.nico/dev/run/supervisor.pid" ]] || \
+  fail 'make stop left the source supervisor PID file behind'
+[[ ! -s "$FAKE_DOCKER_LOG" ]] || \
+  fail 'make stop changed Compose infrastructure'
 while IFS= read -r pid; do
   if kill -0 "$pid" 2>/dev/null; then
-    fail "local source supervisor left process $pid running after SIGTERM"
+    fail "make stop left source process $pid running"
   fi
 done < "$FAKE_PROCESS_LOG"
+
+: > "$FAKE_PROCESS_LOG"
+REAL_PYTHON="$ROOT_DIR/.venv/bin/python" \
+FAKE_PIP_LOG="$TEMPORARY/pip.log" \
+FAKE_NPM_LOG="$TEMPORARY/npm.log" \
+FAKE_PROCESS_LOG="$FAKE_PROCESS_LOG" \
+FAKE_POLICY_LOG="$TEMPORARY/policy.log" \
+FAKE_MIGRATION_LOG="$FAKE_MIGRATION_LOG" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+PATH="$LIVE_BIN:$FAKE_BIN:$PATH" \
+NICO_BIN_DIR="$TEMPORARY/dev-bin" \
+  "$LIVE_ROOT/scripts/local-dev.sh" run >/dev/null 2>&1 &
+ORPHANED_SUPERVISOR_PID=$!
+for _attempt in {1..50}; do
+  if [[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 4 && \
+        "$(wc -l < "$LIVE_ROOT/.nico/dev/run/process-groups" 2>/dev/null || true)" -ge 4 ]]; then
+    break
+  fi
+  sleep 0.1
+done
+[[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 4 ]] || \
+  fail 'orphan recovery fixture did not start all source processes'
+[[ "$(wc -l < "$LIVE_ROOT/.nico/dev/run/process-groups" 2>/dev/null || true)" -ge 4 ]] || \
+  fail 'make run did not persist source process-group ownership'
+while IFS= read -r pid; do
+  grep -q "^${pid}"$'\t' "$LIVE_ROOT/.nico/dev/run/process-groups" || \
+    fail "make run did not record source process $pid"
+done < "$FAKE_PROCESS_LOG"
+
+kill -KILL "$ORPHANED_SUPERVISOR_PID"
+set +e
+wait "$ORPHANED_SUPERVISOR_PID" 2>/dev/null
+ORPHANED_SUPERVISOR_STATUS=$?
+set -e
+[[ "$ORPHANED_SUPERVISOR_STATUS" -eq 137 ]] || \
+  fail "orphan recovery fixture returned $ORPHANED_SUPERVISOR_STATUS after SIGKILL"
+"$LIVE_ROOT/scripts/local-dev.sh" stop >/dev/null
+[[ ! -e "$LIVE_ROOT/.nico/dev/run/supervisor.pid" ]] || \
+  fail 'make stop left stale supervisor state after orphan recovery'
+[[ ! -e "$LIVE_ROOT/.nico/dev/run/process-groups" ]] || \
+  fail 'make stop left stale process-group state after orphan recovery'
+while IFS= read -r pid; do
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "make stop left orphaned source process $pid running"
+  fi
+done < "$FAKE_PROCESS_LOG"
+
+: > "$FAKE_PROCESS_LOG"
+REAL_PYTHON="$ROOT_DIR/.venv/bin/python" \
+FAKE_PIP_LOG="$TEMPORARY/pip.log" \
+FAKE_NPM_LOG="$TEMPORARY/npm.log" \
+FAKE_PROCESS_LOG="$FAKE_PROCESS_LOG" \
+FAKE_POLICY_LOG="$TEMPORARY/policy.log" \
+FAKE_MIGRATION_LOG="$FAKE_MIGRATION_LOG" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+PATH="$LIVE_BIN:$FAKE_BIN:$PATH" \
+NICO_BIN_DIR="$TEMPORARY/dev-bin" \
+  "$LIVE_ROOT/scripts/local-dev.sh" run >/dev/null 2>&1 &
+STALE_SUPERVISOR_PID=$!
+for _attempt in {1..50}; do
+  if [[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 4 && \
+        "$(wc -l < "$LIVE_ROOT/.nico/dev/run/process-groups" 2>/dev/null || true)" -ge 4 ]]; then
+    break
+  fi
+  sleep 0.1
+done
+[[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 4 ]] || \
+  fail 'run recovery fixture did not start all source processes'
+cp "$FAKE_PROCESS_LOG" "$TEMPORARY/stale-source-processes.log"
+kill -KILL "$STALE_SUPERVISOR_PID"
+set +e
+wait "$STALE_SUPERVISOR_PID" 2>/dev/null
+STALE_SUPERVISOR_STATUS=$?
+set -e
+[[ "$STALE_SUPERVISOR_STATUS" -eq 137 ]] || \
+  fail "run recovery fixture returned $STALE_SUPERVISOR_STATUS after SIGKILL"
+
+REAL_PYTHON="$ROOT_DIR/.venv/bin/python" \
+FAKE_PIP_LOG="$TEMPORARY/pip.log" \
+FAKE_NPM_LOG="$TEMPORARY/npm.log" \
+FAKE_PROCESS_LOG="$FAKE_PROCESS_LOG" \
+FAKE_POLICY_LOG="$TEMPORARY/policy.log" \
+FAKE_MIGRATION_LOG="$FAKE_MIGRATION_LOG" \
+FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+PATH="$LIVE_BIN:$FAKE_BIN:$PATH" \
+NICO_BIN_DIR="$TEMPORARY/dev-bin" \
+  "$LIVE_ROOT/scripts/local-dev.sh" run >/dev/null 2>&1 &
+RECOVERED_SUPERVISOR_PID=$!
+for _attempt in {1..50}; do
+  [[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 8 ]] && break
+  sleep 0.1
+done
+[[ "$(wc -l < "$FAKE_PROCESS_LOG")" -ge 8 ]] || \
+  fail 'make run did not restart source processes after orphan recovery'
+while IFS= read -r pid; do
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "make run left stale source process $pid running"
+  fi
+done < "$TEMPORARY/stale-source-processes.log"
+"$LIVE_ROOT/scripts/local-dev.sh" stop >/dev/null
+set +e
+wait "$RECOVERED_SUPERVISOR_PID"
+RECOVERED_SUPERVISOR_STATUS=$?
+set -e
+[[ "$RECOVERED_SUPERVISOR_STATUS" -eq 143 ]] || \
+  fail "recovered source supervisor returned $RECOVERED_SUPERVISOR_STATUS after make stop"
 
 printf '\n# dependency metadata changed\n' >> "$LIVE_ROOT/backend/pyproject.toml"
 printf '\n ' >> "$LIVE_ROOT/frontend/package-lock.json"

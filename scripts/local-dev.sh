@@ -20,6 +20,7 @@ DEV_CONTROL_DIR="$DEV_HOME/run"
 DEV_RESTART_REQUEST="$DEV_CONTROL_DIR/worker-restart-request.json"
 DEV_RESTART_RESPONSE="$DEV_CONTROL_DIR/worker-restart-response.json"
 DEV_SUPERVISOR_PID="$DEV_CONTROL_DIR/supervisor.pid"
+DEV_PROCESS_GROUPS="$DEV_CONTROL_DIR/process-groups"
 
 usage() {
   printf '%s\n' \
@@ -27,8 +28,10 @@ usage() {
     '' \
     'Commands:' \
     '  setup       Install the editable backend and frontend dependencies' \
-    '  infra-up    Start PostgreSQL, Redis and MinIO with Compose' \
+    '  infra-up    Start Compose infrastructure dependencies' \
     '  run         Start infrastructure, migrations and source processes' \
+    '  stop        Stop only source API, Worker, Sandbox and Web processes' \
+    '  clean       Stop all development services and preserve data volumes' \
     '  infra-down  Stop development infrastructure and preserve its volumes'
 }
 
@@ -42,7 +45,7 @@ while (($#)); do
       usage
       exit 0
       ;;
-    setup | infra-up | run | infra-down)
+    setup | infra-up | run | stop | clean | infra-down)
       [[ -z "$ACTION" ]] || die "only one command may be selected"
       ACTION="$1"
       shift
@@ -412,6 +415,7 @@ spawn_process() {
   "$ROOT_DIR/.venv/bin/python" -c \
     'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" &
   STARTED_PID="$!"
+  record_process_group "$STARTED_PID"
 }
 
 start_process() {
@@ -437,38 +441,21 @@ stop_processes() {
   if [[ "$DRY_RUN" == true ]]; then
     return
   fi
-  if [[ "$SUPERVISOR_ACQUIRED" == true ]]; then
-    [[ -z "${NICO_WORKER_HEALTH_MARKER:-}" ]] || rm -f -- "$NICO_WORKER_HEALTH_MARKER"
-    rm -f -- "$DEV_SUPERVISOR_PID" "$DEV_RESTART_REQUEST" "$DEV_RESTART_RESPONSE"
-    SUPERVISOR_ACQUIRED=false
-  fi
   if ((${#PIDS[@]} == 0)); then
+    if [[ "$SUPERVISOR_ACQUIRED" == true ]]; then
+      cleanup_source_control_files
+      SUPERVISOR_ACQUIRED=false
+    fi
     return
   fi
   trap - EXIT INT TERM
   log "stopping local source processes"
-  local groups=()
-  local pid
-  for pid in "${PIDS[@]}"; do
-    groups+=("-$pid")
-  done
-  kill -- "${groups[@]}" 2>/dev/null || true
-
-  local attempt alive
-  for ((attempt = 1; attempt <= 50; attempt += 1)); do
-    alive=false
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        alive=true
-        break
-      fi
-    done
-    [[ "$alive" == false ]] && break
-    sleep 0.1
-  done
-
-  kill -KILL -- "${groups[@]}" 2>/dev/null || true
+  terminate_process_groups "${PIDS[@]}"
   wait "${PIDS[@]}" 2>/dev/null || true
+  if [[ "$SUPERVISOR_ACQUIRED" == true ]]; then
+    cleanup_source_control_files
+    SUPERVISOR_ACQUIRED=false
+  fi
 }
 
 acquire_supervisor() {
@@ -480,12 +467,232 @@ acquire_supervisor() {
     fi
     rm -f -- "$DEV_SUPERVISOR_PID"
   fi
+  if stop_orphan_source_processes; then
+    cleanup_source_control_files
+    log "removed orphaned local source processes before startup"
+  fi
   if ! (umask 077; set -o noclobber; printf '%s\n' "$$" > "$DEV_SUPERVISOR_PID") \
     2>/dev/null; then
     die "another make run supervisor acquired the development environment"
   fi
   chmod 600 "$DEV_SUPERVISOR_PID"
   SUPERVISOR_ACQUIRED=true
+}
+
+cleanup_source_control_files() {
+  local worker_health_marker="${NICO_WORKER_HEALTH_MARKER:-$ROOT_DIR/.nico/worker-ready}"
+  rm -f -- "$worker_health_marker" "$DEV_SUPERVISOR_PID" \
+    "$DEV_PROCESS_GROUPS" "$DEV_RESTART_REQUEST" "$DEV_RESTART_RESPONSE"
+}
+
+process_is_live() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null || return 1
+  local state
+  state="$(ps -p "$pid" -o stat= 2>/dev/null)" || return 1
+  state="${state//[[:space:]]/}"
+  [[ "$state" != Z* ]]
+}
+
+process_group_is_live() {
+  kill -0 -- "-$1" 2>/dev/null
+}
+
+record_process_group() {
+  local pid="$1"
+  local started
+  started="$(ps -p "$pid" -o lstart= 2>/dev/null)" || \
+    die "could not record local source process $pid"
+  [[ -n "$started" ]] || die "local source process $pid stopped during startup"
+  (umask 077; printf '%s\t%s\n' "$pid" "$started" >> "$DEV_PROCESS_GROUPS")
+  chmod 600 "$DEV_PROCESS_GROUPS"
+}
+
+process_group_matches_record() {
+  local pid="$1"
+  local expected_started="$2"
+  process_group_is_live "$pid" || return 1
+  local actual_started
+  actual_started="$(ps -p "$pid" -o lstart= 2>/dev/null)" || return 1
+  [[ "$actual_started" == "$expected_started" ]]
+}
+
+source_process_command_matches() {
+  local command="$1"
+  case "$command" in
+    *"$ROOT_DIR/.venv/bin/uvicorn nico_agent.sandbox.api:create_sandbox_runner_app"*) ;;
+    *"$ROOT_DIR/.venv/bin/uvicorn nico_agent.main:app"*) ;;
+    *"$ROOT_DIR/.venv/bin/python -m nico_agent.worker"*) ;;
+    *"npm --prefix $ROOT_DIR/frontend run dev"*) ;;
+    *) return 1 ;;
+  esac
+}
+
+process_has_development_root() {
+  local pid="$1"
+  local entry
+  if [[ -r "/proc/$pid/environ" ]]; then
+    while IFS= read -r -d '' entry; do
+      [[ "$entry" != "NICO_DEV_ROOT=$ROOT_DIR" ]] || return 0
+    done < "/proc/$pid/environ"
+    return 1
+  fi
+
+  local process_environment
+  process_environment="$(ps eww -p "$pid" -o command= 2>/dev/null)" || return 1
+  [[ " $process_environment " == *" NICO_DEV_ROOT=$ROOT_DIR "* ]]
+}
+
+append_process_group() {
+  local candidate="$1"
+  local existing
+  for existing in "${ORPHAN_PROCESS_GROUPS[@]}"; do
+    [[ "$existing" != "$candidate" ]] || return
+  done
+  ORPHAN_PROCESS_GROUPS+=("$candidate")
+}
+
+collect_orphan_source_processes() {
+  ORPHAN_PROCESS_GROUPS=()
+  if [[ -f "$DEV_PROCESS_GROUPS" ]]; then
+    local recorded_pid recorded_started
+    while IFS=$'\t' read -r recorded_pid recorded_started; do
+      [[ "$recorded_pid" =~ ^[1-9][0-9]*$ && -n "$recorded_started" ]] || continue
+      if process_group_matches_record "$recorded_pid" "$recorded_started"; then
+        append_process_group "$recorded_pid"
+      fi
+    done < "$DEV_PROCESS_GROUPS"
+  fi
+
+  local pid group command
+  while read -r pid group command; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ && "$group" == "$pid" ]] || continue
+    if source_process_command_matches "$command" && process_has_development_root "$pid"; then
+      append_process_group "$pid"
+    fi
+  done < <(ps -eo pid=,pgid=,args= 2>/dev/null)
+}
+
+terminate_process_groups() {
+  (($# > 0)) || return
+  local groups=()
+  local pid
+  for pid in "$@"; do
+    groups+=("-$pid")
+  done
+  kill -TERM -- "${groups[@]}" 2>/dev/null || true
+
+  local attempt alive
+  for ((attempt = 1; attempt <= 50; attempt += 1)); do
+    alive=false
+    for pid in "$@"; do
+      if process_group_is_live "$pid"; then
+        alive=true
+        break
+      fi
+    done
+    [[ "$alive" == false ]] && break
+    sleep 0.1
+  done
+  kill -KILL -- "${groups[@]}" 2>/dev/null || true
+  for ((attempt = 1; attempt <= 50; attempt += 1)); do
+    alive=false
+    for pid in "$@"; do
+      if process_group_is_live "$pid"; then
+        alive=true
+        break
+      fi
+    done
+    [[ "$alive" == false ]] && return
+    sleep 0.1
+  done
+  die "local source process groups did not stop: $*"
+}
+
+stop_orphan_source_processes() {
+  collect_orphan_source_processes
+  ((${#ORPHAN_PROCESS_GROUPS[@]} > 0)) || return 1
+  log "stopping orphaned local source processes"
+  terminate_process_groups "${ORPHAN_PROCESS_GROUPS[@]}"
+}
+
+is_source_supervisor() {
+  local pid="$1"
+  local command
+  command="$(ps -p "$pid" -o args= 2>/dev/null)" || return 1
+  [[ "$command" == *"$ROOT_DIR/scripts/local-dev.sh"* && \
+     " $command " == *" run "* ]]
+}
+
+stop_source_stack() {
+  if [[ "$DRY_RUN" == true ]]; then
+    print_command kill -TERM DEVELOPMENT_SUPERVISOR_PID
+    return
+  fi
+
+  require_command ps
+  if [[ ! -f "$DEV_SUPERVISOR_PID" ]]; then
+    if stop_orphan_source_processes; then
+      cleanup_source_control_files
+      log "orphaned local source services stopped; infrastructure remains running"
+      return
+    fi
+    cleanup_source_control_files
+    log "local source services are already stopped"
+    return
+  fi
+
+  local supervisor_pid=""
+  read -r supervisor_pid < "$DEV_SUPERVISOR_PID" || true
+  [[ "$supervisor_pid" =~ ^[1-9][0-9]*$ ]] || \
+    die "development supervisor PID file is invalid: $DEV_SUPERVISOR_PID"
+
+  if ! process_is_live "$supervisor_pid"; then
+    if stop_orphan_source_processes; then
+      cleanup_source_control_files
+      log "orphaned local source services stopped; infrastructure remains running"
+      return
+    fi
+    cleanup_source_control_files
+    log "removed stale local source supervisor state"
+    return
+  fi
+  is_source_supervisor "$supervisor_pid" || \
+    die "refusing to stop PID $supervisor_pid because it is not the local source supervisor"
+
+  log "stopping local source services (supervisor PID $supervisor_pid)"
+  if ! kill -TERM "$supervisor_pid" 2>/dev/null; then
+    if ! process_is_live "$supervisor_pid"; then
+      cleanup_source_control_files
+      log "local source services stopped; infrastructure remains running"
+      return
+    fi
+    die "could not signal local source supervisor (PID $supervisor_pid)"
+  fi
+  local attempt
+  for ((attempt = 1; attempt <= 100; attempt += 1)); do
+    if ! process_is_live "$supervisor_pid"; then
+      cleanup_source_control_files
+      log "local source services stopped; infrastructure remains running"
+      return
+    fi
+    sleep 0.1
+  done
+  die "local source supervisor did not stop after 10 seconds (PID $supervisor_pid)"
+}
+
+clean_stack() {
+  stop_source_stack
+  local compose_args=("${COMPOSE[@]}" --profile "*")
+  if [[ "$DRY_RUN" == true ]]; then
+    print_command "${compose_args[@]}" down --remove-orphans
+    return
+  fi
+
+  require_command docker
+  log "stopping all local development services; data volumes are preserved"
+  "${compose_args[@]}" down --remove-orphans
+  cleanup_source_control_files
 }
 
 wait_for_worker() {
@@ -741,7 +948,7 @@ run_stack() {
   wait_for_url "http://127.0.0.1:$LOCAL_WEB_PORT/" "Web"
   wait_for_worker
   log "source stack is ready; run 'nico chat' in another terminal"
-  log "Ctrl-C stops source processes; 'make infra-down' also stops the data services"
+  log "'make stop' stops source processes; 'make clean' also stops infrastructure"
 
   wait_for_source_failure
 }
@@ -752,5 +959,7 @@ case "$ACTION" in
     infra_up
     ;;
   run) run_stack ;;
+  stop) stop_source_stack ;;
+  clean) clean_stack ;;
   infra-down) infra_down ;;
 esac

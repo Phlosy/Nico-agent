@@ -235,12 +235,16 @@ nico --version
 make demo
 ```
 
-`Ctrl-C` 会停止所有本地源码进程，但保留数据依赖以便快速重启。需要同时停止
-这些依赖时运行：
+`Ctrl-C` 或另一个终端中的 `make stop` 都只停止 Sandbox Runner、API、Worker
+和 Web，PostgreSQL、Redis、MinIO、SearXNG 继续运行，便于下一次快速启动：
 
 ```bash
-make infra-down
+make stop
 ```
+
+需要关闭整个开发栈时运行 `make clean`。它会停止并移除当前项目的开发容器和
+源码进程，但保留数据库与对象存储的数据卷。`make infra-down` 仍可单独停止基础
+服务而不处理源码进程。
 
 需要验证容器构建和完整 Compose 拓扑时，仍使用
 `scripts/bootstrap.sh && scripts/dev.sh --detach`；这条较慢路径会构建应用镜像。

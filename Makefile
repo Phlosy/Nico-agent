@@ -19,14 +19,16 @@ HERMES_IMAGE = nico-agent-hermes:$(TAG)
 WEB_IMAGE = nico-agent-web:$(TAG)
 
 .DEFAULT_GOAL := help
-.PHONY: help dev-setup infra-up run cli demo infra-down dev-images version version-set tag \
+.PHONY: help dev-setup infra-up run stop clean cli demo infra-down dev-images version version-set tag \
 	validate-release release release-images release-assets install uninstall test-install
 
 help:
 	@printf '%s\n' \
 	  'make dev-setup     Install editable backend and frontend dependencies' \
-	  'make infra-up      Start only PostgreSQL, Redis and MinIO with Compose' \
+	  'make infra-up      Start only Compose infrastructure dependencies' \
 	  'make run           Sync/install CLI, then run infrastructure and source services' \
+	  'make stop          Stop only source API, Worker, Sandbox and Web processes' \
+	  'make clean         Stop all development services; preserve data volumes' \
 	  'make cli           Run the installed development CLI; pass ARGS="chat"' \
 	  'make demo          Run the credential-free demo against the source API' \
 	  'make infra-down    Stop development infrastructure and preserve data' \
@@ -54,6 +56,12 @@ infra-up:
 run:
 	@NICO_BIN_DIR="$(NICO_BIN_DIR)" NICO_DEV_WEB_SEARCH="$(WEB_SEARCH)" \
 	  "$(CURDIR)/scripts/local-dev.sh" run
+
+stop:
+	@"$(CURDIR)/scripts/local-dev.sh" stop
+
+clean:
+	@NICO_DEV_WEB_SEARCH="$(WEB_SEARCH)" "$(CURDIR)/scripts/local-dev.sh" clean
 
 cli:
 	@"$(CURDIR)/scripts/nico-dev" $(ARGS)
