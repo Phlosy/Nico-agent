@@ -15,6 +15,7 @@ from prompt_toolkit import PromptSession, prompt
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 
 from nico_agent.cli.approvals import ApprovalCoordinator
 from nico_agent.cli.chat_controls import ChatControls
@@ -297,6 +298,7 @@ class ChatRunner:
             key_bindings=_key_bindings(),
             completer=WordCompleter([f"/{name}" for name in COMMANDS], sentence=True),
             multiline=False,
+            style=_chat_style(no_color=self.output.no_color),
         )
         asyncio.run(
             InteractiveChatSession(
@@ -853,3 +855,21 @@ def _key_bindings() -> KeyBindings:
         event.current_buffer.insert_text("\n")
 
     return bindings
+
+
+def _chat_style(*, no_color: bool) -> Style:
+    if no_color:
+        return Style.from_dict(
+            {
+                "nico.prompt": "bold",
+                "nico.approval": "bold",
+                "bottom-toolbar": "reverse",
+            }
+        )
+    return Style.from_dict(
+        {
+            "nico.prompt": "bold #d0a84e",
+            "nico.approval": "bold #ffaf5f",
+            "bottom-toolbar": "bg:#22313c #d7e0e7",
+        }
+    )

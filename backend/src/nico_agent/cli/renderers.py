@@ -9,10 +9,11 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlsplit
 
-from rich.columns import Columns
+from rich.json import JSON
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.table import Table
@@ -47,6 +48,32 @@ _FAILURE_EVENT_LABELS = {
     "RunFailed": "Run failed",
     "RunCancelled": "Run cancelled",
     "RunTimedOut": "Run timed out",
+}
+
+_ACCENT = "#d0a84e"
+_BRAND = "#7895ac"
+_DIVIDER = "#3f5668"
+_APPROVAL_MODE_SHORT = {
+    "ask": "ask",
+    "auto-medium": "auto-med",
+    "auto-all": "auto-all",
+}
+_ACTIVITY_SHORT = {
+    "Preparing": "prep",
+    "Planning": "plan",
+    "Thinking": "think",
+    "Working": "work",
+    "Running": "run",
+    "Continuing": "work",
+    "Reflecting": "reflect",
+    "Finalizing": "final",
+    "Idle": "idle",
+}
+_RISK_STYLES = {
+    "low": "green",
+    "medium": _ACCENT,
+    "high": "red",
+    "critical": "red",
 }
 
 _PREPARING_EVENTS = {
@@ -260,19 +287,35 @@ class ExecutionRenderer:
             width=self.output.out.width,
             no_color=self.output.no_color,
         )
-        details = Table.grid(padding=(0, 1))
-        details.add_column(style="bold #7895ac", no_wrap=True)
-        details.add_column()
-        details.add_row("Agent", _label(metadata.get("agent")))
-        details.add_row("Version", _label(metadata.get("version")))
-        details.add_row("Runtime", _label(metadata.get("runtime")))
+        identity = Text()
+        identity.append("Nico", style=f"bold {_ACCENT}")
+        identity.append("  ")
+        identity.append(_label(metadata.get("agent")), style="bold")
+        identity.append(f" · v{_label(metadata.get('version'))}", style="dim")
+
+        runtime = Text()
+        runtime.append(_label(metadata.get("model"), default="default"))
+        runtime.append(" · ", style="dim")
+        runtime.append(_label(metadata.get("runtime")), style="dim")
+
+        context = Text()
         if metadata.get("project") is not None:
-            details.add_row("Project", _label(metadata.get("project")))
-        details.add_row("Tools", _label(metadata.get("tools"), default="policy default"))
-        body = Columns([terminal_cat(caps), details], padding=(0, 3), expand=False)
-        self.output.out.print(
-            Panel(body, title="Nico Agent", border_style="#7895ac", padding=(0, 1))
-        )
+            context.append(_label(metadata.get("project")))
+            context.append(" · ", style="dim")
+        context.append(_tool_summary(metadata.get("tools")), style="dim")
+
+        details = Table.grid(padding=0)
+        details.add_column(ratio=1, overflow="fold")
+        details.add_row(identity)
+        details.add_row(runtime)
+        details.add_row(context)
+
+        body = Table.grid(padding=(0, 2), expand=True)
+        body.add_column(width=7, no_wrap=True)
+        body.add_column(ratio=1, overflow="fold")
+        body.add_row(terminal_cat(caps), details)
+        self.output.out.print(body)
+        self.output.out.print(Rule(style=_DIVIDER))
 
     def event(
         self,
@@ -290,7 +333,7 @@ class ExecutionRenderer:
             return
         if event_type == "ToolCallStarted":
             return
-        line = Text()
+        line = Text("  ")
         if event_type == "ToolCallSucceeded":
             detail = _safe_tool_detail(payload)
             line.append("✓ ", style="green")
@@ -318,6 +361,14 @@ class ExecutionRenderer:
                 line.append(f": {detail}")
         self.output.out.print(line)
 
+    def notice(self, message: str) -> None:
+        if self.output.json_mode:
+            return
+        line = Text("      ")
+        line.append("↳ ", style=_BRAND)
+        line.append(message, style="dim")
+        self.output.out.print(line)
+
     def final(self, turn: Mapping[str, Any]) -> None:
         if self.output.json_mode:
             return
@@ -326,18 +377,37 @@ class ExecutionRenderer:
             if isinstance(value, Mapping):
                 answer = value.get("answer") or value.get("message") or value.get("content")
                 if isinstance(answer, str):
-                    self.output.out.print(
-                        Panel(Markdown(answer), title="Nico", border_style="#d0a84e")
-                    )
+                    self._message(Markdown(answer))
                 else:
-                    self.output.emit(value, title="Nico")
+                    self._message(JSON.from_data(value, ensure_ascii=False, indent=2))
+            elif isinstance(value, str):
+                self._message(Markdown(value))
             else:
-                self.output.emit(value, title="Nico")
+                self._message(Text(str(value)))
             return
         if turn.get("error") is not None:
-            self.output.emit(turn["error"], title=f"Nico · {turn.get('status', 'failed')}")
+            error = turn["error"]
+            content = (
+                JSON.from_data(error, ensure_ascii=False, indent=2)
+                if isinstance(error, Mapping)
+                else Text(str(error))
+            )
+            self._message(content, label="nico !", label_style="bold red")
             return
-        self.output.emit(dict(turn), title="Nico Turn")
+        self._message(JSON.from_data(dict(turn), ensure_ascii=False, indent=2))
+
+    def _message(
+        self,
+        content: Any,
+        *,
+        label: str = "nico ›",
+        label_style: str = f"bold {_ACCENT}",
+    ) -> None:
+        message = Table.grid(padding=(0, 1), expand=True)
+        message.add_column(width=6, no_wrap=True)
+        message.add_column(ratio=1, overflow="fold")
+        message.add_row(Text(label, style=label_style), content)
+        self.output.out.print(message)
 
     def plans(self, plans: Iterable[Mapping[str, Any]]) -> None:
         self.output.table(
@@ -370,11 +440,13 @@ class ExecutionRenderer:
     def approval(self, approval: Mapping[str, Any]) -> None:
         if self.output.json_mode:
             return
+        risk = str(approval.get("risk_level") or "unknown").lower()
+        risk_style = _risk_style(risk)
         details = Table.grid(padding=(0, 1))
-        details.add_column(style="bold #7895ac", no_wrap=True)
-        details.add_column()
+        details.add_column(style="dim", no_wrap=True, width=10)
+        details.add_column(ratio=1, overflow="fold")
         details.add_row("Tool", f"{approval.get('tool_name')}@{approval.get('tool_version')}")
-        details.add_row("Risk", str(approval.get("risk_level") or "unknown"))
+        details.add_row("Risk", Text(risk.upper(), style=f"bold {risk_style}"))
         details.add_row("Requester", str(approval.get("requester") or "—"))
         details.add_row("Expires", str(approval.get("expires_at") or "—"))
         arguments = Syntax(
@@ -383,11 +455,26 @@ class ExecutionRenderer:
             word_wrap=True,
             background_color="default",
         )
-        body = Table.grid(padding=(1, 0))
+        preview = Table.grid(padding=(0, 1), expand=True)
+        preview.add_column(style="dim", no_wrap=True, width=10)
+        preview.add_column(ratio=1, overflow="fold")
+        preview.add_row("Input", arguments)
+
+        choices = Text()
+        choices.append("1", style=f"bold {_ACCENT}")
+        choices.append("  Allow once     ")
+        choices.append("2", style=f"bold {_ACCENT}")
+        choices.append("  Allow this run     ")
+        choices.append("3", style="bold red")
+        choices.append("  Reject")
+
+        body = Table.grid(padding=(1, 0), expand=True)
         body.add_row(details)
-        body.add_row(arguments)
-        body.add_row(Text("[1] Allow once   [2] Allow for this Run   [3] Reject"))
-        self.output.out.print(Panel(body, title="Sensitive tool approval", border_style="#d0a84e"))
+        body.add_row(preview)
+        body.add_row(choices)
+        title = Text("Approval required", style="bold")
+        title.append(f" · {risk.upper()}", style=f"bold {risk_style}")
+        self.output.out.print(Panel(body, title=title, border_style=risk_style, padding=(0, 1)))
 
     def approvals(self, approvals: Iterable[Mapping[str, Any]]) -> None:
         self.output.table(
@@ -620,28 +707,35 @@ def chat_footer_status(
         if current_approval_mode and current_approval_mode != next_approval_mode
         else (current_approval_mode or next_approval_mode)
     )
-    queue = (
-        f"paused ({pause_reason or 'attention required'})"
-        if queue_state == "paused"
-        else f"queued {max(0, queued_count)}"
-    )
-    verbose = f"model {safe_model} · permission {permission} · {safe_activity} · {queue}"
+    queue: str | None = None
+    if queue_state == "paused":
+        queue = f"queue paused ({pause_reason or 'attention required'})"
+    elif queued_count > 0:
+        queue = f"queued {queued_count}"
+    segments = [f"model {safe_model}", f"permission {permission}", safe_activity]
+    if queue:
+        segments.append(queue)
+    verbose = "  │  ".join(segments)
     if len(verbose) <= available:
         return verbose
 
-    modes = {"ask": "a", "auto-medium": "am", "auto-all": "aa"}
-    current_short = modes.get(current_approval_mode or "", "-")
-    next_short = modes.get(next_approval_mode, "-")
+    current_short = _APPROVAL_MODE_SHORT.get(current_approval_mode or "", "-")
+    next_short = _APPROVAL_MODE_SHORT.get(next_approval_mode, "-")
     permission_short = (
         f"{current_short}→{next_short}"
         if current_approval_mode and current_approval_mode != next_approval_mode
-        else modes.get(current_approval_mode or next_approval_mode, "-")
+        else _APPROVAL_MODE_SHORT.get(current_approval_mode or next_approval_mode, "-")
     )
     phase = safe_activity.split(" ", 1)[0]
-    queue_short = "q:paused" if queue_state == "paused" else f"q:{max(0, queued_count)}"
-    suffix = f" p:{permission_short} {phase} {queue_short}"
-    model_width = max(1, available - len(suffix) - 2)
-    compact = f"m:{_ellipsize(safe_model, model_width)}{suffix}"
+    phase_short = _ACTIVITY_SHORT.get(phase, phase.lower())
+    compact_segments = [permission_short, phase_short]
+    if queue_state == "paused":
+        compact_segments.append("paused")
+    elif queued_count > 0:
+        compact_segments.append(f"q{queued_count}")
+    suffix = " │ " + " │ ".join(compact_segments)
+    model_width = max(1, available - len(suffix))
+    compact = f"{_ellipsize(safe_model, model_width)}{suffix}"
     return _ellipsize(compact, available)
 
 
@@ -747,6 +841,22 @@ def _label(value: Any, *, default: str = "—") -> str:
     if isinstance(value, (list, tuple)):
         return ", ".join(map(str, value))
     return str(value)
+
+
+def _tool_summary(value: Any) -> str:
+    if value in (None, "", []):
+        return "policy default"
+    if isinstance(value, (list, tuple, set)):
+        count = len(value)
+        return f"{count} tool{'s' if count != 1 else ''}"
+    if isinstance(value, Mapping):
+        count = len(value)
+        return f"{count} tool{'s' if count != 1 else ''}"
+    return _label(value, default="policy default")
+
+
+def _risk_style(risk: str) -> str:
+    return _RISK_STYLES.get(risk, "yellow")
 
 
 def _project_kind_style(kind: str) -> tuple[str, str]:

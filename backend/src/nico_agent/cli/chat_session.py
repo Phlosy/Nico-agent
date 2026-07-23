@@ -13,6 +13,7 @@ from uuid import uuid4
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from nico_agent.cli.client import NicoApiClient
@@ -31,6 +32,8 @@ _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 _APPROVAL_INTERRUPT = "\0nico-approval-interrupt"
 _APPROVAL_FETCH_ATTEMPTS = 3
 _APPROVAL_FETCH_RETRY_SECONDS = 0.2
+_USER_PROMPT = FormattedText([("class:nico.prompt", "you › ")])
+_APPROVAL_PROMPT = FormattedText([("class:nico.approval", "approval › ")])
 
 
 class InteractiveChatSession:
@@ -90,7 +93,7 @@ class InteractiveChatSession:
                     approval_interrupt = asyncio.create_task(self._interrupt_composer_on_approval())
                     try:
                         message = await self.prompt_session.prompt_async(
-                            "you › ",
+                            _USER_PROMPT,
                             bottom_toolbar=self.footer,
                             default=default,
                             refresh_interval=0.25,
@@ -150,7 +153,7 @@ class InteractiveChatSession:
         )
         sequence = turn.get("sequence")
         queued = f"Queued message #{sequence}" if sequence is not None else "Queued message"
-        await run_in_terminal(lambda: self.runner.output.out.print(f"[dim]› {queued}[/dim]"))
+        await run_in_terminal(lambda: self.runner.renderer.notice(queued))
         await self._refresh_state()
         await self._ensure_watch()
         return turn
@@ -170,7 +173,7 @@ class InteractiveChatSession:
                 expected_run_revision=int(turn["run_revision"]),
             )
         )
-        await run_in_terminal(lambda: self.runner.output.out.print("[dim]› Retry queued[/dim]"))
+        await run_in_terminal(lambda: self.runner.renderer.notice("Retry queued"))
         await self._refresh_state()
         await self._ensure_watch()
         return accepted
@@ -270,7 +273,7 @@ class InteractiveChatSession:
         while True:
             try:
                 answer = await self.prompt_session.prompt_async(
-                    "approval › ",
+                    _APPROVAL_PROMPT,
                     bottom_toolbar=self.footer,
                     refresh_interval=0.25,
                 )

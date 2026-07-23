@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from io import StringIO
 
+from rich.console import Console
+
 from nico_agent.cli.output import Output
 from nico_agent.cli.renderers import (
     ExecutionRenderer,
@@ -61,7 +63,7 @@ def test_human_renderer_shows_user_actions_without_internal_lifecycle_events() -
     renderer.usage({"usage": {"input_tokens": 12, "output_tokens": 4}}, {"cost": {}})
 
     rendered = stdout.getvalue()
-    assert "Nico Agent" in rendered
+    assert "Nico" in rendered
     assert "Researcher" in rendered
     assert "Running http_read@1" not in rendered
     assert "✓ http_read@1" in rendered
@@ -79,6 +81,47 @@ def test_human_renderer_shows_user_actions_without_internal_lifecycle_events() -
     assert "Artifacts" in rendered
     assert "Usage" in rendered
     assert "\x1b[" not in rendered
+
+
+def test_chat_header_and_answer_use_a_lightweight_responsive_conversation_layout() -> None:
+    stdout = StringIO()
+    output = Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    output.out = Console(
+        file=stdout,
+        width=44,
+        color_system=None,
+        no_color=True,
+        highlight=False,
+        soft_wrap=False,
+    )
+    renderer = ExecutionRenderer(output)
+
+    renderer.header(
+        {
+            "agent": "Researcher",
+            "version": 3,
+            "runtime": "nico_native",
+            "model": "deepseek-v4-pro",
+            "project": "Alpha Lab",
+            "tools": ["web.search@1.0.0", "web.fetch@1.0.0"],
+        }
+    )
+    renderer.final(
+        {"assistant_output": {"answer": "A concise answer.\n\n- First source\n- Second source"}}
+    )
+
+    rendered = stdout.getvalue()
+    lines = rendered.splitlines()
+    assert " /\\_/\\" in rendered
+    assert "Nico" in rendered
+    assert "Researcher · v3" in rendered
+    assert "deepseek-v4-pro · nico_native" in rendered
+    assert "Alpha Lab · 2 tools" in rendered
+    assert "nico ›" in rendered
+    assert "A concise answer." in rendered
+    assert "╭" not in rendered
+    assert "╰" not in rendered
+    assert all(len(line) <= 44 for line in lines)
 
 
 def test_json_mode_never_renders_header_or_events() -> None:
@@ -256,6 +299,7 @@ def test_web_approval_shows_only_bounded_query_or_origin() -> None:
     )
 
     rendered = stdout.getvalue()
+    assert rendered.count("Approval required") == 2
     assert "q" * 300 not in rendered
     assert rendered.count("q") > 50
     assert "…" in rendered
@@ -363,9 +407,27 @@ def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None
     assert "ask → auto-all" in wide
     assert "Thinking" in wide
     assert "queued 2" in wide
+    assert "│" in wide
     assert len(narrow) <= 36
-    assert "q:paused" in narrow
+    assert "paused" in narrow
     assert "private-model-delta-canary" not in wide + narrow
+
+
+def test_chat_footer_omits_an_empty_queue_without_hiding_model_permission_or_activity() -> None:
+    footer = chat_footer_status(
+        model="deepseek-v4-pro",
+        current_approval_mode="ask",
+        next_approval_mode="ask",
+        activity="Idle · 0:04",
+        queued_count=0,
+        queue_state="active",
+        pause_reason=None,
+        width=100,
+    )
+
+    assert footer == "model deepseek-v4-pro  │  permission ask  │  Idle · 0:04"
+    assert "queue" not in footer
+    assert "queued" not in footer
 
 
 def test_only_curated_durable_events_interrupt_the_interactive_composer() -> None:

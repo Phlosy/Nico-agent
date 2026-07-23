@@ -732,7 +732,7 @@ def test_chat_approval_is_server_decided_and_stream_resumes(monkeypatch, tmp_pat
     assert result["approval_required"] is None
     assert client.decisions[0]["decision"] == "approve"
     assert client.decisions[0]["allowed_scope"] == "run"
-    assert "Sensitive tool approval" in stdout.getvalue()
+    assert "Approval required" in stdout.getvalue()
     assert "[REDACTED]" in stdout.getvalue()
 
 
@@ -1086,7 +1086,7 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert [first["sequence"], second["sequence"]] == [4, 5]
     assert client.submitted_messages == ["second message", "third message"]
     assert "deepseek-v4-pro" in session.footer()
-    assert "ask → auto-all" in session.footer()
+    assert "ask→auto-all" in session.footer()
     await session.close()
     assert watcher.closed is True
     assert client.cancelled == []
