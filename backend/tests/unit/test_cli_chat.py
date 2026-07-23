@@ -4,6 +4,7 @@ import asyncio
 import stat
 import threading
 from io import StringIO
+from os import terminal_size
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import pytest
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text
+from prompt_toolkit.utils import get_cwidth
 
 from nico_agent.cli.chat import ChatRunner, _chat_style
 from nico_agent.cli.chat_session import InteractiveChatSession
@@ -1089,8 +1091,12 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert [first["sequence"], second["sequence"]] == [4, 5]
     assert client.submitted_messages == ["second message", "third message"]
     rendered = session.runner.output.stdout.getvalue()
-    assert "Queued · turn #4" in rendered
-    assert "Queued · turn #5" in rendered
+    assert "Queued · turn" not in rendered
+    prompt = session.composer_prompt()
+    prompt_text = fragment_list_to_text(prompt)
+    assert prompt_text == "next › message 2\nyou › "
+    assert ("class:nico.queue-label", "next › ") in prompt
+    assert ("class:nico.user-label", "you › ") in prompt
     footer = session.footer()
     footer_text = fragment_list_to_text(footer)
     assert "deepseek-v4-pro" in footer_text
@@ -1102,11 +1108,26 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert client.cancelled == []
 
 
-async def test_interactive_session_marks_an_idle_turn_as_submitted(
+async def test_interactive_session_does_not_render_an_idle_submission_notice(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
     client = FakeInteractiveChatClient()
+    monkeypatch.setattr(
+        client,
+        "get_conversation_queue",
+        lambda conversation_id: {
+            "conversation_id": conversation_id,
+            "revision": 1,
+            "state": "active",
+            "head_turn": None,
+            "active_turn": None,
+            "pause_turn": None,
+            "queued_turns": [],
+            "queued_count": 0,
+            "capacity": 20,
+        },
+    )
     watcher = BlockingWatchClient()
     session = _interactive_session(client, watcher, tmp_path)
 
@@ -1114,9 +1135,38 @@ async def test_interactive_session_marks_an_idle_turn_as_submitted(
 
     assert submitted["sequence"] == 4
     rendered = session.runner.output.stdout.getvalue()
-    assert "Submitted · turn #4" in rendered
-    assert "Queued message" not in rendered
+    assert rendered == ""
+    assert fragment_list_to_text(session.composer_prompt()) == "you › "
     await session.close()
+
+
+def test_interactive_composer_truncates_and_flattens_the_next_queued_message(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "nico_agent.cli.chat_session.shutil.get_terminal_size",
+        lambda _fallback: terminal_size((32, 24)),
+    )
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+    )
+    session.queue["queued_turns"] = [
+        {
+            "user_input": (
+                "请先分析第一段内容\n然后继续分析第二段非常非常长的内容，"
+                "但是不要在预览里完整显示"
+            )
+        }
+    ]
+
+    next_line, user_line = fragment_list_to_text(session.composer_prompt()).splitlines()
+
+    assert next_line.startswith("next › 请先分析第一段内容 然后")
+    assert next_line.endswith("…")
+    assert get_cwidth(next_line) <= 32
+    assert user_line == "you › "
 
 
 async def test_interactive_approval_preserves_exact_draft_and_rejects_invalid_choice(
@@ -1385,12 +1435,16 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
 def test_chat_theme_styles_completion_menu_and_footer_without_reverse_video() -> None:
     color = _chat_style(no_color=False)
     selected = color.get_attrs_for_style_str("class:completion-menu.completion.current")
+    user = color.get_attrs_for_style_str("class:nico.user-label")
+    queue = color.get_attrs_for_style_str("class:nico.queue-label")
     toolbar = color.get_attrs_for_style_str("class:bottom-toolbar")
     model = color.get_attrs_for_style_str("class:bottom-toolbar.model")
     permission = color.get_attrs_for_style_str("class:bottom-toolbar.permission")
 
     assert selected.bgcolor == "334957"
     assert selected.color == "f0c66b"
+    assert user.color == "8fb3cc"
+    assert queue.color == "7895ac"
     assert toolbar.bgcolor == "ansidefault"
     assert model.color == "f0c66b"
     assert permission.color == "8fb3cc"

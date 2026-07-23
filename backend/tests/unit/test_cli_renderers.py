@@ -117,7 +117,8 @@ def test_chat_header_and_answer_use_a_lightweight_responsive_conversation_layout
     assert "Researcher · v3" in rendered
     assert "deepseek-v4-pro · nico_native" in rendered
     assert "Alpha Lab · 2 tools" in rendered
-    assert "nico ›" in rendered
+    assert "nico │" in rendered
+    assert "nico ›" not in rendered
     assert "A concise answer." in rendered
     assert "╭" not in rendered
     assert "╰" not in rendered

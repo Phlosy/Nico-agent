@@ -413,7 +413,12 @@ class ExecutionRenderer:
                 if isinstance(error, Mapping)
                 else Text(str(error))
             )
-            self._message(content, label="nico !", label_style="bold red")
+            self._message(
+                content,
+                label_style="bold red",
+                marker="!",
+                marker_style="bold red",
+            )
             return
         self._message(JSON.from_data(dict(turn), ensure_ascii=False, indent=2))
 
@@ -421,13 +426,18 @@ class ExecutionRenderer:
         self,
         content: Any,
         *,
-        label: str = "nico ›",
+        label: str = "nico",
         label_style: str = f"bold {_ACCENT}",
+        marker: str = "│",
+        marker_style: str = _DIVIDER,
     ) -> None:
+        identity = Text()
+        identity.append(label, style=label_style)
+        identity.append(f" {marker}", style=marker_style)
         message = Table.grid(padding=(0, 1), expand=True)
         message.add_column(width=6, no_wrap=True)
         message.add_column(ratio=1, overflow="fold")
-        message.add_row(Text(label, style=label_style), content)
+        message.add_row(identity, content)
         self.output.out.print(message)
 
     def plans(self, plans: Iterable[Mapping[str, Any]]) -> None:

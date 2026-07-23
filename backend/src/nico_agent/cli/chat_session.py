@@ -15,6 +15,7 @@ from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.utils import get_cwidth
 
 from nico_agent.cli.client import NicoApiClient
 from nico_agent.cli.errors import CliError
@@ -32,8 +33,9 @@ _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 _APPROVAL_INTERRUPT = "\0nico-approval-interrupt"
 _APPROVAL_FETCH_ATTEMPTS = 3
 _APPROVAL_FETCH_RETRY_SECONDS = 0.2
-_USER_PROMPT = FormattedText([("class:nico.prompt", "you › ")])
+_USER_PROMPT = FormattedText([("class:nico.user-label", "you › ")])
 _APPROVAL_PROMPT = FormattedText([("class:nico.approval", "approval › ")])
+_QUEUE_PREVIEW_MAX_CELLS = 72
 
 
 class InteractiveChatSession:
@@ -93,7 +95,7 @@ class InteractiveChatSession:
                     approval_interrupt = asyncio.create_task(self._interrupt_composer_on_approval())
                     try:
                         message = await self.prompt_session.prompt_async(
-                            _USER_PROMPT,
+                            self.composer_prompt,
                             bottom_toolbar=self.footer,
                             default=default,
                             refresh_interval=0.25,
@@ -144,12 +146,6 @@ class InteractiveChatSession:
     async def submit_message(self, message: str) -> dict[str, Any]:
         if not message.strip():
             raise CliError("EMPTY_CHAT_MESSAGE", "chat message cannot be empty", exit_code=2)
-        was_busy = bool(
-            self.queue.get("active_turn")
-            or self.queue.get("head_turn")
-            or self.queue.get("pause_turn")
-            or int(self.queue.get("queued_count") or 0)
-        )
         turn = await self._api_call(
             lambda: self.client.create_conversation_turn(
                 self.conversation["id"],
@@ -157,10 +153,6 @@ class InteractiveChatSession:
                 idempotency_key=str(uuid4()),
             )
         )
-        sequence = turn.get("sequence")
-        state = "Queued" if was_busy else "Submitted"
-        notice = f"{state} · turn #{sequence}" if sequence is not None else state
-        await run_in_terminal(lambda: self.runner.renderer.notice(notice))
         await self._refresh_state()
         await self._ensure_watch()
         return turn
@@ -231,6 +223,28 @@ class InteractiveChatSession:
                     ),
                     width=width,
                 )
+            ]
+        )
+
+    def composer_prompt(self) -> FormattedText:
+        queued_turns = self.queue.get("queued_turns")
+        if not isinstance(queued_turns, list) or not queued_turns:
+            return _USER_PROMPT
+        next_turn = queued_turns[0]
+        if not isinstance(next_turn, dict):
+            return _USER_PROMPT
+        user_input = next_turn.get("user_input")
+        if not isinstance(user_input, str) or not user_input.strip():
+            return _USER_PROMPT
+        width = shutil.get_terminal_size((80, 24)).columns
+        preview_width = max(1, min(_QUEUE_PREVIEW_MAX_CELLS, width - get_cwidth("next › ")))
+        preview = _truncate_cells(" ".join(user_input.split()), preview_width)
+        return FormattedText(
+            [
+                ("class:nico.queue-label", "next › "),
+                ("class:nico.queue-preview", preview),
+                ("", "\n"),
+                ("class:nico.user-label", "you › "),
             ]
         )
 
@@ -535,3 +549,19 @@ class InteractiveChatSession:
                 app.invalidate()
         except Exception:
             pass
+
+
+def _truncate_cells(value: str, limit: int) -> str:
+    if sum(get_cwidth(character) for character in value) <= limit:
+        return value
+    if limit <= 1:
+        return "…"
+    remaining = limit - get_cwidth("…")
+    kept: list[str] = []
+    for character in value:
+        width = get_cwidth(character)
+        if width > remaining:
+            break
+        kept.append(character)
+        remaining -= width
+    return "".join(kept).rstrip() + "…"

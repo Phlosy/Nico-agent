@@ -868,7 +868,9 @@ def _chat_style(*, no_color: bool) -> Style:
     if no_color:
         return Style.from_dict(
             {
-                "nico.prompt": "bold",
+                "nico.user-label": "bold",
+                "nico.queue-label": "bold",
+                "nico.queue-preview": "dim",
                 "nico.approval": "bold",
                 "completion-menu.completion": "fg:ansidefault bg:ansidefault noreverse",
                 "completion-menu.completion.current": (
@@ -889,7 +891,10 @@ def _chat_style(*, no_color: bool) -> Style:
         )
     return Style.from_dict(
         {
-            "nico.prompt": "bold #d0a84e",
+            "": "#c8d4dc",
+            "nico.user-label": "bold #8fb3cc",
+            "nico.queue-label": "bold #7895ac",
+            "nico.queue-preview": "#607786 italic",
             "nico.approval": "bold #ffaf5f",
             "completion-menu.completion": "bg:#17242c #c8d4dc",
             "completion-menu.completion.current": "bg:#334957 #f0c66b bold",
