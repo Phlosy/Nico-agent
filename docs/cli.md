@@ -322,7 +322,7 @@ SearXNG 是本机默认项且无需搜索 Key；Brave 不运行本地搜索服�
 Key。两种路径最终都使用相同的 `web.search`、来源绑定的 `web.fetch`、审批和审计边界。
 DNS 解析器不是模型参数：模型只能提交搜索结果 URL，不能选择或修改 DoH endpoint。
 
-聊天运行中在输入框上方的临时 `work ›` 状态显示 `Web search`、`Reading source`；
+聊天运行中在输入框下方的固定 footer 显示 `Web search`、`Reading source`；
 终结时把
 成功搜索、已读来源和可恢复失败压缩成一条 `Web research` 摘要。单个来源的
 `WEB_FETCH_SOURCE_DENIED`、不可达或 HTTP 错误不会用连续红色行淹没回答，但仍完整
@@ -370,10 +370,11 @@ human 模式不会把持久化事件流原样打印到对话中。普通 Task、
 ⠹ Running http_read@1 · 0:12 | reconnecting 1/3
 ```
 
-交互式 TTY chat 使用同一安全阶段投影，并把 `work › Preparing`、`work › Thinking`、
-`work › Running Web search`、`work › Running Reading source`、
-`work › Running Reading file` 等状态固定在输入框上方；有排队消息时，`next ›` 预览
-位于状态与当前输入之间。后台 SSE 使用独立连接，工具结果和最终回答通过
+交互式 TTY chat 使用同一安全阶段投影。输入框固定在终端下沿、footer 上方；footer
+持续显示模型、权限和 `Preparing`、`Thinking`、`Running Web search`、
+`Running Reading source`、`Running Reading file` 等当前阶段。有排队消息时，
+`next ›` 预览位于当前输入上方。已提交的 `you ›` 输入保留在滚动历史中，Nico 最终
+回答使用带标题的面板呈现。后台 SSE 使用独立连接，工具结果和最终回答通过
 prompt_toolkit 的滚动输出写入，不会覆盖正在编辑的草稿。状态会在准备、规划、思考、
 运行工具、反思和整理答案之间切换，并显示本次等待的经过时间。连接暂时中断时，同一
 行显示有界重连次数；连接恢复后自动消失。

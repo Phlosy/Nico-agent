@@ -296,6 +296,7 @@ class ChatRunner:
         session = PromptSession(
             history=FileHistory(str(self._secure_history_file())),
             key_bindings=_key_bindings(),
+            erase_when_done=False,
             completer=WordCompleter(
                 [f"/{name}" for name in COMMANDS],
                 sentence=True,
@@ -868,8 +869,6 @@ def _chat_style(*, no_color: bool) -> Style:
         return Style.from_dict(
             {
                 "nico.user-label": "bold",
-                "nico.work-label": "bold",
-                "nico.work-status": "dim",
                 "nico.queue-label": "bold",
                 "nico.queue-preview": "dim",
                 "nico.approval": "bold",
@@ -892,8 +891,6 @@ def _chat_style(*, no_color: bool) -> Style:
         {
             "": "#c8d4dc",
             "nico.user-label": "bold #8fb3cc",
-            "nico.work-label": "bold #f0c66b",
-            "nico.work-status": "#7895ac",
             "nico.queue-label": "bold #7895ac",
             "nico.queue-preview": "#607786 italic",
             "nico.approval": "bold #ffaf5f",
@@ -907,6 +904,7 @@ def _chat_style(*, no_color: bool) -> Style:
             "bottom-toolbar.label": "#607786",
             "bottom-toolbar.model": "bold #f0c66b",
             "bottom-toolbar.permission": "bold #8fb3cc",
+            "bottom-toolbar.activity": "#c8d4dc",
             "bottom-toolbar.queue": "bold #f0c66b",
             "bottom-toolbar.separator": "#3f5668",
         }

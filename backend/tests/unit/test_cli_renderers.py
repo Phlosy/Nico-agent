@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from io import StringIO
 
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 
 from nico_agent.cli.output import Output
@@ -117,11 +118,10 @@ def test_chat_header_and_answer_use_a_lightweight_responsive_conversation_layout
     assert "Researcher · v3" in rendered
     assert "deepseek-v4-pro · nico_native" in rendered
     assert "Alpha Lab · 2 tools" in rendered
-    assert "nico │" in rendered
-    assert "nico ›" not in rendered
+    assert "Nico" in rendered
     assert "A concise answer." in rendered
-    assert "╭" not in rendered
-    assert "╰" not in rendered
+    assert "╭" in rendered
+    assert "╰" in rendered
     assert all(len(line) <= 44 for line in lines)
 
 
@@ -434,11 +434,12 @@ def test_execution_progress_status_is_width_bounded_and_prioritizes_connection()
     assert "Running" in narrow
 
 
-def test_chat_footer_is_bounded_and_focused_on_model_permission_and_queue() -> None:
+def test_chat_footer_is_bounded_and_keeps_live_activity_below_the_composer() -> None:
     wide = chat_footer_status(
         model="deepseek-v4-pro-with-a-very-long-provider-prefix",
         current_approval_mode="ask",
         next_approval_mode="auto-all",
+        activity="Finalizing · 1:21",
         queued_count=2,
         queue_state="active",
         pause_reason=None,
@@ -448,6 +449,7 @@ def test_chat_footer_is_bounded_and_focused_on_model_permission_and_queue() -> N
         model="deepseek-v4-pro-with-a-very-long-provider-prefix",
         current_approval_mode="ask",
         next_approval_mode="auto-all",
+        activity="Finalizing · 1:21",
         queued_count=2,
         queue_state="paused",
         pause_reason="run_failed",
@@ -456,24 +458,38 @@ def test_chat_footer_is_bounded_and_focused_on_model_permission_and_queue() -> N
 
     assert "deepseek-v4-pro" in wide
     assert "ask → auto-all" in wide
+    assert "Finalizing · 1:21" in wide
     assert "queued 2" in wide
     assert "│" in wide
     assert len(narrow) <= 36
     assert "paused" in narrow
 
+    cjk = chat_footer_status(
+        model="深度求索模型版本",
+        current_approval_mode="ask",
+        next_approval_mode="ask",
+        activity="Thinking · 0:08",
+        queued_count=0,
+        queue_state="active",
+        pause_reason=None,
+        width=20,
+    )
+    assert sum(get_cwidth(character) for character in cjk) <= 20
 
-def test_chat_footer_omits_an_empty_queue_without_hiding_model_or_permission() -> None:
+
+def test_chat_footer_omits_an_empty_queue_without_hiding_session_status() -> None:
     footer = chat_footer_status(
         model="deepseek-v4-pro",
         current_approval_mode="ask",
         next_approval_mode="ask",
+        activity="Finalizing · 1:21",
         queued_count=0,
         queue_state="active",
         pause_reason=None,
         width=100,
     )
 
-    assert footer == "model deepseek-v4-pro  │  permission ask"
+    assert footer == "model deepseek-v4-pro  │  permission ask  │  Finalizing · 1:21"
     assert "queue" not in footer
     assert "queued" not in footer
 

@@ -1094,17 +1094,16 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert "Queued · turn" not in rendered
     prompt = session.composer_prompt()
     prompt_text = fragment_list_to_text(prompt)
-    assert prompt_text.startswith("work › Working · ")
-    assert prompt_text.endswith("\nnext › message 2\nyou › ")
-    assert ("class:nico.work-label", "work › ") in prompt
+    assert prompt_text == "next › message 2\nyou › "
     assert ("class:nico.queue-label", "next › ") in prompt
     assert ("class:nico.user-label", "you › ") in prompt
     footer = session.footer()
     footer_text = fragment_list_to_text(footer)
     assert "deepseek-v4-pro" in footer_text
-    assert "ask → auto-all" in footer_text
+    assert "ask→auto-all" in footer_text
+    assert "work" in footer_text
     assert ("class:bottom-toolbar.model", "deepseek-v4-pro") in footer
-    assert ("class:bottom-toolbar.permission", "ask → auto-all") in footer
+    assert ("class:bottom-toolbar.permission", "ask→auto-all") in footer
     await session.close()
     assert watcher.closed is True
     assert client.cancelled == []
@@ -1146,6 +1145,34 @@ async def test_interactive_session_does_not_render_an_idle_submission_notice(
     await session.close()
 
 
+async def test_interactive_composer_uses_fixed_toolbar_and_one_second_refresh(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+
+    class RecordingPromptSession(FakePromptSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[dict[str, Any]] = []
+
+        async def prompt_async(self, _message, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "/exit"
+
+    prompt = RecordingPromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+
+    await session.run()
+
+    assert callable(prompt.calls[0]["bottom_toolbar"])
+    assert prompt.calls[0]["refresh_interval"] == 1.0
+
+
 def test_interactive_composer_truncates_and_flattens_the_next_queued_message(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1174,12 +1201,12 @@ def test_interactive_composer_truncates_and_flattens_the_next_queued_message(
     assert user_line == "you › "
 
 
-def test_interactive_composer_shows_live_phase_and_safe_tool_activity(
+def test_interactive_footer_shows_live_phase_and_safe_tool_activity(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
         "nico_agent.cli.chat_session.shutil.get_terminal_size",
-        lambda _fallback: terminal_size((48, 24)),
+        lambda _fallback: terminal_size((120, 24)),
     )
     session = _interactive_session(
         FakeInteractiveChatClient(),
@@ -1189,10 +1216,11 @@ def test_interactive_composer_shows_live_phase_and_safe_tool_activity(
     session._watch_run_id = "run-1"
     session.progress = session.runner.renderer.progress(initial="Preparing", clock=lambda: 10.0)
 
-    assert fragment_list_to_text(session.composer_prompt()) == ("work › Preparing · 0:00\nyou › ")
+    assert fragment_list_to_text(session.composer_prompt()) == "you › "
+    assert "Preparing · 0:00" in fragment_list_to_text(session.footer())
 
     session.progress.event({"type": "RuntimeModelCallStarted", "payload": {}})
-    assert "work › Thinking · 0:00" in fragment_list_to_text(session.composer_prompt())
+    assert "Thinking · 0:00" in fragment_list_to_text(session.footer())
 
     session.progress.event(
         {
@@ -1200,9 +1228,12 @@ def test_interactive_composer_shows_live_phase_and_safe_tool_activity(
             "payload": {"tool_call_id": "tool-1", "tool": "file.read@1.0.0"},
         }
     )
-    prompt = session.composer_prompt()
-    assert "work › Running Reading file · 0:00" in fragment_list_to_text(prompt)
-    assert ("class:nico.work-label", "work › ") in prompt
+    assert "Running Reading file · 0:00" in fragment_list_to_text(session.footer())
+
+    session._watch_run_id = None
+    footer = fragment_list_to_text(session.footer())
+    assert "Idle" in footer
+    assert "Reading file" not in footer
 
 
 async def test_interactive_approval_preserves_exact_draft_and_rejects_invalid_choice(
@@ -1458,6 +1489,7 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
     assert called["ran"] is True
     assert called["conversation"] == conversation
     assert called["metadata"]["model"] == "deepseek-v4-pro"
+    assert prompt_options["erase_when_done"] is False
     completions = list(
         prompt_options["completer"].get_completions(
             Document("/"), CompleteEvent(completion_requested=True)
@@ -1473,20 +1505,20 @@ def test_chat_theme_styles_completion_menu_and_footer_without_reverse_video() ->
     color = _chat_style(no_color=False)
     selected = color.get_attrs_for_style_str("class:completion-menu.completion.current")
     user = color.get_attrs_for_style_str("class:nico.user-label")
-    work = color.get_attrs_for_style_str("class:nico.work-label")
     queue = color.get_attrs_for_style_str("class:nico.queue-label")
     toolbar = color.get_attrs_for_style_str("class:bottom-toolbar")
     model = color.get_attrs_for_style_str("class:bottom-toolbar.model")
     permission = color.get_attrs_for_style_str("class:bottom-toolbar.permission")
+    activity = color.get_attrs_for_style_str("class:bottom-toolbar.activity")
 
     assert selected.bgcolor == "334957"
     assert selected.color == "f0c66b"
     assert user.color == "8fb3cc"
-    assert work.color == "f0c66b"
     assert queue.color == "7895ac"
     assert toolbar.bgcolor == "ansidefault"
     assert model.color == "f0c66b"
     assert permission.color == "8fb3cc"
+    assert activity.color == "c8d4dc"
 
     no_color = _chat_style(no_color=True)
     assert no_color.get_attrs_for_style_str("class:bottom-toolbar").reverse is False
