@@ -133,7 +133,7 @@ class ConversationService:
                 )
             if project.status != "active":
                 raise DomainConflict("PROJECT_NOT_ACTIVE", "conversation project must be active")
-            agent = await self._agent(session, context, command.agent_id)
+            agent = await self._agent(session, context, command.agent_id, for_share=True)
             if AgentStatus(agent.status) is not AgentStatus.READY:
                 raise DomainConflict("AGENT_NOT_READY", "conversation agent must be ready")
             version_id = command.agent_version_id or agent.current_version_id
@@ -153,6 +153,7 @@ class ConversationService:
                 agent_id=agent.id,
                 agent_version_id=version.id,
                 title=command.title,
+                approval_mode=agent.default_approval_mode,
                 created_by=context.actor_id,
                 idempotency_key=command.idempotency_key,
             )
@@ -1360,13 +1361,23 @@ class ConversationService:
         return project
 
     @staticmethod
-    async def _agent(session: AsyncSession, context: TenantContext, agent_id: UUID) -> Agent:
-        value = await session.scalar(
-            select(Agent).where(
-                Agent.tenant_id == context.tenant_id,
-                Agent.id == agent_id,
-            )
+    async def _agent(
+        session: AsyncSession,
+        context: TenantContext,
+        agent_id: UUID,
+        *,
+        for_update: bool = False,
+        for_share: bool = False,
+    ) -> Agent:
+        statement = select(Agent).where(
+            Agent.tenant_id == context.tenant_id,
+            Agent.id == agent_id,
         )
+        if for_update:
+            statement = statement.with_for_update()
+        elif for_share:
+            statement = statement.with_for_update(read=True)
+        value = await session.scalar(statement)
         if value is None:
             raise ResourceNotFound("agent", str(agent_id))
         return value

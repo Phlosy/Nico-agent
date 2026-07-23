@@ -1667,6 +1667,7 @@ class RuntimeExecutionService:
                 ConversationTurn.tenant_id == run.tenant_id,
                 ConversationTurn.run_id == run.id,
             )
+            .with_for_update(read=True, of=Conversation)
         )
         mode = (
             ConversationApprovalMode(conversation.approval_mode)

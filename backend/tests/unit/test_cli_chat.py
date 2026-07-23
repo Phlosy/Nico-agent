@@ -37,6 +37,8 @@ class FakeChatClient:
         self.create_calls: list[dict[str, Any]] = []
         self.agents = [_agent("agent-1", "researcher")] if agents is None else agents
         self.approval_mode = "ask"
+        self.agent_permission_updates: list[dict[str, Any]] = []
+        self.agent_display_updates: list[dict[str, Any]] = []
 
     def list_agents(self) -> list[dict[str, Any]]:
         return self.agents
@@ -46,6 +48,18 @@ class FakeChatClient:
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         return next(agent for agent in self.agents if agent["id"] == agent_id)
+
+    def update_agent(self, agent_id: str, **kwargs) -> dict[str, Any]:
+        agent = self.get_agent(agent_id)
+        if "default_approval_mode" in kwargs:
+            self.agent_permission_updates.append({"agent_id": agent_id, **kwargs})
+            agent["default_approval_mode"] = kwargs["default_approval_mode"]
+            self.approval_mode = kwargs["default_approval_mode"]
+        if "show_response_metrics" in kwargs:
+            self.agent_display_updates.append({"agent_id": agent_id, **kwargs})
+            agent["show_response_metrics"] = kwargs["show_response_metrics"]
+        agent["revision"] = int(agent.get("revision") or 1) + 1
+        return dict(agent)
 
     def list_agent_versions(self, agent_id: str) -> list[dict[str, Any]]:
         return [
@@ -486,6 +500,9 @@ def _agent(value: str, name: str, *, status: str = "ready") -> dict[str, Any]:
         "display_name": name.title(),
         "status": status,
         "current_version_id": f"version-{value}",
+        "default_approval_mode": "ask",
+        "show_response_metrics": False,
+        "revision": 1,
     }
 
 
@@ -711,6 +728,70 @@ def test_human_chat_shows_compact_progress_and_final_without_internal_runtime_ev
     assert "RunCompleted" not in rendered
 
 
+def test_one_shot_chat_renders_persisted_agent_response_metrics(tmp_path: Path) -> None:
+    client = FakeChatClient()
+    client.agents[0]["show_response_metrics"] = True
+    original_get_turn = client.get_conversation_turn
+
+    def measured_turn(turn_id: str) -> dict[str, Any]:
+        return {
+            **original_get_turn(turn_id),
+            "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:00.75Z",
+        }
+
+    client.get_conversation_turn = measured_turn  # type: ignore[method-assign]
+    runner = _runner(client, tmp_path, json_mode=False)
+    conversation = runner.resolve(
+        project_id="project-1",
+        agent_id="agent-1",
+        agent_version_id=None,
+        resume_id=None,
+        continue_latest=False,
+        title="Measured",
+    )
+    client.get_agent = lambda _agent_id: pytest.fail(  # type: ignore[method-assign]
+        "new conversations should reuse the resolved Agent setting"
+    )
+
+    runner.submit(conversation, "hello")
+
+    rendered = runner.output.stdout.getvalue()
+    assert "done" in rendered
+    assert "0.8s · 8 tokens" in rendered
+
+
+def test_resumed_one_shot_hydrates_metrics_before_starting_the_run(tmp_path: Path) -> None:
+    client = FakeChatClient()
+    client.agents[0]["show_response_metrics"] = True
+    runner = _runner(client, tmp_path, json_mode=False)
+    conversation = runner.resolve(
+        project_id=None,
+        agent_id=None,
+        agent_version_id=None,
+        resume_id="conversation-1",
+        continue_latest=False,
+        title="Resumed",
+    )
+    original_get_agent = client.get_agent
+    agent_reads = 0
+
+    def get_agent_once(agent_id: str) -> dict[str, Any]:
+        nonlocal agent_reads
+        agent_reads += 1
+        if agent_reads > 1:
+            pytest.fail("the completed answer must not trigger another Agent read")
+        return original_get_agent(agent_id)
+
+    client.get_agent = get_agent_once  # type: ignore[method-assign]
+
+    runner.submit(conversation, "hello")
+
+    assert agent_reads == 1
+    assert "tokens unavailable" in runner.output.stdout.getvalue()
+
+
 def test_chat_history_is_created_with_private_permissions(tmp_path: Path) -> None:
     runner = _runner(FakeChatClient(), tmp_path)
 
@@ -722,6 +803,18 @@ def test_chat_history_is_created_with_private_permissions(tmp_path: Path) -> Non
 
 def test_chat_approval_is_server_decided_and_stream_resumes(monkeypatch, tmp_path: Path) -> None:
     client = FakeApprovalClient()
+    client.agents[0]["show_response_metrics"] = True
+    original_get_turn = client.get_conversation_turn
+
+    def measured_turn(turn_id: str) -> dict[str, Any]:
+        return {
+            **original_get_turn(turn_id),
+            "usage": {"total_tokens": 19},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:02Z",
+        }
+
+    client.get_conversation_turn = measured_turn  # type: ignore[method-assign]
     stdout = StringIO()
     runner = ChatRunner(
         client,  # type: ignore[arg-type]
@@ -742,6 +835,7 @@ def test_chat_approval_is_server_decided_and_stream_resumes(monkeypatch, tmp_pat
     assert client.decisions[0]["allowed_scope"] == "run"
     assert "Approval required" in stdout.getvalue()
     assert "[REDACTED]" in stdout.getvalue()
+    assert "2.0s · 19 tokens" in stdout.getvalue()
 
 
 def test_chat_progress_pauses_for_approval_resumes_and_stops_before_final(
@@ -762,7 +856,11 @@ def test_chat_progress_pauses_for_approval_resumes_and_stops_before_final(
         "approval",
         lambda _approval: actions.append("render:approval"),
     )
-    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        runner.renderer,
+        "final",
+        lambda _turn, **_kwargs: actions.append("render:final"),
+    )
     monkeypatch.setattr(
         "nico_agent.cli.chat.sys.stdin",
         type("InteractiveInput", (), {"isatty": lambda self: True})(),
@@ -809,9 +907,9 @@ def test_pending_human_submit_does_not_render_raw_turn(monkeypatch, tmp_path: Pa
     final_calls: list[dict[str, Any]] = []
     render_final = runner.renderer.final
 
-    def record_final(turn: dict[str, Any]) -> None:
+    def record_final(turn: dict[str, Any], **kwargs: Any) -> None:
         final_calls.append(turn)
-        render_final(turn)
+        render_final(turn, **kwargs)
 
     monkeypatch.setattr(runner.renderer, "final", record_final)
     monkeypatch.setattr(
@@ -853,7 +951,11 @@ def test_retry_approval_pauses_decides_resumes_and_cleans_up_before_final(
         "approval",
         lambda _approval: actions.append("render:approval"),
     )
-    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        runner.renderer,
+        "final",
+        lambda _turn, **_kwargs: actions.append("render:final"),
+    )
     monkeypatch.setattr(client, "decide_tool_approval", record_decision)
     monkeypatch.setattr(
         "nico_agent.cli.chat.sys.stdin",
@@ -891,7 +993,11 @@ def test_retry_approval_without_decision_stops_without_final(monkeypatch, tmp_pa
         "approval",
         lambda _approval: actions.append("render:approval"),
     )
-    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        runner.renderer,
+        "final",
+        lambda _turn, **_kwargs: actions.append("render:final"),
+    )
     monkeypatch.setattr(
         "nico_agent.cli.chat.sys.stdin",
         type("InteractiveInput", (), {"isatty": lambda self: True})(),
@@ -978,7 +1084,93 @@ def test_permissions_require_confirmation_only_when_expanding(tmp_path: Path) ->
 
     assert changed["approval_mode"] == "auto-medium"
     assert unchanged["approval_mode"] == "auto-medium"
-    assert client.permission_updates == [{"expected_revision": 1, "approval_mode": "auto-medium"}]
+    assert client.permission_updates == []
+    assert client.agent_permission_updates == [
+        {
+            "agent_id": "agent-1",
+            "expected_revision": 1,
+            "default_approval_mode": "auto-medium",
+        }
+    ]
+    assert "Agent Permissions" in runner.output.stdout.getvalue()
+
+
+def test_permissions_reapply_an_explicit_same_mode_to_the_agent(tmp_path: Path) -> None:
+    client = FakeQueueChatClient()
+    runner = _runner(client, tmp_path, json_mode=False)
+    conversation = {**_conversation("conversation-1"), "approval_mode": "auto-all"}
+    command = parse_slash("/permissions ask")
+    assert command is not None
+
+    changed, _ = runner._slash(conversation, command)
+
+    assert changed["approval_mode"] == "ask"
+    assert client.agent_permission_updates == [
+        {
+            "agent_id": "agent-1",
+            "expected_revision": 1,
+            "default_approval_mode": "ask",
+        }
+    ]
+
+
+def test_response_metrics_setting_is_persisted_on_the_agent(tmp_path: Path) -> None:
+    client = FakeQueueChatClient()
+    runner = _runner(client, tmp_path, json_mode=False)
+    conversation = _conversation("conversation-1")
+    command = parse_slash("/metrics on")
+    assert command is not None
+
+    changed, should_exit = runner._slash(conversation, command)
+
+    assert should_exit is False
+    assert changed["_cli_show_response_metrics"] is True
+    assert client.agent_display_updates == [
+        {
+            "agent_id": "agent-1",
+            "expected_revision": 1,
+            "show_response_metrics": True,
+        }
+    ]
+    assert "Response Metrics" in runner.output.stdout.getvalue()
+
+
+def test_response_metrics_picker_keeps_the_current_agent_setting(tmp_path: Path) -> None:
+    client = FakeQueueChatClient()
+    client.agents[0]["show_response_metrics"] = True
+    runner = ChatRunner(
+        client,  # type: ignore[arg-type]
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO()),
+        history_path=tmp_path / "history",
+        selection_prompt=lambda _message: "",
+    )
+    command = parse_slash("/metrics")
+    assert command is not None
+
+    selected, _ = runner._slash(_conversation("conversation-1"), command)
+
+    assert selected["_cli_show_response_metrics"] is True
+    assert client.agent_display_updates == []
+
+
+def test_response_metrics_can_be_disabled_for_the_agent(tmp_path: Path) -> None:
+    client = FakeQueueChatClient()
+    client.agents[0]["show_response_metrics"] = True
+    runner = _runner(client, tmp_path, json_mode=False)
+    command = parse_slash("/metrics off")
+    assert command is not None
+
+    changed, should_exit = runner._slash(_conversation("conversation-1"), command)
+
+    assert should_exit is False
+    assert changed["_cli_show_response_metrics"] is False
+    assert client.agent_display_updates == [
+        {
+            "agent_id": "agent-1",
+            "expected_revision": 1,
+            "show_response_metrics": False,
+        }
+    ]
 
 
 def test_queue_controls_and_current_commands_use_server_targets(tmp_path: Path) -> None:
@@ -1003,6 +1195,20 @@ def test_queue_controls_and_current_commands_use_server_targets(tmp_path: Path) 
         runner._slash(conversation, command)
     assert client.inspected_runs == ["run-1", "run-1"]
     assert client.cancelled[-1] == ("turn-1", 4)
+
+
+def test_retry_answer_honors_persisted_agent_response_metrics(tmp_path: Path) -> None:
+    client = FakeQueueChatClient(paused=True)
+    client.agents[0]["show_response_metrics"] = True
+    runner = _runner(client, tmp_path, json_mode=False)
+    command = parse_slash("/retry")
+    assert command is not None
+
+    runner._slash(_conversation("conversation-1"), command)
+
+    rendered = runner.output.stdout.getvalue()
+    assert "retried" in rendered
+    assert "time unavailable · tokens unavailable" in rendered
 
 
 def test_status_shows_full_model_and_current_next_permissions(tmp_path: Path) -> None:
@@ -1048,12 +1254,16 @@ class FakePromptSession:
         self.app = app or FakePromptApp()
         self.stream_deltas: list[str] = []
         self.stream_clear_count = 0
+        self.activities: list[str | None] = []
 
     def append_stream_delta(self, delta: str) -> None:
         self.stream_deltas.append(delta)
 
     def clear_stream(self) -> None:
         self.stream_clear_count += 1
+
+    def set_activity(self, activity: str | None) -> None:
+        self.activities.append(activity)
 
 
 def _interactive_session(
@@ -1063,13 +1273,17 @@ def _interactive_session(
     *,
     prompt_session: FakePromptSession | None = None,
     conversation: dict[str, Any] | None = None,
+    show_response_metrics: bool = False,
 ) -> InteractiveChatSession:
     runner = _runner(client, tmp_path, json_mode=False)
     return InteractiveChatSession(
         runner,
         conversation or {**_conversation("conversation-1"), "approval_mode": "auto-all"},
         prompt_session or FakePromptSession(),  # type: ignore[arg-type]
-        metadata={"model": "configured-model"},
+        metadata={
+            "model": "configured-model",
+            "show_response_metrics": show_response_metrics,
+        },
         client_factory=lambda: watcher,  # type: ignore[arg-type,return-value]
     )
 
@@ -1105,8 +1319,8 @@ async def test_interactive_session_queues_messages_without_waiting_for_active_ss
     assert "Queued · turn" not in rendered
     prompt = session.composer_prompt()
     prompt_text = fragment_list_to_text(prompt)
-    assert prompt_text == "next › message 2\nyou › "
-    assert ("class:nico.queue-label", "next › ") in prompt
+    assert prompt_text == "  ↳ queued · message 2\nyou › "
+    assert ("class:nico.queue-label", "  ↳ queued · ") in prompt
     assert ("class:nico.user-label", "you › ") in prompt
     footer = session.footer()
     footer_text = fragment_list_to_text(footer)
@@ -1247,13 +1461,26 @@ async def test_interactive_prompt_layout_anchors_stream_queue_input_and_toolbar_
     assert isinstance(root.children[1], ConditionalContainer)
     assert isinstance(root.children[1].content, Window)
     assert root.children[1].content.height.weight > 0
-    assert isinstance(root.children[2], HSplit)
+    assert isinstance(root.children[2], ConditionalContainer)
+    assert isinstance(root.children[3], HSplit)
     with set_app(prompt.app):
         heights = root._divide_heights(WritePosition(xpos=0, ypos=0, width=80, height=20))
     assert heights is not None
     assert heights[-1] == 2
-    assert heights[2] == 18
+    assert 18 in heights
     await prompt.app.cancel_and_wait_for_background_tasks()
+
+
+def test_interactive_prompt_renders_curated_activity_above_the_composer() -> None:
+    prompt = BottomAnchoredPromptSession()
+
+    prompt.set_activity("Running Reading file · 0:03")
+
+    assert fragment_list_to_text(prompt._activity_fragments()) == (
+        "  • Running Reading file · 0:03"
+    )
+    prompt.set_activity(None)
+    assert prompt._activity_text() == ""
 
 
 def test_interactive_prompt_sanitizes_streamed_terminal_controls() -> None:
@@ -1336,8 +1563,78 @@ async def test_interactive_session_streams_only_user_visible_output_and_clears_b
 
     assert prompt.stream_deltas == ["你好", "，世界"]
     assert prompt.stream_clear_count == 1
+    assert prompt.activities[-1] is None
     assert "你好，世界" in session.runner.output.stdout.getvalue()
     assert "private plan" not in session.runner.output.stdout.getvalue()
+    await session.close()
+
+
+async def test_interactive_answer_renders_enabled_agent_metrics_after_streaming(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        show_response_metrics=True,
+    )
+    session._watch_run_id = "run-1"
+    session._consumer_task = asyncio.create_task(session._consume_background())
+    await session._background.put(
+        (
+            "finished",
+            (
+                {
+                    "id": "turn-1",
+                    "assistant_output": {"answer": "Measured streamed answer"},
+                    "usage": {"total_tokens": 77},
+                    "created_at": "2026-07-23T08:00:00Z",
+                    "updated_at": "2026-07-23T08:00:03.25Z",
+                },
+                {
+                    "state": "active",
+                    "queued_turns": [],
+                    "queued_count": 0,
+                    "capacity": 20,
+                },
+                "run-1",
+            ),
+        )
+    )
+    for _ in range(100):
+        if session._watch_run_id is None:
+            break
+        await asyncio.sleep(0)
+
+    rendered = session.runner.output.stdout.getvalue()
+    assert "Measured streamed answer" in rendered
+    assert "3.2s · 77 tokens" in rendered
+    await session.close()
+
+
+async def test_interactive_activity_clears_after_watch_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    prompt = FakePromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+    session._watch_run_id = "run-1"
+    session.progress = session.runner.renderer.progress(initial="Thinking", clock=lambda: 10.0)
+    session._sync_activity()
+    session._consumer_task = asyncio.create_task(session._consume_background())
+
+    await session._background.put(("error", ("run-1", CliError("WATCH_FAILED", "watch failed"))))
+    for _ in range(100):
+        if session._watch_run_id is None:
+            break
+        await asyncio.sleep(0)
+
+    assert prompt.activities[-1] is None
+    assert "WATCH_FAILED" in session.runner.output.stderr.getvalue()
     await session.close()
 
 
@@ -1363,10 +1660,112 @@ def test_interactive_composer_truncates_and_flattens_the_next_queued_message(
 
     next_line, user_line = fragment_list_to_text(session.composer_prompt()).splitlines()
 
-    assert next_line.startswith("next › 请先分析第一段内容 然后")
+    assert next_line.startswith("  ↳ queued · 请先分析第一段内容")
     assert next_line.endswith("…")
     assert get_cwidth(next_line) <= 32
     assert user_line == "you › "
+
+
+def test_interactive_composer_hides_the_current_head_and_previews_its_successor() -> None:
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        Path("/tmp"),
+    )
+    current = {
+        "id": "turn-4",
+        "run_id": "run-4",
+        "run_status": "pending",
+        "user_input": "你能干什么",
+    }
+    successor = {
+        "id": "turn-5",
+        "run_id": "run-5",
+        "run_status": "pending",
+        "user_input": "下一条消息",
+    }
+    session.queue.update(
+        {
+            "head_turn": current,
+            "active_turn": None,
+            "queued_turns": [current, successor],
+            "queued_count": 2,
+        }
+    )
+
+    prompt = fragment_list_to_text(session.composer_prompt())
+    assert prompt == "  ↳ queued · 下一条消息\nyou › "
+    assert "你能干什么" not in prompt
+
+
+async def test_interactive_activity_tracks_thinking_and_tool_work(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    prompt = FakePromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+    session._watch_run_id = "run-1"
+    session.progress = session.runner.renderer.progress(initial="Preparing", clock=lambda: 10.0)
+    session._consumer_task = asyncio.create_task(session._consume_background())
+
+    await session._background.put(
+        ("event", ("run-1", {"type": "RuntimeModelCallStarted", "payload": {}}))
+    )
+    await session._background.put(
+        (
+            "event",
+            (
+                "run-1",
+                {
+                    "type": "ToolCallStarted",
+                    "payload": {"tool_call_id": "tool-1", "tool": "file.read@1.0.0"},
+                },
+            ),
+        )
+    )
+    for _ in range(100):
+        if any(value and "Reading file" in value for value in prompt.activities):
+            break
+        await asyncio.sleep(0)
+
+    assert any(value and value.startswith("Thinking") for value in prompt.activities)
+    assert any(value and "Running Reading file" in value for value in prompt.activities)
+    await session.close()
+
+
+def test_interactive_activity_provider_renders_live_elapsed_and_reconnect(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "nico_agent.cli.chat_session.shutil.get_terminal_size",
+        lambda _fallback: terminal_size((80, 24)),
+    )
+    now = [10.0]
+    prompt = BottomAnchoredPromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+    session._watch_run_id = "run-1"
+    session.progress = session.runner.renderer.progress(
+        initial="Preparing",
+        clock=lambda: now[0],
+    )
+    session._sync_activity()
+
+    assert "Preparing · 0:00" in fragment_list_to_text(prompt._activity_fragments())
+    now[0] = 13.0
+    session.progress.connection("reconnecting", 2, 4)
+    activity = fragment_list_to_text(prompt._activity_fragments())
+    assert "0:03" in activity
+    assert "reconnecting 2/4" in activity
 
 
 def test_interactive_footer_shows_live_phase_and_safe_tool_activity(

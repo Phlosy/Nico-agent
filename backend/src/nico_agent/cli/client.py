@@ -357,6 +357,25 @@ class NicoApiClient:
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/agents/{agent_id}")
 
+    def update_agent(
+        self,
+        agent_id: str,
+        *,
+        expected_revision: int,
+        default_approval_mode: str | None = None,
+        show_response_metrics: bool | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"expected_revision": expected_revision}
+        if default_approval_mode is not None:
+            body["default_approval_mode"] = default_approval_mode
+        if show_response_metrics is not None:
+            body["show_response_metrics"] = show_response_metrics
+        return self.request(
+            "PATCH",
+            f"/api/v1/agents/{agent_id}",
+            json_body=body,
+        )
+
     def list_agent_versions(self, agent_id: str) -> list[dict[str, Any]]:
         return self.request("GET", f"/api/v1/agents/{agent_id}/versions")
 

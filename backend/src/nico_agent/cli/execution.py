@@ -113,8 +113,10 @@ class ExecRunner:
             title=title,
             idempotency_key=str(uuid4()),
         )
+        metadata: dict[str, Any] | None = None
         if not self.output.json_mode:
-            self.renderer.header(self.metadata(conversation))
+            metadata = self.metadata(conversation)
+            self.renderer.header(metadata)
         turn = self.client.create_conversation_turn(
             conversation["id"],
             prompt,
@@ -152,7 +154,10 @@ class ExecRunner:
             "approval_required": watched["approval_required"],
         }
         if not watched["interrupted"] and watched["approval_required"] is None:
-            self.renderer.final(final)
+            self.renderer.final(
+                final,
+                show_metrics=bool((metadata or {}).get("show_response_metrics")),
+            )
         return result
 
     def metadata(self, conversation: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +177,7 @@ class ExecRunner:
             "version": version.get("version") or conversation.get("agent_version_id"),
             "runtime": runtime,
             "tools": allowed,
+            "show_response_metrics": bool(agent.get("show_response_metrics")),
         }
 
 

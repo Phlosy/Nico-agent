@@ -20,8 +20,14 @@ from nico_agent.cli.output import Output
 
 
 class FakeExecutionClient:
-    def __init__(self, *, interrupt: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        interrupt: bool = False,
+        show_response_metrics: bool = False,
+    ) -> None:
         self.interrupt = interrupt
+        self.show_response_metrics = show_response_metrics
         self.cursor: int | None = None
 
     def create_conversation(self, **_kwargs) -> dict[str, Any]:
@@ -61,6 +67,9 @@ class FakeExecutionClient:
             "run_id": "run-1",
             "status": "completed",
             "assistant_output": {"answer": "done"},
+            "usage": {"total_tokens": 42},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:01.5Z",
             "error": None,
         }
 
@@ -68,7 +77,11 @@ class FakeExecutionClient:
         return {"id": "project-1", "name": "Project"}
 
     def get_agent(self, _value: str) -> dict[str, Any]:
-        return {"id": "agent-1", "display_name": "Agent"}
+        return {
+            "id": "agent-1",
+            "display_name": "Agent",
+            "show_response_metrics": self.show_response_metrics,
+        }
 
     def list_agent_versions(self, _value: str) -> list[dict[str, Any]]:
         return [{"id": "version-1", "version": 1, "runtime_provider": "mock"}]
@@ -311,7 +324,11 @@ def test_attached_exec_fetches_final_turn_before_progress_stops(monkeypatch) -> 
         return original_get_turn(turn_id)
 
     monkeypatch.setattr(client, "get_conversation_turn", get_turn)
-    monkeypatch.setattr(runner.renderer, "final", lambda _turn: actions.append("render:final"))
+    monkeypatch.setattr(
+        runner.renderer,
+        "final",
+        lambda _turn, **_kwargs: actions.append("render:final"),
+    )
 
     result = runner.execute(
         prompt="research",
@@ -325,6 +342,25 @@ def test_attached_exec_fetches_final_turn_before_progress_stops(monkeypatch) -> 
     assert actions.index("client:get-turn") < actions.index("progress:stop")
     assert actions.index("progress:stop") < actions.index("render:final")
     assert "_final_fetch_result" not in result
+
+
+def test_attached_exec_honors_persisted_agent_response_metrics() -> None:
+    client = FakeExecutionClient(show_response_metrics=True)
+    output = Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
+    runner = ExecRunner(client, output)  # type: ignore[arg-type]
+
+    runner.execute(
+        prompt="research",
+        project_id="project-1",
+        agent_id="agent-1",
+        agent_version_id=None,
+        title="Exec",
+        detach=False,
+    )
+
+    rendered = output.stdout.getvalue()
+    assert "done" in rendered
+    assert "1.5s · 42 tokens" in rendered
 
 
 def test_attached_exec_fetches_turn_after_clean_interrupt(monkeypatch) -> None:
@@ -361,7 +397,7 @@ def test_attached_exec_does_not_render_pending_turn_for_approval(monkeypatch) ->
     monkeypatch.setattr(
         runner.renderer,
         "final",
-        lambda _turn: (_ for _ in ()).throw(AssertionError("pending turn rendered")),
+        lambda _turn, **_kwargs: (_ for _ in ()).throw(AssertionError("pending turn rendered")),
     )
 
     result = runner.execute(

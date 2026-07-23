@@ -126,6 +126,139 @@ def test_chat_header_and_answer_use_a_lightweight_responsive_conversation_layout
     assert all(len(line) <= 44 for line in lines)
 
 
+def test_chat_answer_optionally_ends_with_dim_elapsed_and_token_usage() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+    turn = {
+        "assistant_output": {"answer": "Measured answer"},
+        "usage": {"input_tokens": 30, "output_tokens": 12, "total_tokens": 42},
+        "created_at": "2026-07-23T08:00:00Z",
+        "updated_at": "2026-07-23T08:00:01.540Z",
+    }
+
+    renderer.final(turn)
+    without_metrics = stdout.getvalue()
+    stdout.seek(0)
+    stdout.truncate()
+    renderer.final(turn, show_metrics=True)
+    with_metrics = stdout.getvalue()
+
+    assert "Measured answer" in without_metrics
+    assert "42 tokens" not in without_metrics
+    assert "1.5s · 42 tokens" in with_metrics
+    assert with_metrics.rfind("1.5s · 42 tokens") > with_metrics.find("Measured answer")
+
+
+def test_chat_answer_metrics_report_unavailable_usage_without_exposing_raw_fields() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.final(
+        {
+            "assistant_output": {"answer": "Answer without provider accounting"},
+            "usage": {"status": "missing", "private_provider_field": "do-not-render"},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:02Z",
+        },
+        show_metrics=True,
+    )
+
+    rendered = stdout.getvalue()
+    assert "2.0s · tokens unavailable" in rendered
+    assert "private_provider_field" not in rendered
+    assert "do-not-render" not in rendered
+
+
+def test_chat_answer_metrics_do_not_report_partial_usage_as_total_tokens() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.final(
+        {
+            "assistant_output": {"answer": "Answer with partial accounting"},
+            "usage": {"input_tokens": 30},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:02Z",
+        },
+        show_metrics=True,
+    )
+
+    rendered = stdout.getvalue()
+    assert "2.0s · tokens unavailable" in rendered
+    assert "30 tokens" not in rendered
+
+
+def test_chat_answer_metrics_sum_complete_input_and_output_usage() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.final(
+        {
+            "assistant_output": {"answer": "Answer with split accounting"},
+            "usage": {"input_tokens": 30, "output_tokens": 12},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:02Z",
+        },
+        show_metrics=True,
+    )
+
+    assert "2.0s · 42 tokens" in stdout.getvalue()
+
+
+def test_chat_answer_metrics_treat_mixed_timezone_timestamps_as_unavailable() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.final(
+        {
+            "assistant_output": {"answer": "Answer with inconsistent timestamps"},
+            "usage": {"total_tokens": 42},
+            "created_at": "2026-07-23T08:00:00",
+            "updated_at": "2026-07-23T08:00:02Z",
+        },
+        show_metrics=True,
+    )
+
+    rendered = stdout.getvalue()
+    assert "Answer with inconsistent timestamps" in rendered
+    assert "time unavailable · 42 tokens" in rendered
+
+
+def test_chat_answer_metrics_use_dim_terminal_styling() -> None:
+    stdout = StringIO()
+    output = Output(json_mode=False, no_color=False, stdout=stdout, stderr=StringIO())
+    output.out = Console(
+        file=stdout,
+        force_terminal=True,
+        color_system="truecolor",
+        highlight=False,
+    )
+    renderer = ExecutionRenderer(output)
+
+    renderer.final(
+        {
+            "assistant_output": {"answer": "Primary answer"},
+            "usage": {"total_tokens": 1},
+            "created_at": "2026-07-23T08:00:00Z",
+            "updated_at": "2026-07-23T08:00:01Z",
+        },
+        show_metrics=True,
+    )
+
+    rendered = stdout.getvalue()
+    assert "\x1b[2m1.0s · 1 token\x1b[0m" in rendered
+
+
 def test_chat_user_message_keeps_a_distinct_identity_in_scrollback() -> None:
     stdout = StringIO()
     renderer = ExecutionRenderer(

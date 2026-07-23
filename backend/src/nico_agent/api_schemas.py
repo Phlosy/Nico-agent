@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from nico_agent.domain.states import (
     AgentStatus,
     AgentVersionStatus,
+    ConversationApprovalMode,
     ProjectStatus,
     RunStatus,
     RunStepStatus,
@@ -83,6 +84,8 @@ class AgentPatch(BaseModel):
     expected_revision: int = Field(ge=1)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
+    default_approval_mode: ConversationApprovalMode | None = None
+    show_response_metrics: bool | None = None
 
 
 class AgentClone(BaseModel):
@@ -104,6 +107,8 @@ class AgentRead(FromAttributesModel):
     display_name: str
     description: str | None
     status: AgentStatus
+    default_approval_mode: ConversationApprovalMode
+    show_response_metrics: bool
     current_version_id: UUID | None
     revision: int
     created_at: datetime

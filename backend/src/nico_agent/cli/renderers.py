@@ -6,10 +6,12 @@ import json
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 from prompt_toolkit.utils import get_cwidth
+from rich.console import Group
 from rich.json import JSON
 from rich.live import Live
 from rich.markdown import Markdown
@@ -399,7 +401,7 @@ class ExecutionRenderer:
             line.append(" · ".join(details), style="dim")
         self.output.out.print(line)
 
-    def final(self, turn: Mapping[str, Any]) -> None:
+    def final(self, turn: Mapping[str, Any], *, show_metrics: bool = False) -> None:
         if self.output.json_mode:
             return
         value = turn.get("assistant_output")
@@ -407,13 +409,19 @@ class ExecutionRenderer:
             if isinstance(value, Mapping):
                 answer = value.get("answer") or value.get("message") or value.get("content")
                 if isinstance(answer, str):
-                    self._message(Markdown(answer))
+                    content: Any = Markdown(answer)
                 else:
-                    self._message(JSON.from_data(value, ensure_ascii=False, indent=2))
+                    content = JSON.from_data(value, ensure_ascii=False, indent=2)
             elif isinstance(value, str):
-                self._message(Markdown(value))
+                content = Markdown(value)
             else:
-                self._message(Text(str(value)))
+                content = Text(str(value))
+            if show_metrics:
+                content = Group(
+                    content,
+                    Text(f"\n{_response_metrics_text(turn)}", style="dim #607786"),
+                )
+            self._message(content)
             return
         if turn.get("error") is not None:
             error = turn["error"]
@@ -938,6 +946,50 @@ def _duration_text(value: float | None) -> str:
     if value is None:
         return ""
     return f"{value:.1f}s"
+
+
+def _response_metrics_text(turn: Mapping[str, Any]) -> str:
+    usage = turn.get("usage")
+    total_tokens: int | None = None
+    if isinstance(usage, Mapping):
+        total_tokens = _token_count(usage.get("total_tokens"))
+        if total_tokens is None:
+            input_tokens = _token_count(usage.get("input_tokens"))
+            output_tokens = _token_count(usage.get("output_tokens"))
+            if input_tokens is not None and output_tokens is not None:
+                total_tokens = input_tokens + output_tokens
+
+    created_at = _timestamp(turn.get("created_at"))
+    updated_at = _timestamp(turn.get("updated_at"))
+    elapsed = (
+        max(0.0, (updated_at - created_at).total_seconds())
+        if created_at is not None and updated_at is not None
+        else None
+    )
+    elapsed_text = _duration_text(elapsed) or "time unavailable"
+    token_text = (
+        f"{total_tokens:,} {_plural(total_tokens, 'token', 'tokens')}"
+        if total_tokens is not None
+        else "tokens unavailable"
+    )
+    return f"{elapsed_text} · {token_text}"
+
+
+def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        if not isinstance(value, str):
+            return None
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return value if value.tzinfo is not None and value.utcoffset() is not None else None
 
 
 def _plural(value: int, singular: str, plural: str) -> str:

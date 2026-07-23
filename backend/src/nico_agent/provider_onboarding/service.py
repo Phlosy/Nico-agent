@@ -306,6 +306,7 @@ class ProviderOnboardingService:
                     name=agent_projection["name"],
                     display_name=agent_projection["display_name"],
                     description="Created by guided Provider setup.",
+                    approval_owner_actor_id=context.actor_id,
                 )
                 session.add(agent)
                 await session.flush()

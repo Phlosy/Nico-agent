@@ -329,6 +329,56 @@ def test_conversation_queue_and_permission_requests_are_revisioned_and_idempoten
     assert seen[2].read() == b'{"expected_revision":5,"approval_mode":"auto-medium"}'
 
 
+def test_agent_default_permission_request_is_revisioned() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "agent-1",
+                "revision": 6,
+                "default_approval_mode": "auto-medium",
+            },
+        )
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        client.update_agent(
+            "agent-1",
+            expected_revision=5,
+            default_approval_mode="auto-medium",
+        )
+
+    assert seen[0].url.path == "/api/v1/agents/agent-1"
+    assert seen[0].read() == (b'{"expected_revision":5,"default_approval_mode":"auto-medium"}')
+
+
+def test_agent_response_metrics_request_is_revisioned() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "agent-1",
+                "revision": 6,
+                "show_response_metrics": True,
+            },
+        )
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        client.update_agent(
+            "agent-1",
+            expected_revision=5,
+            show_response_metrics=True,
+        )
+
+    assert seen[0].url.path == "/api/v1/agents/agent-1"
+    assert seen[0].read() == (b'{"expected_revision":5,"show_response_metrics":true}')
+
+
 def test_conversation_attachment_and_artifact_bytes_never_become_server_paths() -> None:
     seen: list[httpx.Request] = []
 

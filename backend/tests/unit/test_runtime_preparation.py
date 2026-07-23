@@ -264,3 +264,42 @@ def test_native_context_uses_frozen_run_time_as_a_fast_path_without_blocking_ver
     assert "one successful relevant tool result is normally sufficient" in instruction
     assert "Search-to-Fetch" in instruction
     assert context.content_hash == build_native_context(request, mode="react").content_hash
+
+
+def test_native_context_describes_each_frozen_tool_approval_mode() -> None:
+    expected = {
+        "ask": "medium- and high-risk tool calls may pause",
+        "auto-medium": "medium-risk tool calls can proceed automatically",
+        "auto-all": "medium- and high-risk tool calls can proceed without",
+    }
+
+    for mode, behavior in expected.items():
+        request = RuntimeSessionRequest(
+            tenant_id=uuid4(),
+            run_id=uuid4(),
+            task_id=uuid4(),
+            agent_id=uuid4(),
+            agent_version_id=uuid4(),
+            task_title="Use tools",
+            task_input={"message": "complete the task"},
+            role="assistant",
+            mandate="Help accurately",
+            execution_manifest={"tool_approval_policy": {"mode": mode}},
+        )
+
+        context = build_native_context(request, mode="react")
+        phase_context = build_phase_context(
+            request,
+            phase="planning",
+            instruction="Plan the task.",
+            payload={},
+            version=1,
+        )
+        system = context.messages[0].content or ""
+        phase_system = phase_context.messages[0].content or ""
+
+        assert f"frozen tool approval mode of '{mode}'" in system
+        assert behavior in system
+        assert "does not grant permission" in system
+        assert "deployment locks remain authoritative" in system
+        assert f"frozen tool approval mode of '{mode}'" in phase_system

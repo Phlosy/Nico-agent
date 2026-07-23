@@ -252,7 +252,8 @@ composer 固定在终端下沿的状态栏上方，不会跟在上一条回答�
 - `/status`、`/agent`、`/version`、`/runtime`、`/usage`、`/context`：查看当前运行上下文；
 - `/plan`、`/steps`、`/tools`、`/children`、`/messages`、`/artifacts`、`/audit`、`/inspect`：读取服务端持久化执行事实；
 - `/approvals`：查看当前 Run 的审批请求及终态；
-- `/permissions [ask|auto-medium|auto-all]`：查看或修改当前 Conversation 后续 Run 的审批模式；扩大自动批准范围需要确认；
+- `/permissions [ask|auto-medium|auto-all]`：查看或修改当前 Agent 的默认审批模式；只有创建或激活该 Agent 的权限所有者可以修改，设置会同步到该 Agent 的现有 Conversation，新 Conversation 自动继承，扩大自动批准范围仍需确认；升级时旧 Conversation 会先收敛到最安全的 `ask`，已冻结的 RuntimeSession 不受影响；
+- `/metrics [on|off]`：设置当前 Agent 是否在每条回答框末尾以弱化颜色显示端到端耗时和 Token 总用量；默认关闭，设置会随 Agent 持久化；
 - `/queue`：查看活动、暂停和排队 Turn；`/queue cancel TURN` 取消指定队列项，`/queue resume` 显式恢复异常后续执行；
 - `/approve ID once|run`：批准一次调用，或允许同一 Run 后续调用相同工具版本；
 - `/reject ID [REASON]`：拒绝待处理调用；

@@ -193,6 +193,7 @@ def create_app(
             "PROJECT_NOT_MANAGED",
             "PROJECT_SESSION_CONVERSATION_STALE",
             "TOOL_APPROVAL_ALREADY_DECIDED",
+            "AGENT_APPROVAL_MODE_LOCKED",
             "CONVERSATION_APPROVAL_MODE_LOCKED",
             "CONVERSATION_QUEUE_FULL",
         }:

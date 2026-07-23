@@ -37,7 +37,7 @@ _APPROVAL_FETCH_RETRY_SECONDS = 0.2
 _USER_PROMPT = FormattedText([("class:nico.user-label", "you › ")])
 _APPROVAL_PROMPT = FormattedText([("class:nico.approval", "approval › ")])
 _QUEUE_PREVIEW_MAX_CELLS = 72
-_QUEUE_LABEL = "next › "
+_QUEUE_LABEL = "  ↳ queued · "
 
 
 class InteractiveChatSession:
@@ -66,6 +66,7 @@ class InteractiveChatSession:
         self.current_approval_mode: str | None = None
         self.next_approval_mode = str(conversation.get("approval_mode") or "ask")
         self.model = str(metadata.get("model") or "default")
+        self.show_response_metrics = bool(metadata.get("show_response_metrics"))
         self.progress: ExecutionProgress = runner.renderer.progress(initial="Idle")
         self._api_lock = asyncio.Lock()
         self._background: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=256)
@@ -129,6 +130,10 @@ class InteractiveChatSession:
                                 if str(selected["id"]) != previous_id:
                                     self._stop_current_watch()
                                 self.conversation = selected
+                                if "_cli_show_response_metrics" in selected:
+                                    self.show_response_metrics = bool(
+                                        selected["_cli_show_response_metrics"]
+                                    )
                                 if should_exit:
                                     break
                                 await self._refresh_state()
@@ -233,12 +238,22 @@ class InteractiveChatSession:
     def composer_prompt(self) -> FormattedText:
         queued_input: str | None = None
         queued_turns = self.queue.get("queued_turns")
+        current_turn_ids = {
+            str(turn.get("run_id") or turn.get("id") or "")
+            for turn in (self.queue.get("active_turn"), self.queue.get("head_turn"))
+            if isinstance(turn, dict)
+        }
         if isinstance(queued_turns, list) and queued_turns:
-            next_turn = queued_turns[0]
-            if isinstance(next_turn, dict):
+            for next_turn in queued_turns:
+                if not isinstance(next_turn, dict):
+                    continue
+                turn_id = str(next_turn.get("run_id") or next_turn.get("id") or "")
+                if turn_id in current_turn_ids or turn_id == self._watch_run_id:
+                    continue
                 user_input = next_turn.get("user_input")
                 if isinstance(user_input, str) and user_input.strip():
                     queued_input = user_input
+                    break
         if queued_input is None:
             return _USER_PROMPT
 
@@ -310,25 +325,29 @@ class InteractiveChatSession:
     async def _resolve_next_approval(self) -> bool:
         approval = self._approvals[0]
         self.runner.renderer.approval(approval)
-        while True:
-            try:
-                answer = await self.prompt_session.prompt_async(
-                    _APPROVAL_PROMPT,
-                    bottom_toolbar=self.footer,
-                    refresh_interval=0.25,
-                )
-            except KeyboardInterrupt:
-                await self.cancel_active_turn()
-                self._discard_current_approval()
-                return True
-            except EOFError:
-                return False
-            if await self.decide_approval(approval, answer):
-                self._discard_current_approval()
-                await self._refresh_state()
-                self._invalidate()
-                return True
-            self.runner.output.out.print("[yellow]Choose 1, 2, or 3.[/yellow]")
+        self._clear_activity()
+        try:
+            while True:
+                try:
+                    answer = await self.prompt_session.prompt_async(
+                        _APPROVAL_PROMPT,
+                        bottom_toolbar=self.footer,
+                        refresh_interval=0.25,
+                    )
+                except KeyboardInterrupt:
+                    await self.cancel_active_turn()
+                    self._discard_current_approval()
+                    return True
+                except EOFError:
+                    return False
+                if await self.decide_approval(approval, answer):
+                    self._discard_current_approval()
+                    await self._refresh_state()
+                    self._invalidate()
+                    return True
+                self.runner.output.out.print("[yellow]Choose 1, 2, or 3.[/yellow]")
+        finally:
+            self._sync_activity()
 
     async def _refresh_state(self, *, include_approvals: bool = False) -> None:
         def fetch() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, list[dict]]:
@@ -389,6 +408,7 @@ class InteractiveChatSession:
             "waiting_for_approval": "Waiting for approval",
         }.get(str(target.get("run_status")), "Preparing")
         self.progress = self.runner.renderer.progress(initial=initial)
+        self._sync_activity()
         task = asyncio.create_task(
             asyncio.to_thread(
                 self._watch_blocking,
@@ -463,6 +483,7 @@ class InteractiveChatSession:
                     await run_in_terminal(lambda event=event: self.progress.event(event))
                 else:
                     self.progress.event(event)
+                self._sync_activity()
                 if event.get("type") == "ApprovalRequested":
                     approval_id = (event.get("payload") or {}).get("approval_id")
                     if approval_id and str(approval_id) not in self._seen_approvals:
@@ -478,6 +499,7 @@ class InteractiveChatSession:
                 if run_id != self._watch_run_id:
                     continue
                 self.progress.connection(state, attempt, maximum)
+                self._sync_activity()
             elif kind == "finished":
                 turn, queue, run_id = value
                 if run_id != self._watch_run_id:
@@ -485,11 +507,18 @@ class InteractiveChatSession:
                 self.queue = queue
                 self._watch_run_id = None
                 self._clear_stream()
+                self._sync_activity()
                 await run_in_terminal(self.progress.stop)
                 turn_id = str(turn.get("id") or "")
                 if turn_id and turn_id not in self._rendered_turns:
                     self._rendered_turns.add(turn_id)
-                    await run_in_terminal(lambda turn=turn: self.runner.renderer.final(turn))
+                    await run_in_terminal(
+                        lambda turn=turn: self.runner._render_final(
+                            self.conversation,
+                            turn,
+                            show_metrics=self.show_response_metrics,
+                        )
+                    )
                 try:
                     await self._refresh_state(include_approvals=True)
                 except CliError as exc:
@@ -501,6 +530,7 @@ class InteractiveChatSession:
                     continue
                 self._watch_run_id = None
                 self._clear_stream()
+                self._sync_activity()
                 await run_in_terminal(lambda error=error: self.runner.output.error(error))
             self._invalidate()
 
@@ -513,6 +543,32 @@ class InteractiveChatSession:
         clear = getattr(self.prompt_session, "clear_stream", None)
         if callable(clear):
             clear()
+
+    def _sync_activity(self) -> None:
+        provider_setter = getattr(self.prompt_session, "set_activity_provider", None)
+        if callable(provider_setter):
+            provider_setter(self._activity_status if self._watch_run_id is not None else None)
+            return
+        setter = getattr(self.prompt_session, "set_activity", None)
+        if not callable(setter):
+            return
+        if self._watch_run_id is None:
+            setter(None)
+            return
+        setter(self._activity_status())
+
+    def _clear_activity(self) -> None:
+        provider_setter = getattr(self.prompt_session, "set_activity_provider", None)
+        if callable(provider_setter):
+            provider_setter(None)
+            return
+        setter = getattr(self.prompt_session, "set_activity", None)
+        if callable(setter):
+            setter(None)
+
+    def _activity_status(self) -> str:
+        width = max(1, shutil.get_terminal_size((80, 24)).columns - 4)
+        return self.progress.status_text(width)
 
     async def _fetch_approval(self, approval_id: str) -> dict[str, Any]:
         last_error: CliError | None = None

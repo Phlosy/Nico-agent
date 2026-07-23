@@ -45,6 +45,8 @@ class BottomAnchoredPromptSession(PromptSession[str]):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._stream_output = ""
+        self._activity = ""
+        self._activity_provider: Callable[[], str | None] | None = None
         super().__init__(*args, **kwargs)
 
     def _create_layout(self) -> Layout:
@@ -72,7 +74,16 @@ class BottomAnchoredPromptSession(PromptSession[str]):
             Window(height=Dimension(weight=1)),
             filter=~is_done,
         )
-        root = HSplit([stream_panel, spacer, base.container])
+        activity = ConditionalContainer(
+            Window(
+                FormattedTextControl(self._activity_fragments, show_cursor=False),
+                height=Dimension.exact(1),
+                dont_extend_height=True,
+                always_hide_cursor=True,
+            ),
+            filter=Condition(lambda: bool(self._activity_text())) & ~is_done,
+        )
+        root = HSplit([stream_panel, spacer, activity, base.container])
         return Layout(root, focused_element=base.current_window)
 
     def append_stream_delta(self, delta: str) -> None:
@@ -89,6 +100,40 @@ class BottomAnchoredPromptSession(PromptSession[str]):
             return
         self._stream_output = ""
         self._invalidate()
+
+    def set_activity(self, activity: str | None) -> None:
+        self._activity_provider = None
+        value = self._normalize_activity(activity)
+        if value == self._activity:
+            return
+        self._activity = value
+        self._invalidate()
+
+    def set_activity_provider(
+        self,
+        provider: Callable[[], str | None] | None,
+    ) -> None:
+        self._activity_provider = provider
+        if provider is None:
+            self._activity = ""
+        self._invalidate()
+
+    def _activity_text(self) -> str:
+        if self._activity_provider is None:
+            return self._activity
+        return self._normalize_activity(self._activity_provider())
+
+    def _normalize_activity(self, activity: str | None) -> str:
+        safe = self._sanitize_stream_delta(activity or "")
+        return " ".join(safe.split())
+
+    def _activity_fragments(self) -> FormattedText:
+        return FormattedText(
+            [
+                ("class:nico.activity-marker", "  • "),
+                ("class:nico.activity", self._activity_text()),
+            ]
+        )
 
     def _stream_fragments(self) -> FormattedText:
         return FormattedText(
@@ -194,7 +239,10 @@ class ChatRunner:
             title=title,
             idempotency_key=str(uuid4()),
         )
-        return self._with_mode(created, mode)
+        return self._with_agent_response_metrics(
+            self._with_mode(created, mode),
+            selected,
+        )
 
     def _resolve_agent(
         self,
@@ -270,6 +318,16 @@ class ChatRunner:
     def public_conversation(conversation: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in conversation.items() if not key.startswith("_cli_")}
 
+    @staticmethod
+    def _with_agent_response_metrics(
+        conversation: dict[str, Any],
+        agent: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            **conversation,
+            "_cli_show_response_metrics": bool(agent.get("show_response_metrics")),
+        }
+
     def history(self, conversation_id: str) -> list[dict[str, Any]]:
         return self.client.list_conversation_turns(conversation_id, limit=500)
 
@@ -280,6 +338,8 @@ class ChatRunner:
     ) -> dict[str, Any]:
         if not message.strip():
             raise CliError("EMPTY_CHAT_MESSAGE", "chat message cannot be empty", exit_code=2)
+        if not self.output.json_mode:
+            conversation = self._hydrate_agent_response_metrics(conversation)
         turn = self.client.create_conversation_turn(
             conversation["id"],
             message,
@@ -330,7 +390,7 @@ class ChatRunner:
                 if event_type is not None:
                     self.renderer.event({"type": event_type, "payload": {}})
                 elif current.get("assistant_output") is not None:
-                    self.renderer.final(current)
+                    self._render_final(conversation, current)
                 else:
                     self.output.out.print("[yellow]■ Run interrupted[/yellow]")
             return {
@@ -348,7 +408,7 @@ class ChatRunner:
             "approval_required": pending_approval,
         }
         if not self.output.json_mode and pending_approval is None:
-            self.renderer.final(final)
+            self._render_final(conversation, final)
         return result
 
     def run_interactive(self, conversation: dict[str, Any], *, read_only: bool) -> None:
@@ -425,6 +485,8 @@ class ChatRunner:
             return conversation, False
         if name == "permissions":
             return self.controls.permissions(conversation, command), False
+        if name == "metrics":
+            return self.controls.metrics(conversation, command), False
         if name == "queue":
             self.controls.queue(conversation, command)
             return conversation, False
@@ -439,8 +501,7 @@ class ChatRunner:
         if name == "resume":
             self._arity(command, 1, "/resume ID")
             selected = self.client.get_conversation(command.args[0])
-            self.renderer.header(self._metadata(selected))
-            return self._inherit_cli_context(selected, conversation), False
+            return self._activate_conversation(selected, conversation), False
         if name == "continue":
             self._arity(command, 0, "/continue")
             rows = self.client.list_conversations(
@@ -452,8 +513,7 @@ class ChatRunner:
             )
             if not rows:
                 raise CliError("CONVERSATION_NOT_FOUND", "no active conversation found")
-            self.renderer.header(self._metadata(rows[0]))
-            return self._inherit_cli_context(rows[0], conversation), False
+            return self._activate_conversation(rows[0], conversation), False
         if name == "new":
             self._arity(command, 0, "/new")
             if conversation.get("_cli_project_session_id"):
@@ -475,8 +535,7 @@ class ChatRunner:
                 idempotency_key=str(uuid4()),
             )
             selected = self._with_mode(selected, conversation.get("_cli_mode", "project"))
-            self.renderer.header(self._metadata(selected))
-            return self._inherit_cli_context(selected, conversation), False
+            return self._activate_conversation(selected, conversation), False
         if name == "title":
             if not command.args:
                 raise CliError("SLASH_ARGUMENT_REQUIRED", "usage: /title TEXT", exit_code=2)
@@ -706,7 +765,7 @@ class ChatRunner:
                 if pending_approval is None:
                     final = self.client.get_conversation_turn(accepted["id"])
             if pending_approval is None:
-                self.renderer.final(final)
+                self._render_final(conversation, final)
         elif name == "approvals":
             self._require_run(run_id)
             self.renderer.approvals(self.client.list_tool_approvals(run_id=str(run_id)))
@@ -842,6 +901,49 @@ class ChatRunner:
             ),
             "model": version.get("model_name") or "default",
             "tools": policy.get("allow") or policy.get("tools") or [],
+            "show_response_metrics": bool(agent.get("show_response_metrics")),
+        }
+
+    def _render_final(
+        self,
+        conversation: dict[str, Any],
+        turn: dict[str, Any],
+        *,
+        show_metrics: bool | None = None,
+    ) -> None:
+        enabled = show_metrics
+        if enabled is None:
+            if "_cli_show_response_metrics" in conversation:
+                enabled = bool(conversation["_cli_show_response_metrics"])
+            else:
+                enabled = bool(
+                    self.client.get_agent(str(conversation["agent_id"])).get(
+                        "show_response_metrics"
+                    )
+                )
+        self.renderer.final(turn, show_metrics=bool(enabled))
+
+    def _hydrate_agent_response_metrics(
+        self,
+        conversation: dict[str, Any],
+    ) -> dict[str, Any]:
+        if "_cli_show_response_metrics" in conversation:
+            return conversation
+        return self._with_agent_response_metrics(
+            conversation,
+            self.client.get_agent(str(conversation["agent_id"])),
+        )
+
+    def _activate_conversation(
+        self,
+        selected: dict[str, Any],
+        current: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = self._metadata(selected)
+        self.renderer.header(metadata)
+        return {
+            **self._inherit_cli_context(selected, current),
+            "_cli_show_response_metrics": bool(metadata.get("show_response_metrics")),
         }
 
     def _control_turn(
@@ -913,7 +1015,7 @@ class ChatRunner:
                     if should_stop:
                         return
                 final = self.client.get_conversation_turn(turn["id"])
-            self.renderer.final(final)
+            self._render_final(conversation, final)
 
     @staticmethod
     def _arity(command: SlashCommand, expected: int, usage: str) -> None:
@@ -956,6 +1058,8 @@ def _chat_style(*, no_color: bool) -> Style:
                 "nico.user-label": "bold",
                 "nico.queue-label": "bold",
                 "nico.queue-preview": "dim",
+                "nico.activity-marker": "bold",
+                "nico.activity": "dim",
                 "nico.approval": "bold",
                 "nico.answer": "",
                 "nico.answer.border": "dim",
@@ -981,6 +1085,8 @@ def _chat_style(*, no_color: bool) -> Style:
             "nico.user-label": "bold #8fb3cc",
             "nico.queue-label": "bold #7895ac",
             "nico.queue-preview": "#607786 italic",
+            "nico.activity-marker": "bold #d0a84e",
+            "nico.activity": "#8fb3cc",
             "nico.approval": "bold #ffaf5f",
             "nico.answer": "#c8d4dc",
             "nico.answer.border": "#d0a84e",

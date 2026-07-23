@@ -113,6 +113,8 @@ def build_native_context(
     ]
     if run_time := _run_time_instruction(request):
         system_parts.append(run_time)
+    if approval_policy := _approval_policy_instruction(request):
+        system_parts.append(approval_policy)
     if request.boundaries:
         system_parts.append("Boundaries:\n- " + "\n- ".join(request.boundaries))
     if request.long_term_goal:
@@ -208,6 +210,8 @@ def build_phase_context(
     ]
     if run_time := _run_time_instruction(request):
         system_parts.append(run_time)
+    if approval_policy := _approval_policy_instruction(request):
+        system_parts.append(approval_policy)
     if request.boundaries:
         system_parts.append("Boundaries:\n- " + "\n- ".join(request.boundaries))
     envelope = {
@@ -373,4 +377,28 @@ def _run_time_instruction(request: RuntimeSessionRequest) -> str | None:
         "proof of external clock synchronization. If the user explicitly asks for "
         "independent verification, a current external source, or greater precision than "
         "the frozen Run start, authorized tools may still be used."
+    )
+
+
+def _approval_policy_instruction(request: RuntimeSessionRequest) -> str | None:
+    policy = request.execution_manifest.get("tool_approval_policy")
+    mode = policy.get("mode") if isinstance(policy, dict) else None
+    behavior = {
+        "ask": "medium- and high-risk tool calls may pause for human approval",
+        "auto-medium": (
+            "authorized medium-risk tool calls can proceed automatically, while "
+            "high-risk calls may pause for human approval"
+        ),
+        "auto-all": (
+            "authorized medium- and high-risk tool calls can proceed without an "
+            "interactive approval prompt"
+        ),
+    }.get(mode)
+    if behavior is None:
+        return None
+    return (
+        f"This Run has a frozen tool approval mode of {mode!r}: {behavior}. "
+        "This describes execution behavior; it does not grant permission. The Tool Gateway, "
+        "the frozen capability policy, and deployment locks remain authoritative. Never "
+        "attempt to change or widen the approval mode."
     )

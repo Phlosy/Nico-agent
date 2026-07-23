@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,7 @@ from nico_agent.api import create_app
 from nico_agent.config import Settings
 from nico_agent.database import RunClaim, TenantContext
 from nico_agent.domain.models import (
+    Agent,
     Artifact,
     AuditRecord,
     Conversation,
@@ -296,6 +298,221 @@ async def test_personal_mode_rejects_explicit_project_and_project_mode_stays_com
 
 
 @pytest.mark.asyncio
+async def test_agent_default_permission_applies_to_existing_and_new_conversations(
+    app_client,
+) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "AgentDefaultApprovalMode")
+    project, agent, _version = await _project_and_agent(client, headers)
+    existing = await _create_conversation(
+        client, headers, project, agent, key="agent-permission-existing"
+    )
+    assert existing["approval_mode"] == "ask"
+
+    changed = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": agent["revision"],
+            "default_approval_mode": "auto-medium",
+        },
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["default_approval_mode"] == "auto-medium"
+
+    refreshed = await client.get(
+        f"/api/v1/conversations/{existing['id']}",
+        headers=headers,
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["approval_mode"] == "auto-medium"
+
+    created = await _create_conversation(
+        client, headers, project, changed.json(), key="agent-permission-new"
+    )
+    assert created["approval_mode"] == "auto-medium"
+
+    context = TenantContext(tenant_id, "agent-permission-audit", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        audit = await session.scalar(
+            select(AuditRecord).where(
+                AuditRecord.tenant_id == tenant_id,
+                AuditRecord.resource_id == UUID(agent["id"]),
+                AuditRecord.action == "agent.approval_mode.change",
+            )
+        )
+    assert audit is not None
+    assert audit.details["previous_mode"] == "ask"
+    assert audit.details["approval_mode"] == "auto-medium"
+    assert audit.details["conversations_updated"] == 1
+
+    denied = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": changed.json()["revision"],
+            "default_approval_mode": "auto-all",
+        },
+        headers={**headers, "X-Actor-ID": "agent-observer"},
+    )
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["code"] == "AGENT_APPROVAL_MODE_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_agent_response_metrics_preference_is_persistent_and_cloneable(
+    app_client,
+) -> None:
+    _app, client = app_client
+    _tenant_id, headers = await _bootstrap(client, "AgentResponseMetrics")
+    _project, agent, _version = await _project_and_agent(client, headers)
+    assert agent["show_response_metrics"] is False
+
+    changed = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": agent["revision"],
+            "show_response_metrics": True,
+        },
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["show_response_metrics"] is True
+
+    refreshed = await client.get(f"/api/v1/agents/{agent['id']}", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["show_response_metrics"] is True
+
+    cloned = await client.post(
+        f"/api/v1/agents/{agent['id']}/clone",
+        json={"name": "metrics-clone", "display_name": "Metrics Clone"},
+        headers=headers,
+    )
+    assert cloned.status_code == 201, cloned.text
+    assert cloned.json()["show_response_metrics"] is True
+
+    disabled = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": refreshed.json()["revision"],
+            "show_response_metrics": False,
+        },
+        headers=headers,
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["show_response_metrics"] is False
+
+    disabled_refreshed = await client.get(f"/api/v1/agents/{agent['id']}", headers=headers)
+    assert disabled_refreshed.status_code == 200, disabled_refreshed.text
+    assert disabled_refreshed.json()["show_response_metrics"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_permission_reapplies_same_mode_to_drifted_conversations(
+    app_client,
+) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "AgentPermissionResync")
+    project, agent, _version = await _project_and_agent(client, headers)
+    existing = await _create_conversation(
+        client, headers, project, agent, key="agent-permission-drift"
+    )
+    context = TenantContext(tenant_id, "migration-drift", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        conversation = await session.get(Conversation, UUID(existing["id"]))
+        assert conversation is not None
+        conversation.approval_mode = "auto-all"
+
+    reapplied = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": agent["revision"],
+            "default_approval_mode": "ask",
+        },
+        headers=headers,
+    )
+    assert reapplied.status_code == 200, reapplied.text
+    refreshed = await client.get(
+        f"/api/v1/conversations/{existing['id']}",
+        headers=headers,
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["approval_mode"] == "ask"
+
+
+@pytest.mark.asyncio
+async def test_agent_permission_recovers_legacy_owner_from_creation_audit(
+    app_client,
+) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "AgentPermissionLegacyOwner")
+    _project, agent, _version = await _project_and_agent(client, headers)
+    context = TenantContext(tenant_id, "legacy-owner-setup", uuid4())
+    async with app.state.database.tenant_transaction(context) as session:
+        stored = await session.get(Agent, UUID(agent["id"]))
+        assert stored is not None
+        stored.approval_owner_actor_id = None
+
+    denied = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": agent["revision"],
+            "default_approval_mode": "auto-medium",
+        },
+        headers={**headers, "X-Actor-ID": "agent-observer"},
+    )
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["code"] == "AGENT_APPROVAL_MODE_FORBIDDEN"
+
+    recovered = await client.patch(
+        f"/api/v1/agents/{agent['id']}",
+        json={
+            "expected_revision": agent["revision"],
+            "default_approval_mode": "auto-medium",
+        },
+        headers=headers,
+    )
+    assert recovered.status_code == 200, recovered.text
+    async with app.state.database.tenant_transaction(context) as session:
+        stored = await session.get(Agent, UUID(agent["id"]))
+        assert stored is not None
+        assert stored.approval_owner_actor_id == headers["X-Actor-ID"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_creation_waits_for_agent_permission_update(app_client) -> None:
+    app, client = app_client
+    tenant_id, headers = await _bootstrap(client, "AgentPermissionCreationRace")
+    project, agent, _version = await _project_and_agent(client, headers)
+    context = TenantContext(tenant_id, "permission-update", uuid4())
+
+    async with app.state.database.tenant_transaction(context) as session:
+        locked_agent = await session.scalar(
+            select(Agent)
+            .where(
+                Agent.tenant_id == tenant_id,
+                Agent.id == UUID(agent["id"]),
+            )
+            .with_for_update()
+        )
+        assert locked_agent is not None
+        locked_agent.default_approval_mode = "auto-medium"
+        pending = asyncio.create_task(
+            _create_conversation(
+                client,
+                headers,
+                project,
+                agent,
+                key="agent-permission-creation-race",
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not pending.done()
+
+    created = await pending
+    assert created["approval_mode"] == "auto-medium"
+
+
+@pytest.mark.asyncio
 async def test_conversation_approval_mode_is_creator_owned_and_deployment_locked(
     app_client,
 ) -> None:
@@ -375,6 +592,16 @@ async def test_conversation_approval_mode_is_creator_owned_and_deployment_locked
             )
             assert locked.status_code == 409
             assert locked.json()["code"] == "CONVERSATION_APPROVAL_MODE_LOCKED"
+            locked_agent_default = await locked_client.patch(
+                f"/api/v1/agents/{locked_agent['id']}",
+                json={
+                    "expected_revision": locked_agent["revision"],
+                    "default_approval_mode": "auto-all",
+                },
+                headers=locked_headers,
+            )
+            assert locked_agent_default.status_code == 409, locked_agent_default.text
+            assert locked_agent_default.json()["code"] == "AGENT_APPROVAL_MODE_LOCKED"
             allowed = await locked_client.patch(
                 f"/api/v1/conversations/{locked_conversation['id']}",
                 json={

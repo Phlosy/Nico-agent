@@ -117,6 +117,7 @@ class AgentCapabilityService:
                     name=str(target["name"]),
                     display_name=str(target["display_name"]),
                     description="Created by guided Agent capability setup.",
+                    approval_owner_actor_id=context.actor_id,
                 )
                 session.add(agent)
                 await session.flush()

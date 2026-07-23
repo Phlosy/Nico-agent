@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.agent_versions import AgentVersionLifecycle
@@ -27,11 +27,12 @@ from nico_agent.api_schemas import (
 )
 from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database, TenantContext
-from nico_agent.domain.errors import DomainConflict, ResourceNotFound
+from nico_agent.domain.errors import AccessDenied, DomainConflict, ResourceNotFound
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
     AuditRecord,
+    Conversation,
     ConversationTurn,
     Event,
     Project,
@@ -58,6 +59,7 @@ from nico_agent.domain.states import (
     RunStepStatus,
     TaskStatus,
     ToolCallStatus,
+    conversation_auto_approved_risks,
     require_revision,
     transition_state,
 )
@@ -67,8 +69,14 @@ from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 
 
 class ControlPlaneService:
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        approval_locked_risks: frozenset[str] = frozenset(),
+    ) -> None:
         self.database = database
+        self.approval_locked_risks = approval_locked_risks
 
     async def bootstrap_tenant(
         self, command: TenantCreate, *, actor_id: str, correlation_id: UUID
@@ -297,6 +305,7 @@ class ControlPlaneService:
                 name=command.name,
                 display_name=command.display_name,
                 description=command.description,
+                approval_owner_actor_id=context.actor_id,
             )
             session.add(agent)
             await session.flush()
@@ -328,8 +337,64 @@ class ControlPlaneService:
                 agent.display_name = command.display_name
             if "description" in command.model_fields_set:
                 agent.description = command.description
+            if (
+                "show_response_metrics" in command.model_fields_set
+                and command.show_response_metrics is not None
+            ):
+                agent.show_response_metrics = command.show_response_metrics
+            previous_approval_mode = agent.default_approval_mode
+            if command.default_approval_mode is not None:
+                if agent.approval_owner_actor_id is None:
+                    recovered_owner = await self._agent_approval_owner(session, agent)
+                    if recovered_owner == context.actor_id:
+                        agent.approval_owner_actor_id = recovered_owner
+                if agent.approval_owner_actor_id != context.actor_id:
+                    raise AccessDenied(
+                        "AGENT_APPROVAL_MODE_FORBIDDEN",
+                        "only the Agent permission owner may change its approval mode",
+                    )
+                conflicts = (
+                    conversation_auto_approved_risks(command.default_approval_mode)
+                    & self.approval_locked_risks
+                )
+                if conflicts:
+                    raise DomainConflict(
+                        "AGENT_APPROVAL_MODE_LOCKED",
+                        "deployment policy requires approval for risks this mode would allow",
+                        details={"locked_risks": sorted(conflicts)},
+                    )
+                target_mode = command.default_approval_mode.value
+                agent.default_approval_mode = target_mode
+                sync_result = await session.execute(
+                    update(Conversation)
+                    .where(
+                        Conversation.tenant_id == context.tenant_id,
+                        Conversation.agent_id == agent.id,
+                        Conversation.approval_mode != target_mode,
+                    )
+                    .values(
+                        approval_mode=target_mode,
+                        revision=Conversation.revision + 1,
+                    )
+                )
+                conversations_updated = sync_result.rowcount
             agent.revision += 1
             self._record_change(session, context, agent, "AgentUpdated", "agent.update")
+            if command.default_approval_mode is not None:
+                self._record(
+                    session,
+                    context,
+                    event_type="AgentApprovalModeConfigured",
+                    aggregate_type="agent",
+                    aggregate_id=agent.id,
+                    action="agent.approval_mode.change",
+                    payload={
+                        "previous_mode": previous_approval_mode,
+                        "approval_mode": agent.default_approval_mode,
+                        "conversations_updated": conversations_updated,
+                        "revision": agent.revision,
+                    },
+                )
             await session.flush()
             return agent
 
@@ -343,6 +408,9 @@ class ControlPlaneService:
                 name=command.name,
                 display_name=command.display_name,
                 description=source.description,
+                default_approval_mode=source.default_approval_mode,
+                show_response_metrics=source.show_response_metrics,
+                approval_owner_actor_id=context.actor_id,
             )
             session.add(clone)
             await session.flush()
@@ -1102,6 +1170,38 @@ class ControlPlaneService:
         if for_update:
             statement = statement.with_for_update()
         return await self._one(session, statement, "agent", agent_id)
+
+    @staticmethod
+    async def _agent_approval_owner(
+        session: AsyncSession,
+        agent: Agent,
+    ) -> str | None:
+        direct = and_(
+            AuditRecord.action.in_(("agent.create", "agent.clone")),
+            AuditRecord.resource_type == "agent",
+            AuditRecord.resource_id == agent.id,
+        )
+        activated = and_(
+            AuditRecord.action.in_(
+                (
+                    "agent_capabilities.activate",
+                    "web_provider_activation.complete",
+                )
+            ),
+            AuditRecord.details["result"]["agent_id"].as_string() == str(agent.id),
+        )
+        return await session.scalar(
+            select(AuditRecord.actor_id)
+            .where(
+                AuditRecord.tenant_id == agent.tenant_id,
+                or_(direct, activated),
+            )
+            .order_by(
+                direct.desc(),
+                AuditRecord.sequence,
+            )
+            .limit(1)
+        )
 
     async def _ready_agent(
         self, session: AsyncSession, context: TenantContext, agent_id: UUID

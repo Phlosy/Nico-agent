@@ -654,7 +654,7 @@ async def test_0027_expansion_defaults_preserve_representative_0026_run_shape() 
                 "lifecycle_metadata": {},
                 "lifecycle_revision": 0,
             }
-            assert head == "20260723_0027"
+            assert head == "20260723_0029"
             await session.execute(
                 text(
                     "UPDATE runs SET status = 'completed', ended_at = clock_timestamp() "

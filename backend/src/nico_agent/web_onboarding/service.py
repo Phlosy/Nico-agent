@@ -440,6 +440,7 @@ class WebOnboardingService:
                         name=str(agent_projection["name"]),
                         display_name=str(agent_projection["display_name"]),
                         description="Created by guided Web Provider setup.",
+                        approval_owner_actor_id=context.actor_id,
                     )
                     session.add(agent)
                     await session.flush()

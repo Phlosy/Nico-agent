@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
     func,
     text,
 )
@@ -159,6 +160,10 @@ class Agent(Base, TimestampMixin):
             "status IN ('draft', 'ready', 'running', 'paused', 'archived', 'error')",
             name="ck_agents_status",
         ),
+        CheckConstraint(
+            "default_approval_mode IN ('ask', 'auto-medium', 'auto-all')",
+            name="ck_agents_default_approval_mode",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "id", "current_version_id"],
             ["agent_versions.tenant_id", "agent_versions.agent_id", "agent_versions.id"],
@@ -182,6 +187,17 @@ class Agent(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=AgentStatus.DRAFT.value
     )
+    default_approval_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=ConversationApprovalMode.ASK.value,
+    )
+    show_response_metrics: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=false(),
+    )
+    approval_owner_actor_id: Mapped[str | None] = mapped_column(String(200))
     current_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
@@ -421,6 +437,11 @@ class Conversation(Base, TimestampMixin):
             "tenant_id",
             "queue_state",
             "updated_at",
+        ),
+        Index(
+            "ix_conversations_agent",
+            "tenant_id",
+            "agent_id",
         ),
         CheckConstraint(
             "approval_mode IN ('ask', 'auto-medium', 'auto-all')",
