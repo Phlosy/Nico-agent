@@ -112,8 +112,8 @@ class InteractiveChatSession:
                         await asyncio.gather(approval_interrupt, return_exceptions=True)
                     if message == _APPROVAL_INTERRUPT:
                         continue
-                    command = parse_slash(message)
                     try:
+                        command = parse_slash(message)
                         if command is not None:
                             if command.name == "exit":
                                 break

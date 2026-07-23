@@ -1184,6 +1184,35 @@ async def test_interactive_composer_uses_fixed_toolbar_and_one_second_refresh(
     assert prompt.calls[0]["refresh_interval"] == 1.0
 
 
+async def test_interactive_composer_keeps_running_after_an_unknown_slash_command(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+
+    class SequencePromptSession(FakePromptSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.messages = iter(["/per", "/exit"])
+            self.calls = 0
+
+        async def prompt_async(self, _message, **_kwargs) -> str:
+            self.calls += 1
+            return next(self.messages)
+
+    prompt = SequencePromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+
+    await session.run()
+
+    assert prompt.calls == 2
+    assert "UNKNOWN_SLASH_COMMAND" in session.runner.output.stderr.getvalue()
+
+
 async def test_interactive_composer_persists_submitted_user_messages_explicitly(
     monkeypatch, tmp_path: Path
 ) -> None:
