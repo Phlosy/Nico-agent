@@ -226,7 +226,7 @@ def test_frozen_published_knowledge_is_untrusted_and_rebuildable() -> None:
     assert context.content_hash == build_native_context(request, mode="direct").content_hash
 
 
-def test_native_context_exposes_a_frozen_authoritative_run_time() -> None:
+def test_native_context_uses_frozen_run_time_as_a_fast_path_without_blocking_verification() -> None:
     request = RuntimeSessionRequest(
         tenant_id=uuid4(),
         run_id=uuid4(),
@@ -254,9 +254,12 @@ def test_native_context_exposes_a_frozen_authoritative_run_time() -> None:
 
     assert "2026-07-23T07:07:12.365729+00:00" in system
     assert "2026-07-23T07:07:12.365729+00:00" in phase_system
-    assert "authoritative for current date and time" in system
-    assert "authoritative for current date and time" in phase_system
-    assert "Do not use Web search solely to discover the current date or time" in system
+    assert "preferred fast path for ordinary current date and time questions" in system
+    assert "preferred fast path for ordinary current date and time questions" in phase_system
+    assert "explicitly asks for independent verification" in system
+    assert "authorized tools may still be used" in system
+    assert "Do not use Web search" not in system
+    assert "authoritative for current date and time" not in system
     assert "Use the fewest tool calls needed" in instruction
     assert "one successful relevant tool result is normally sufficient" in instruction
     assert "Search-to-Fetch" in instruction

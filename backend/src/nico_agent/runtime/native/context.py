@@ -367,8 +367,10 @@ def _run_time_instruction(request: RuntimeSessionRequest) -> str | None:
         return None
     frozen = started_at.astimezone(UTC).isoformat()
     return (
-        f"This Run started at {frozen} (UTC). This platform-provided timestamp is "
-        "authoritative for current date and time questions. Convert it to the requested "
-        "timezone when needed. Do not use Web search solely to discover the current date "
-        "or time."
+        f"This Run started at {frozen} (UTC). Use this platform-provided timestamp as the "
+        "preferred fast path for ordinary current date and time questions, converting it "
+        "to the requested timezone when needed. It is platform context, not independent "
+        "proof of external clock synchronization. If the user explicitly asks for "
+        "independent verification, a current external source, or greater precision than "
+        "the frozen Run start, authorized tools may still be used."
     )

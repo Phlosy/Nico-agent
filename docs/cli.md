@@ -322,7 +322,8 @@ SearXNG 是本机默认项且无需搜索 Key；Brave 不运行本地搜索服�
 Key。两种路径最终都使用相同的 `web.search`、来源绑定的 `web.fetch`、审批和审计边界。
 DNS 解析器不是模型参数：模型只能提交搜索结果 URL，不能选择或修改 DoH endpoint。
 
-聊天运行中只在临时状态或 footer 显示 `Web search`、`Reading source`；终结时把
+聊天运行中在输入框上方的临时 `work ›` 状态显示 `Web search`、`Reading source`；
+终结时把
 成功搜索、已读来源和可恢复失败压缩成一条 `Web research` 摘要。单个来源的
 `WEB_FETCH_SOURCE_DENIED`、不可达或 HTTP 错误不会用连续红色行淹没回答，但仍完整
 保存在 ToolCall/Event/Audit 中。审批面板只展示截断 query 或 URL origin。原始 query、
@@ -353,7 +354,8 @@ Event，按 sequence 去重，并在流结束后通过 Turn API 校准最终结�
 
 普通 Conversation Turn 默认最多 12 轮模型迭代和 8 次工具调用；显式 API 预算可以
 覆盖该值。Worker 在首次领取时冻结 Run 开始 UTC 时间，模型可直接换算用户请求的
-时区，不应仅为“今天日期”或“当前时间”启动 Web 搜索。
+时区，作为普通日期和时间问题的快路径。用户明确要求独立核验、当前外部来源或更高
+精度时，仍可按 Agent 授权正常使用 Web 工具。
 
 human 模式不会把持久化事件流原样打印到对话中。普通 Task、Run、RuntimeSession、计划、步骤、ContextSnapshot、ModelCall 和 checkpoint 生命周期只用于审计与显式检查命令；聊天滚动区只显示最终回答、真实工具动作、审批、可用 Artifact，以及失败或取消。由于模型增量事件无法可靠区分最终正文与中间结构化输出，CLI 等 Turn 终态校准后再渲染 `assistant_output`。`--json` 仍返回完整事件数组供自动化消费。
 
@@ -368,11 +370,13 @@ human 模式不会把持久化事件流原样打印到对话中。普通 Task、
 ⠹ Running http_read@1 · 0:12 | reconnecting 1/3
 ```
 
-交互式 TTY chat 使用同一安全阶段投影，但把它放在始终可见的 composer footer 中；
-后台 SSE 使用独立连接，工具结果和最终回答通过 prompt_toolkit 的滚动输出写入，不会
-覆盖正在编辑的草稿。状态会在准备、规划、思考、运行工具、反思和整理答案之间切换，
-并显示本次等待的经过时间。连接暂时中断时，同一行显示有界重连次数；连接恢复后
-自动消失。
+交互式 TTY chat 使用同一安全阶段投影，并把 `work › Preparing`、`work › Thinking`、
+`work › Running Web search`、`work › Running Reading source`、
+`work › Running Reading file` 等状态固定在输入框上方；有排队消息时，`next ›` 预览
+位于状态与当前输入之间。后台 SSE 使用独立连接，工具结果和最终回答通过
+prompt_toolkit 的滚动输出写入，不会覆盖正在编辑的草稿。状态会在准备、规划、思考、
+运行工具、反思和整理答案之间切换，并显示本次等待的经过时间。连接暂时中断时，同一
+行显示有界重连次数；连接恢复后自动消失。
 
 滚动区只保留有长期价值的结果：非 Web 工具每个调用至多一条终态，Web 尝试按 Run
 汇总；另外保留已保存的 Artifact、审批面板、Run 失败或取消，以及最终回答。能够由

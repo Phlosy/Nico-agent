@@ -36,6 +36,8 @@ _APPROVAL_FETCH_RETRY_SECONDS = 0.2
 _USER_PROMPT = FormattedText([("class:nico.user-label", "you › ")])
 _APPROVAL_PROMPT = FormattedText([("class:nico.approval", "approval › ")])
 _QUEUE_PREVIEW_MAX_CELLS = 72
+_WORK_LABEL = "work › "
+_QUEUE_LABEL = "next › "
 
 
 class InteractiveChatSession:
@@ -213,13 +215,10 @@ class InteractiveChatSession:
                     model=self.model,
                     current_approval_mode=self.current_approval_mode,
                     next_approval_mode=self.next_approval_mode,
-                    activity=self.progress.status_text(max(10, width // 3)),
                     queued_count=int(self.queue.get("queued_count") or 0),
                     queue_state=str(self.queue.get("state") or "active"),
                     pause_reason=(
-                        str(self.queue["pause_reason"])
-                        if self.queue.get("pause_reason")
-                        else None
+                        str(self.queue["pause_reason"]) if self.queue.get("pause_reason") else None
                     ),
                     width=width,
                 )
@@ -227,26 +226,51 @@ class InteractiveChatSession:
         )
 
     def composer_prompt(self) -> FormattedText:
+        queued_input: str | None = None
         queued_turns = self.queue.get("queued_turns")
-        if not isinstance(queued_turns, list) or not queued_turns:
+        if isinstance(queued_turns, list) and queued_turns:
+            next_turn = queued_turns[0]
+            if isinstance(next_turn, dict):
+                user_input = next_turn.get("user_input")
+                if isinstance(user_input, str) and user_input.strip():
+                    queued_input = user_input
+        if self._watch_run_id is None and queued_input is None:
             return _USER_PROMPT
-        next_turn = queued_turns[0]
-        if not isinstance(next_turn, dict):
-            return _USER_PROMPT
-        user_input = next_turn.get("user_input")
-        if not isinstance(user_input, str) or not user_input.strip():
-            return _USER_PROMPT
+
         width = shutil.get_terminal_size((80, 24)).columns
-        preview_width = max(1, min(_QUEUE_PREVIEW_MAX_CELLS, width - get_cwidth("next › ")))
-        preview = _truncate_cells(" ".join(user_input.split()), preview_width)
-        return FormattedText(
-            [
-                ("class:nico.queue-label", "next › "),
-                ("class:nico.queue-preview", preview),
-                ("", "\n"),
-                ("class:nico.user-label", "you › "),
-            ]
-        )
+        fragments: list[tuple[str, str]] = []
+        if self._watch_run_id is not None:
+            activity_width = max(1, width - get_cwidth(_WORK_LABEL))
+            activity = _truncate_cells(
+                self.progress.status_text(activity_width),
+                activity_width,
+            )
+            fragments.extend(
+                [
+                    ("class:nico.work-label", _WORK_LABEL),
+                    ("class:nico.work-status", activity),
+                    ("", "\n"),
+                ]
+            )
+
+        if queued_input is not None:
+            preview_width = max(
+                1,
+                min(
+                    _QUEUE_PREVIEW_MAX_CELLS,
+                    width - get_cwidth(_QUEUE_LABEL),
+                ),
+            )
+            preview = _truncate_cells(" ".join(queued_input.split()), preview_width)
+            fragments.extend(
+                [
+                    ("class:nico.queue-label", _QUEUE_LABEL),
+                    ("class:nico.queue-preview", preview),
+                    ("", "\n"),
+                ]
+            )
+        fragments.extend(_USER_PROMPT)
+        return FormattedText(fragments)
 
     async def decide_approval(self, approval: dict[str, Any], answer: str) -> bool:
         decision = {

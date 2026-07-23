@@ -275,6 +275,37 @@ def test_web_progress_is_semantic_and_omits_query_url_and_result() -> None:
     assert "token=private" not in rendered
 
 
+def test_tool_progress_uses_friendly_builtin_activity_labels() -> None:
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
+    )
+    progress = renderer.progress(clock=lambda: 20.0)
+
+    progress.event(
+        {
+            "type": "ToolCallStarted",
+            "payload": {"tool_call_id": "read-1", "tool": "file.read@1.0.0"},
+        }
+    )
+    assert progress.activity == "Running Reading file"
+
+    progress.event(
+        {
+            "type": "ToolCallStarted",
+            "payload": {"tool_call_id": "write-1", "tool": "file.write@1.0.0"},
+        }
+    )
+    assert progress.activity == "Running Writing file"
+
+    progress.event(
+        {
+            "type": "ToolCallStarted",
+            "payload": {"tool_call_id": "python-1", "tool": "python.execute@1.0.0"},
+        }
+    )
+    assert progress.activity == "Running Python"
+
+
 def test_web_progress_summarizes_recovered_source_failures_once() -> None:
     stdout = StringIO()
     renderer = ExecutionRenderer(
@@ -403,23 +434,11 @@ def test_execution_progress_status_is_width_bounded_and_prioritizes_connection()
     assert "Running" in narrow
 
 
-def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None:
-    renderer = ExecutionRenderer(
-        Output(json_mode=False, no_color=True, stdout=StringIO(), stderr=StringIO())
-    )
-    progress = renderer.progress(clock=lambda: 65.0)
-    progress.event(
-        {
-            "type": "RuntimeModelOutputDelta",
-            "payload": {"message": "private-model-delta-canary"},
-        }
-    )
-
+def test_chat_footer_is_bounded_and_focused_on_model_permission_and_queue() -> None:
     wide = chat_footer_status(
         model="deepseek-v4-pro-with-a-very-long-provider-prefix",
         current_approval_mode="ask",
         next_approval_mode="auto-all",
-        activity=progress.status_text(40),
         queued_count=2,
         queue_state="active",
         pause_reason=None,
@@ -429,7 +448,6 @@ def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None
         model="deepseek-v4-pro-with-a-very-long-provider-prefix",
         current_approval_mode="ask",
         next_approval_mode="auto-all",
-        activity=progress.status_text(20),
         queued_count=2,
         queue_state="paused",
         pause_reason="run_failed",
@@ -438,27 +456,24 @@ def test_chat_footer_is_bounded_truthful_and_uses_only_safe_projection() -> None
 
     assert "deepseek-v4-pro" in wide
     assert "ask → auto-all" in wide
-    assert "Thinking" in wide
     assert "queued 2" in wide
     assert "│" in wide
     assert len(narrow) <= 36
     assert "paused" in narrow
-    assert "private-model-delta-canary" not in wide + narrow
 
 
-def test_chat_footer_omits_an_empty_queue_without_hiding_model_permission_or_activity() -> None:
+def test_chat_footer_omits_an_empty_queue_without_hiding_model_or_permission() -> None:
     footer = chat_footer_status(
         model="deepseek-v4-pro",
         current_approval_mode="ask",
         next_approval_mode="ask",
-        activity="Idle · 0:04",
         queued_count=0,
         queue_state="active",
         pause_reason=None,
         width=100,
     )
 
-    assert footer == "model deepseek-v4-pro  │  permission ask  │  Idle · 0:04"
+    assert footer == "model deepseek-v4-pro  │  permission ask"
     assert "queue" not in footer
     assert "queued" not in footer
 
