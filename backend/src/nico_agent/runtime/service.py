@@ -2017,6 +2017,9 @@ class RuntimeExecutionService:
             return {
                 "call_key": str(payload.get("call_key", ""))[:200],
                 "delta": str(delta)[:4096],
+                "visibility": (
+                    "assistant" if payload.get("visibility") == "assistant" else "internal"
+                ),
             }
         if event.type is RuntimeEventType.TOOL_CALL_COMPLETED:
             run_step_id = payload.get("run_step_id")

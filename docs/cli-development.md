@@ -82,6 +82,7 @@ scripts/verify-cli-goal-e.sh
 10. `/attach` 只上传已读取的本地字节，HTTP 请求不得包含本地绝对路径；`/download` 必须原子写入 `0600` 文件并拒绝最终符号链接。
 11. 交互 TTY 可以在 Run 活动时创建后续 Turn；输入队列不得保存在 CLI 内存中，也不得让后台线程直接修改 prompt buffer。
 12. footer 只能消费 `ExecutionProgress` 的安全投影和服务端 queue/runtime facts；不得拼接模型 delta、原始 payload、工具参数或内部 ID。
+13. 临时回答面板只消费 Runtime 明确标记为 `assistant` 的输出增量；`internal` 或缺少可见性标记的增量必须隐藏，Turn 终态仍以持久化 `assistant_output` 校准。
 
 ## 配置优先级与安全
 

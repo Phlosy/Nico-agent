@@ -2240,7 +2240,11 @@ class NativeAgentLoop:
             await emit(
                 RuntimeEventType.MODEL_OUTPUT_DELTA,
                 delta,
-                {"call_key": call_key, "delta": delta},
+                {
+                    "call_key": call_key,
+                    "delta": delta,
+                    "visibility": ("assistant" if call_key.startswith("model:") else "internal"),
+                },
             )
 
         try:

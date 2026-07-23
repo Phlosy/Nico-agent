@@ -122,6 +122,8 @@ async def test_hermes_cli_success_normalizes_events_and_redacted_export(tmp_path
     assert result.output == {"message": "fake Hermes answer"}
     assert result.external_session_id == "fake-session-001"
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    output_delta = next(event for event in events if event.type is RuntimeEventType.OUTPUT_DELTA)
+    assert output_delta.payload["visibility"] == "assistant"
     assert events[-1].type is RuntimeEventType.RUN_COMPLETED
     assert trajectory.external_session_id == "fake-session-001"
     assert trajectory.messages[-1]["content"] == "exported answer"

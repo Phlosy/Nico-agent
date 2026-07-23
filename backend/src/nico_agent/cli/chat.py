@@ -6,6 +6,7 @@ import asyncio
 import mimetypes
 import os
 import sys
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,9 +14,16 @@ from uuid import uuid4
 
 from prompt_toolkit import PromptSession, prompt
 from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.filters import Condition, is_done, to_filter
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 
 from nico_agent.cli.approvals import ApprovalCoordinator
 from nico_agent.cli.chat_controls import ChatControls
@@ -28,6 +36,83 @@ from nico_agent.cli.renderers import ExecutionRenderer
 from nico_agent.cli.slash import COMMANDS, SlashCommand, help_rows
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
+_STREAM_OUTPUT_MAX_CHARS = 262_144
+_STREAM_TRUNCATION_NOTICE = "… earlier streamed output omitted …\n"
+
+
+class BottomAnchoredPromptSession(PromptSession[str]):
+    """Keep the composer at the terminal edge and render transient streamed output."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._stream_output = ""
+        super().__init__(*args, **kwargs)
+
+    def _create_layout(self) -> Layout:
+        base = super()._create_layout()
+        base.current_window.dont_extend_height = to_filter(True)
+        stream_control = FormattedTextControl(
+            self._stream_fragments,
+            show_cursor=False,
+        )
+        stream_panel = ConditionalContainer(
+            Frame(
+                Window(
+                    stream_control,
+                    height=Dimension(min=1),
+                    wrap_lines=True,
+                    dont_extend_height=True,
+                    always_hide_cursor=True,
+                ),
+                title="Nico",
+                style="class:nico.answer",
+            ),
+            filter=Condition(lambda: bool(self._stream_output)) & ~is_done,
+        )
+        spacer = ConditionalContainer(
+            Window(height=Dimension(weight=1)),
+            filter=~is_done,
+        )
+        root = HSplit([stream_panel, spacer, base.container])
+        return Layout(root, focused_element=base.current_window)
+
+    def append_stream_delta(self, delta: str) -> None:
+        if not delta:
+            return
+        self._stream_output += self._sanitize_stream_delta(delta)
+        if len(self._stream_output) > _STREAM_OUTPUT_MAX_CHARS:
+            kept = _STREAM_OUTPUT_MAX_CHARS - len(_STREAM_TRUNCATION_NOTICE)
+            self._stream_output = _STREAM_TRUNCATION_NOTICE + self._stream_output[-kept:]
+        self._invalidate()
+
+    def clear_stream(self) -> None:
+        if not self._stream_output:
+            return
+        self._stream_output = ""
+        self._invalidate()
+
+    def _stream_fragments(self) -> FormattedText:
+        return FormattedText(
+            [
+                ("class:nico.answer.text", self._stream_output),
+                ("[SetCursorPosition]", ""),
+            ]
+        )
+
+    def _invalidate(self) -> None:
+        try:
+            if self.app.is_running:
+                self.app.invalidate()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _sanitize_stream_delta(delta: str) -> str:
+        normalized = delta.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ")
+        return "".join(
+            character
+            for character in normalized
+            if character == "\n" or unicodedata.category(character) != "Cc"
+        )
 
 
 class ChatRunner:
@@ -293,10 +378,10 @@ class ChatRunner:
                 "interactive chat requires a terminal; pass MESSAGE for one-shot chat",
                 exit_code=2,
             )
-        session = PromptSession(
+        session = BottomAnchoredPromptSession(
             history=FileHistory(str(self._secure_history_file())),
             key_bindings=_key_bindings(),
-            erase_when_done=False,
+            erase_when_done=True,
             completer=WordCompleter(
                 [f"/{name}" for name in COMMANDS],
                 sentence=True,
@@ -872,6 +957,9 @@ def _chat_style(*, no_color: bool) -> Style:
                 "nico.queue-label": "bold",
                 "nico.queue-preview": "dim",
                 "nico.approval": "bold",
+                "nico.answer": "",
+                "nico.answer.border": "dim",
+                "nico.answer.label": "bold",
                 "completion-menu.completion": "fg:ansidefault bg:ansidefault noreverse",
                 "completion-menu.completion.current": (
                     "fg:ansidefault bg:ansidefault bold noreverse"
@@ -894,6 +982,9 @@ def _chat_style(*, no_color: bool) -> Style:
             "nico.queue-label": "bold #7895ac",
             "nico.queue-preview": "#607786 italic",
             "nico.approval": "bold #ffaf5f",
+            "nico.answer": "#c8d4dc",
+            "nico.answer.border": "#d0a84e",
+            "nico.answer.label": "bold #d0a84e",
             "completion-menu.completion": "bg:#17242c #c8d4dc",
             "completion-menu.completion.current": "bg:#334957 #f0c66b bold",
             "completion-menu.meta.completion": "bg:#17242c #7895ac",

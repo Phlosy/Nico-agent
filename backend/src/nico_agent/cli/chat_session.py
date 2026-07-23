@@ -23,6 +23,7 @@ from nico_agent.cli.renderers import (
     ExecutionProgress,
     chat_footer_fragments,
     execution_event_has_durable_output,
+    execution_event_output_delta,
 )
 from nico_agent.cli.slash import parse_slash
 
@@ -133,6 +134,9 @@ class InteractiveChatSession:
                                 await self._refresh_state()
                                 await self._ensure_watch()
                             continue
+                        await run_in_terminal(
+                            lambda message=message: self.runner.renderer.user_message(message)
+                        )
                         await self.submit_message(message)
                     except CliError as exc:
                         await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
@@ -453,6 +457,8 @@ class InteractiveChatSession:
                 run_id, event = value
                 if run_id != self._watch_run_id:
                     continue
+                if delta := execution_event_output_delta(event):
+                    self._append_stream_delta(delta)
                 if execution_event_has_durable_output(event):
                     await run_in_terminal(lambda event=event: self.progress.event(event))
                 else:
@@ -478,6 +484,7 @@ class InteractiveChatSession:
                     continue
                 self.queue = queue
                 self._watch_run_id = None
+                self._clear_stream()
                 await run_in_terminal(self.progress.stop)
                 turn_id = str(turn.get("id") or "")
                 if turn_id and turn_id not in self._rendered_turns:
@@ -493,8 +500,19 @@ class InteractiveChatSession:
                 if run_id != self._watch_run_id:
                     continue
                 self._watch_run_id = None
+                self._clear_stream()
                 await run_in_terminal(lambda error=error: self.runner.output.error(error))
             self._invalidate()
+
+    def _append_stream_delta(self, delta: str) -> None:
+        append = getattr(self.prompt_session, "append_stream_delta", None)
+        if callable(append):
+            append(delta)
+
+    def _clear_stream(self) -> None:
+        clear = getattr(self.prompt_session, "clear_stream", None)
+        if callable(clear):
+            clear()
 
     async def _fetch_approval(self, approval_id: str) -> dict[str, Any]:
         last_error: CliError | None = None

@@ -9,12 +9,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from prompt_toolkit.application.current import set_app
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import fragment_list_to_text
+from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.screen import WritePosition
 from prompt_toolkit.utils import get_cwidth
 
-from nico_agent.cli.chat import ChatRunner, _chat_style
+from nico_agent.cli.chat import BottomAnchoredPromptSession, ChatRunner, _chat_style
 from nico_agent.cli.chat_session import InteractiveChatSession
 from nico_agent.cli.errors import CliError
 from nico_agent.cli.output import Output
@@ -1043,6 +1046,14 @@ class FakePromptApp:
 class FakePromptSession:
     def __init__(self, app: FakePromptApp | None = None) -> None:
         self.app = app or FakePromptApp()
+        self.stream_deltas: list[str] = []
+        self.stream_clear_count = 0
+
+    def append_stream_delta(self, delta: str) -> None:
+        self.stream_deltas.append(delta)
+
+    def clear_stream(self) -> None:
+        self.stream_clear_count += 1
 
 
 def _interactive_session(
@@ -1171,6 +1182,134 @@ async def test_interactive_composer_uses_fixed_toolbar_and_one_second_refresh(
 
     assert callable(prompt.calls[0]["bottom_toolbar"])
     assert prompt.calls[0]["refresh_interval"] == 1.0
+
+
+async def test_interactive_composer_persists_submitted_user_messages_explicitly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+
+    class SequencePromptSession(FakePromptSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.messages = iter(["排队的问题", "/exit"])
+
+        async def prompt_async(self, _message, **_kwargs) -> str:
+            return next(self.messages)
+
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=SequencePromptSession(),
+    )
+
+    await session.run()
+
+    assert "you › 排队的问题" in session.runner.output.stdout.getvalue()
+
+
+async def test_interactive_prompt_layout_anchors_stream_queue_input_and_toolbar_to_bottom() -> None:
+    prompt = BottomAnchoredPromptSession(bottom_toolbar="status")
+    root = prompt.app.layout.container
+
+    assert isinstance(root, HSplit)
+    assert isinstance(root.children[0], ConditionalContainer)
+    assert isinstance(root.children[1], ConditionalContainer)
+    assert isinstance(root.children[1].content, Window)
+    assert root.children[1].content.height.weight > 0
+    assert isinstance(root.children[2], HSplit)
+    with set_app(prompt.app):
+        heights = root._divide_heights(WritePosition(xpos=0, ypos=0, width=80, height=20))
+    assert heights is not None
+    assert heights[-1] == 2
+    assert heights[2] == 18
+    await prompt.app.cancel_and_wait_for_background_tasks()
+
+
+def test_interactive_prompt_sanitizes_streamed_terminal_controls() -> None:
+    prompt = BottomAnchoredPromptSession()
+
+    prompt.append_stream_delta("hello\x1b[2J\tworld\rnext")
+
+    assert prompt._stream_output == "hello[2J    world\nnext"
+
+
+async def test_interactive_session_streams_only_user_visible_output_and_clears_before_final(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    prompt = FakePromptSession()
+    session = _interactive_session(
+        FakeInteractiveChatClient(),
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+    session._watch_run_id = "run-1"
+    session._consumer_task = asyncio.create_task(session._consume_background())
+
+    for event in (
+        {
+            "type": "RuntimeModelOutputDelta",
+            "payload": {
+                "payload": {
+                    "call_key": "planner:1",
+                    "delta": "private plan",
+                    "visibility": "internal",
+                }
+            },
+        },
+        {
+            "type": "RuntimeModelOutputDelta",
+            "payload": {
+                "payload": {
+                    "call_key": "model:1",
+                    "delta": "你好",
+                    "visibility": "assistant",
+                }
+            },
+        },
+        {
+            "type": "RuntimeModelOutputDelta",
+            "payload": {
+                "payload": {
+                    "call_key": "model:1",
+                    "delta": "，世界",
+                    "visibility": "assistant",
+                }
+            },
+        },
+    ):
+        await session._background.put(("event", ("run-1", event)))
+    await session._background.put(
+        (
+            "finished",
+            (
+                {
+                    "id": "turn-1",
+                    "assistant_output": {"answer": "你好，世界"},
+                },
+                {
+                    "state": "active",
+                    "queued_turns": [],
+                    "queued_count": 0,
+                    "capacity": 20,
+                },
+                "run-1",
+            ),
+        )
+    )
+    for _ in range(100):
+        if session._watch_run_id is None:
+            break
+        await asyncio.sleep(0)
+
+    assert prompt.stream_deltas == ["你好", "，世界"]
+    assert prompt.stream_clear_count == 1
+    assert "你好，世界" in session.runner.output.stdout.getvalue()
+    assert "private plan" not in session.runner.output.stdout.getvalue()
+    await session.close()
 
 
 def test_interactive_composer_truncates_and_flattens_the_next_queued_message(
@@ -1466,7 +1605,7 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
         prompt_options.update(kwargs)
         return FakePromptSession()
 
-    monkeypatch.setattr("nico_agent.cli.chat.PromptSession", prompt_session)
+    monkeypatch.setattr("nico_agent.cli.chat.BottomAnchoredPromptSession", prompt_session)
     monkeypatch.setattr(
         runner,
         "_metadata",
@@ -1489,7 +1628,7 @@ def test_interactive_tty_uses_async_session_controller(monkeypatch, tmp_path: Pa
     assert called["ran"] is True
     assert called["conversation"] == conversation
     assert called["metadata"]["model"] == "deepseek-v4-pro"
-    assert prompt_options["erase_when_done"] is False
+    assert prompt_options["erase_when_done"] is True
     completions = list(
         prompt_options["completer"].get_completions(
             Document("/"), CompleteEvent(completion_requested=True)

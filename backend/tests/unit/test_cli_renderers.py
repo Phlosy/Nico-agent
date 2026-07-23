@@ -13,6 +13,7 @@ from nico_agent.cli.renderers import (
     ProviderSetupRenderer,
     chat_footer_status,
     execution_event_has_durable_output,
+    execution_event_output_delta,
 )
 
 
@@ -123,6 +124,17 @@ def test_chat_header_and_answer_use_a_lightweight_responsive_conversation_layout
     assert "╭" in rendered
     assert "╰" in rendered
     assert all(len(line) <= 44 for line in lines)
+
+
+def test_chat_user_message_keeps_a_distinct_identity_in_scrollback() -> None:
+    stdout = StringIO()
+    renderer = ExecutionRenderer(
+        Output(json_mode=False, no_color=True, stdout=stdout, stderr=StringIO())
+    )
+
+    renderer.user_message("排队的问题")
+
+    assert stdout.getvalue() == "you › 排队的问题\n"
 
 
 def test_json_mode_never_renders_header_or_events() -> None:
@@ -517,6 +529,65 @@ def test_only_curated_durable_events_interrupt_the_interactive_composer() -> Non
         {"type": "ArtifactAvailable", "payload": {"name": "report.md"}}
     )
     assert execution_event_has_durable_output({"type": "RunFailed", "payload": {}})
+
+
+def test_only_user_visible_runtime_deltas_are_streamed() -> None:
+    assert (
+        execution_event_output_delta(
+            {
+                "type": "RuntimeModelOutputDelta",
+                "payload": {
+                    "message": "你",
+                    "payload": {
+                        "call_key": "model:1",
+                        "delta": "你",
+                        "visibility": "assistant",
+                    },
+                },
+            }
+        )
+        == "你"
+    )
+    assert (
+        execution_event_output_delta(
+            {
+                "type": "RuntimeModelOutputDelta",
+                "payload": {
+                    "message": "private",
+                    "payload": {
+                        "call_key": "reflection:1",
+                        "delta": "private",
+                        "visibility": "internal",
+                    },
+                },
+            }
+        )
+        is None
+    )
+    assert (
+        execution_event_output_delta(
+            {
+                "type": "RuntimeOutputDelta",
+                "payload": {"message": "Hermes answer", "visibility": "assistant"},
+            }
+        )
+        == "Hermes answer\n"
+    )
+    assert (
+        execution_event_output_delta(
+            {
+                "type": "RuntimeOutputDelta",
+                "payload": {"message": "mock step", "visibility": "internal"},
+            }
+        )
+        is None
+    )
+    assert (
+        execution_event_output_delta(
+            {"type": "RuntimeModelCallStarted", "payload": {"message": "hidden"}}
+        )
+        is None
+    )
 
 
 def test_execution_progress_pause_resume_and_stop_are_idempotent() -> None:

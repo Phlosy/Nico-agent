@@ -194,6 +194,11 @@ async def test_plan_and_execute_persists_three_step_trace_and_summary() -> None:
     assert types.count(RuntimeEventType.PLAN_CREATED) == 1
     assert types.count(RuntimeEventType.PLAN_STEP_COMPLETED) == 3
     assert types.count(RuntimeEventType.EVALUATION_COMPLETED) == 4
+    assert {
+        event.payload["visibility"]
+        for event in events
+        if event.type is RuntimeEventType.MODEL_OUTPUT_DELTA
+    } == {"internal"}
     assert [request.metadata["call_key"] for request in model.requests] == [
         "planner:1",
         "plan:1:step:collect:attempt:1:round:1",

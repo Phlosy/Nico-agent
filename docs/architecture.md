@@ -108,9 +108,12 @@ cannot be auto-approved.
 SSE replays persisted Run Events and resumes from `Last-Event-ID`; the CLI drops
 duplicate sequences and reads the final Turn after the stream closes. Interactive
 TTY chat keeps `prompt_async` active while a separate HTTP client watches the queue
-head. Its footer consumes only the curated execution projection plus server model,
-frozen/current mode and queue count. Approval temporarily replaces the composer and
-restores the exact draft/cursor afterward. Ctrl+C during execution calls the existing
+head. A flexible layout spacer anchors the queue preview, composer and footer to the
+terminal edge. Runtime output carries an explicit `assistant` or `internal` visibility;
+only assistant-visible deltas enter the transient answer panel, which is replaced by
+the durable Turn result at completion. Its footer consumes only the curated execution
+projection plus server model, frozen/current mode and queue count. Approval temporarily
+replaces the composer and restores the exact draft/cursor afterward. Ctrl+C during execution calls the existing
 revisioned Run-tree cancellation service; Ctrl+D and `/exit` only detach.
 ContextSnapshot links the Conversation/Turn and freezes selected Turn IDs,
 summary hash, bounded Artifact references, token budget and trimming facts. The

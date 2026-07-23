@@ -430,6 +430,14 @@ class ExecutionRenderer:
             return
         self._message(JSON.from_data(dict(turn), ensure_ascii=False, indent=2))
 
+    def user_message(self, message: str) -> None:
+        if self.output.json_mode:
+            return
+        line = Text()
+        line.append("you › ", style=f"bold {_BRAND}")
+        line.append(message)
+        self.output.out.print(line)
+
     def _message(
         self,
         content: Any,
@@ -855,6 +863,30 @@ def execution_event_has_durable_output(event: Mapping[str, Any]) -> bool:
     return normalized_type in (
         _TOOL_TERMINAL_EVENTS | _VISIBLE_ARTIFACT_EVENTS | _VISIBLE_RUN_EVENTS
     )
+
+
+def execution_event_output_delta(event: Mapping[str, Any]) -> str | None:
+    """Return only runtime output that is explicitly safe for the user-facing stream."""
+
+    event_type = str(event.get("type") or event.get("event_type") or "")
+    normalized_type = event_type.replace("_", "")
+    payload = _event_payload(event)
+    if normalized_type == "RuntimeModelOutputDelta":
+        if payload.get("visibility") != "assistant":
+            return None
+        call_key = payload.get("call_key")
+        if not isinstance(call_key, str) or not call_key.startswith("model:"):
+            return None
+        delta = payload.get("delta")
+        return delta if isinstance(delta, str) and delta else None
+    if normalized_type == "RuntimeOutputDelta":
+        if payload.get("visibility") != "assistant":
+            return None
+        delta = payload.get("delta") or payload.get("message") or payload.get("content")
+        if not isinstance(delta, str) or not delta:
+            return None
+        return delta if delta.endswith("\n") else f"{delta}\n"
+    return None
 
 
 def _safe_tool_detail(payload: Mapping[str, Any]) -> str:

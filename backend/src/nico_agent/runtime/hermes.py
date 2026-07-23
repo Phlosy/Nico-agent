@@ -382,7 +382,12 @@ class HermesRuntimeProvider:
             if not text:
                 continue
             session.messages.append({"role": "assistant", "content": text})
-            await self._emit(session, RuntimeEventType.OUTPUT_DELTA, message=text)
+            await self._emit(
+                session,
+                RuntimeEventType.OUTPUT_DELTA,
+                message=text,
+                payload={"visibility": "assistant"},
+            )
 
     async def _read_stderr(self, session: _HermesSession) -> None:
         assert session.process is not None and session.process.stderr is not None

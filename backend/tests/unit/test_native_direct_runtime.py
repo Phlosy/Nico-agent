@@ -141,6 +141,10 @@ async def test_native_direct_streams_and_completes_without_external_runtime() ->
     assert outcome.usage["total_tokens"] == 7
     assert RuntimeEventType.CONTEXT_SNAPSHOT_CREATED in [event.type for event in events]
     assert RuntimeEventType.MODEL_CALL_COMPLETED in [event.type for event in events]
+    output_delta = next(
+        event for event in events if event.type is RuntimeEventType.MODEL_OUTPUT_DELTA
+    )
+    assert output_delta.payload["visibility"] == "assistant"
     assert events[-1].type is RuntimeEventType.RUN_COMPLETED
 
 
