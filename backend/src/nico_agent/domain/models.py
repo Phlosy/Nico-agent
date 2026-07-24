@@ -2122,7 +2122,7 @@ class AgentActionBatch(Base, TimestampMixin):
         ),
         CheckConstraint(
             "source_format IN "
-            "('structured_json', 'plain_json', 'provider_tool_calls', 'legacy_plain_text')",
+            "('json_object', 'json_schema', 'native_tool_calls', 'protocol_rejected')",
             name="ck_agent_action_batches_source_format",
         ),
         CheckConstraint("length(batch_key) = 64", name="ck_agent_action_batches_key"),
@@ -2282,9 +2282,6 @@ class AgentActionRecord(Base, TimestampMixin):
     arguments_hash: Mapped[str | None] = mapped_column(String(64))
     question_hash: Mapped[str | None] = mapped_column(String(64))
     reason_hash: Mapped[str | None] = mapped_column(String(64))
-    compatibility_mode: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=false()
-    )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=AgentActionStatus.PENDING.value
     )
@@ -2426,7 +2423,7 @@ class AgentActionRepair(Base):
         CheckConstraint("repair_ordinal > 0", name="ck_agent_action_repairs_ordinal"),
         CheckConstraint(
             "kind IN ('post_model_call_commit', 'parse_correction', "
-            "'clarification_correction', 'semantic_final_correction', 'replay')",
+            "'clarification_correction', 'completion_gate_correction', 'replay')",
             name="ck_agent_action_repairs_kind",
         ),
         ForeignKeyConstraint(

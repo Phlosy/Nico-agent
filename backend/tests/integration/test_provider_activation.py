@@ -45,7 +45,7 @@ def _candidate(
         base_url="https://api.openai.com/v1",
         credential_ref=credential_ref,
         model="gpt-5.6-terra",
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
 
@@ -251,7 +251,7 @@ async def test_custom_provider_activates_with_its_own_identity() -> None:
             credential_ref=f"secret:providers/custom-acme-{suffix}",
             model="acme-chat",
             provider_options={"nico_custom_display_name": "Acme Models"},
-            catalog_revision="2026-07-20",
+            catalog_revision="2026-07-24",
         )
         probe = await _verified_probe(database, service, context, candidate=candidate)
         target = ProviderActivationTarget(

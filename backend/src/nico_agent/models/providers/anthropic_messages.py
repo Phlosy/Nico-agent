@@ -62,7 +62,7 @@ class AnthropicMessagesProvider:
         self.client = self.http.client
 
     def describe_capabilities(self) -> frozenset[ModelCapability]:
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.NATIVE_TOOL_CALLING})
 
     async def stream(self, request: ModelRequest):
         endpoint = await self.http.resolve_endpoint(

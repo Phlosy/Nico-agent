@@ -14,6 +14,7 @@ from nico_agent.models.contracts import (
     ModelToolDefinition,
 )
 from nico_agent.models.errors import (
+    ModelCapabilityMismatch,
     ModelEndpointDenied,
     ModelProtocolError,
     ModelProviderError,
@@ -41,7 +42,11 @@ def _request(**changes) -> ModelRequest:
             "base_url": "https://models.example/v1",
             "credential_ref": "env:NICO_MODEL_SECRET_TEST",
             "allowed_models": ["test-model"],
-            "capabilities": {"streaming": True, "tools": True},
+            "capabilities": {
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
         },
     }
     values.update(changes)
@@ -91,6 +96,81 @@ async def test_gateway_normalizes_text_stream_usage_and_request_id() -> None:
     assert events[-1].usage is not None
     assert events[-1].usage.total_tokens == 5
     assert events[-1].provider_request_id == "req-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capability", "response_format"),
+    [
+        ("json_object", {"type": "json_object"}),
+        (
+            "json_schema",
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "strict": True,
+                    "schema": {"type": "object"},
+                },
+            },
+        ),
+    ],
+)
+async def test_gateway_requires_the_exact_json_response_capability(
+    capability: str,
+    response_format: dict,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["response_format"] == response_format
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"choices":[{"delta":{"content":"{}"},'
+                b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+            ),
+        )
+
+    endpoint = {
+        **_request().endpoint,
+        "capabilities": {
+            "streaming": True,
+            "native_tool_calling": True,
+            capability: True,
+        },
+    }
+    response = await ModelGateway(ModelProviderRegistry([_provider(handler)])).complete(
+        _request(endpoint=endpoint, response_format=response_format)
+    )
+
+    assert response.text == "{}"
+
+
+@pytest.mark.asyncio
+async def test_gateway_does_not_treat_json_object_as_json_schema() -> None:
+    endpoint = {
+        **_request().endpoint,
+        "capabilities": {
+            "streaming": True,
+            "native_tool_calling": True,
+            "json_object": True,
+        },
+    }
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "strict": True,
+            "schema": {"type": "object"},
+        },
+    }
+
+    with pytest.raises(ModelCapabilityMismatch) as captured:
+        await ModelGateway(
+            ModelProviderRegistry([_provider(lambda request: httpx.Response(500))])
+        ).complete(_request(endpoint=endpoint, response_format=response_format))
+
+    assert "json_schema" in captured.value.message
 
 
 @pytest.mark.asyncio

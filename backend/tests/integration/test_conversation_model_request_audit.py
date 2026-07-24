@@ -61,7 +61,7 @@ class CaptureModelProvider:
         self.requests: list[ModelRequest] = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.JSON_OBJECT})
 
     async def stream(self, request: ModelRequest):
         self.requests.append(request)
@@ -155,7 +155,7 @@ async def test_real_conversation_path_preserves_roles_and_deduplicates_input() -
                 base_url="https://models.example/v1",
                 credential_ref=_CREDENTIAL_REFERENCE,
                 allowed_models=["capture-model"],
-                capabilities={"streaming": True},
+                capabilities={"streaming": True, "json_object": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()

@@ -208,7 +208,7 @@ class AgentActionRepairKind(StrEnum):
     POST_MODEL_CALL_COMMIT = "post_model_call_commit"
     PARSE_CORRECTION = "parse_correction"
     CLARIFICATION_CORRECTION = "clarification_correction"
-    SEMANTIC_FINAL_CORRECTION = "semantic_final_correction"
+    COMPLETION_GATE_CORRECTION = "completion_gate_correction"
     REPLAY = "replay"
 
 

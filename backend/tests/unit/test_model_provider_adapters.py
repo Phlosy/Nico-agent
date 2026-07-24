@@ -38,7 +38,11 @@ def _endpoint(protocol: str, base_url: str) -> dict:
         "base_url": base_url,
         "credential_ref": "env:NICO_MODEL_SECRET_TEST",
         "allowed_models": [],
-        "capabilities": {"streaming": True, "tools": True},
+        "capabilities": {
+            "streaming": True,
+            "native_tool_calling": True,
+            "json_object": True,
+        },
     }
 
 
@@ -450,6 +454,34 @@ async def test_openai_compatible_maps_dotted_tool_names_at_the_wire_boundary() -
     )
 
     assert response.tool_calls[0].name == "web.search"
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_forwards_json_object_without_schema_aliasing() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            content=(
+                'data: {"choices":[{"delta":{"content":"{}"},'
+                '"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+            ),
+        )
+
+    provider = OpenAICompatibleProvider(
+        client=_client(handler),
+        secret_resolver=FakeSecrets(),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    request = _request("openai_compatible", "https://api.deepseek.com", "deepseek-v4-pro")
+    request = request.model_copy(update={"response_format": {"type": "json_object"}})
+
+    response = await ModelGateway(ModelProviderRegistry([provider]), max_attempts=1).complete(
+        request
+    )
+
+    assert response.text == "{}"
 
 
 @pytest.mark.asyncio

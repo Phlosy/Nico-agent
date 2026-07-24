@@ -73,7 +73,13 @@ class UnexpectedModelProvider:
         self.requests = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset(
+            {
+                ModelCapability.STREAMING,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+            }
+        )
 
     async def stream(self, request):
         self.requests.append(request)
@@ -131,7 +137,11 @@ async def _seed_agent(database: Database):
             base_url="https://api.openai.com/v1",
             credential_ref="env:NICO_MODEL_SECRET_TEST",
             allowed_models=["web-e2e-model"],
-            capabilities={"streaming": True, "tools": True},
+            capabilities={
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
             verified_probe_id=model_probe.id,
             verified_at=now,
         )

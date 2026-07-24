@@ -536,7 +536,11 @@ class ProviderOnboardingService:
         if preset is None:
             custom = CustomProviderOptions.model_validate(probe.provider_options)
             display_name = custom.nico_custom_display_name
-            capabilities = {"streaming": True, "tools": True}
+            capabilities = {
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            }
         else:
             display_name = preset.display_name
             capabilities = preset.capabilities

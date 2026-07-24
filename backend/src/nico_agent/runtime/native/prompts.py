@@ -1,5 +1,8 @@
 """Stable, provider-neutral system guidance for Nico Native."""
 
+from nico_agent.runtime.actions import AgentActionKind
+from nico_agent.runtime.native.action_parser import agent_action_protocol_instruction
+
 NATIVE_CONTINUITY_POLICY = (
     "Conversation continuity policy (v1):\n"
     "- Use recent Conversation context to resolve typos, mixed-language wording, "
@@ -20,14 +23,12 @@ NATIVE_CONTINUITY_POLICY = (
     "risk classification, or budgets. Runtime and Tool Gateway policy remain authoritative."
 )
 
-NATIVE_ACTION_POLICY = (
-    "Native Action response policy (v1):\n"
-    "- Provider tool calls remain the only executable effect response.\n"
-    "- When returning a task result outside a phase-specific JSON contract, use one `final` "
-    "JSON object with `content`, `intent`, and `completion` metadata when supported. Legacy "
-    "plain-text final output remains accepted during migration.\n"
-    "- Emit `ask_user` only when it appears in the active response contract and indispensable "
-    "information or material risk makes blocking necessary. Dominant low-risk interpretations "
-    "must be answered directly, with a concise assumption when useful.\n"
-    "- A phase-specific response contract always takes precedence over this guidance."
+NATIVE_ACTION_POLICY = agent_action_protocol_instruction(
+    frozenset(
+        {
+            AgentActionKind.FINAL,
+            AgentActionKind.TOOL_CALL,
+            AgentActionKind.ASK_USER,
+        }
+    )
 )

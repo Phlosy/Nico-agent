@@ -72,7 +72,7 @@ class ContinuityIntentProfile(BaseModel):
 class ContinuityScriptStep(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["final", "ask_user"]
+    kind: Literal["final", "ask_user", "invalid_action"]
     content: str | None = None
     question: str | None = None
     reason: str | None = None
@@ -213,8 +213,8 @@ class _ScriptedModelProvider:
         return frozenset(
             {
                 ModelCapability.STREAMING,
-                ModelCapability.TOOLS,
-                ModelCapability.STRUCTURED_OUTPUT,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_SCHEMA,
             }
         )
 
@@ -348,8 +348,8 @@ async def run_external_suite(
                         "allowed_models": [resolved_model],
                         "capabilities": {
                             "streaming": True,
-                            "structured_output": True,
-                            "tools": True,
+                            "json_schema": True,
+                            "native_tool_calling": True,
                         },
                         "model": resolved_model,
                     },
@@ -571,8 +571,8 @@ def _runtime_request(
         "allowed_models": ["continuity-model"],
         "capabilities": {
             "streaming": True,
-            "structured_output": True,
-            "tools": True,
+            "json_schema": True,
+            "native_tool_calling": True,
         },
         "model": "continuity-model",
     }
@@ -649,6 +649,8 @@ def _script_action(case: ContinuityCase, step: ContinuityScriptStep) -> dict[str
             "reason": step.reason,
             "intent": intent,
         }
+    if step.kind == "invalid_action":
+        return {"final": {"content": step.content}}
     return {
         "type": "final",
         "content": step.content,
@@ -717,7 +719,11 @@ def _score_case(
         "status": observation.status == expected_status,
         "action": observation.action == case.expected.action,
         "waiting": observation.waiting == case.expected.waiting,
-        "intent": observation.actual_intent == case.expected.intent,
+        "intent": (
+            True
+            if case.expected.action == "failure"
+            else observation.actual_intent == case.expected.intent
+        ),
         "model_call_budget": observation.model_calls <= case.expected.max_model_calls,
         "tool_effect_budget": (observation.tool_effect_count <= case.expected.max_tool_effects),
         "answer_requirements": observation.answer_requirements_met,
@@ -831,7 +837,8 @@ def _metrics(
         ),
         wrong_intent_rate=_rate(
             sum(
-                observation.actual_intent != case.expected.intent
+                case.expected.action != "failure"
+                and observation.actual_intent != case.expected.intent
                 for case, observation, _ in measured
             ),
             len(measured),

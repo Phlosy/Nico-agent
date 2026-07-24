@@ -24,7 +24,7 @@ def _location(
 
 CATALOG = ProviderCatalog(
     schema_version=1,
-    catalog_revision="2026-07-20",
+    catalog_revision="2026-07-24",
     providers=(
         ProviderPreset(
             key="openai",
@@ -33,7 +33,12 @@ CATALOG = ProviderCatalog(
             locations=(_location("global", "Global", "https://api.openai.com/v1"),),
             discovery="openai_models",
             recommended_models=("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+                "json_schema": True,
+            },
             documentation_url="https://developers.openai.com/api/reference/resources/models/methods/list",
         ),
         ProviderPreset(
@@ -47,7 +52,7 @@ CATALOG = ProviderCatalog(
                 "claude-opus-4-8",
                 "claude-haiku-4-5",
             ),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://platform.claude.com/docs/en/api/models/list",
         ),
         ProviderPreset(
@@ -59,7 +64,7 @@ CATALOG = ProviderCatalog(
             ),
             discovery="gemini_models",
             recommended_models=("gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-flash"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://ai.google.dev/api/models",
         ),
         ProviderPreset(
@@ -69,7 +74,7 @@ CATALOG = ProviderCatalog(
             locations=(_location("global", "Global", "https://openrouter.ai/api/v1"),),
             discovery="openai_models",
             recommended_models=("openrouter/auto", "openrouter/free"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://openrouter.ai/docs/guides/overview/models",
         ),
         ProviderPreset(
@@ -79,7 +84,7 @@ CATALOG = ProviderCatalog(
             locations=(_location("global", "Global", "https://api.x.ai/v1"),),
             discovery="openai_models",
             recommended_models=("grok-4.3", "grok-4.3-latest"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://docs.x.ai/developers/rest-api-reference/inference/models",
         ),
         ProviderPreset(
@@ -89,7 +94,11 @@ CATALOG = ProviderCatalog(
             locations=(_location("global", "Global", "https://api.deepseek.com"),),
             discovery="openai_models",
             recommended_models=("deepseek-v4-flash", "deepseek-v4-pro"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
             documentation_url="https://api-docs.deepseek.com/api/list-models",
         ),
         ProviderPreset(
@@ -111,7 +120,7 @@ CATALOG = ProviderCatalog(
             ),
             discovery="curated",
             recommended_models=("qwen3.7-plus", "qwen3.7-max", "qwen3-coder-plus"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             options=(ProviderOption(key="workspace_id", label="Workspace ID"),),
             documentation_url="https://help.aliyun.com/zh/model-studio/text-generation",
         ),
@@ -122,7 +131,7 @@ CATALOG = ProviderCatalog(
             locations=(_location("china", "China", "https://api.moonshot.cn/v1"),),
             discovery="curated",
             recommended_models=("kimi-k3", "kimi-k2.5"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://platform.kimi.com/docs/api/chat",
         ),
         ProviderPreset(
@@ -132,7 +141,7 @@ CATALOG = ProviderCatalog(
             locations=(_location("china", "China", "https://open.bigmodel.cn/api/paas/v4"),),
             discovery="curated",
             recommended_models=("glm-5.2", "glm-5"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://docs.bigmodel.cn/cn/guide/develop/http/introduction",
         ),
         ProviderPreset(
@@ -150,7 +159,7 @@ CATALOG = ProviderCatalog(
             ),
             discovery="openai_models",
             recommended_models=("MiniMax-M2.7", "MiniMax-M2.5"),
-            capabilities={"streaming": True, "tools": True},
+            capabilities={"streaming": True, "native_tool_calling": True},
             documentation_url="https://platform.minimax.io/docs/api-reference/models/openai/list-models",
         ),
     ),

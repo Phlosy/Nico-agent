@@ -214,7 +214,6 @@ class ModelRuntimeService:
                         "arguments_hash": action.arguments_hash,
                         "question_hash": action.question_hash,
                         "reason_hash": action.reason_hash,
-                        "compatibility_mode": action.compatibility_mode,
                         "status": action.status,
                         "outcome_ref": action.outcome_ref,
                         "observation_ref": action.observation_ref,

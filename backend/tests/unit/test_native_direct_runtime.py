@@ -39,8 +39,9 @@ class FakeModelProvider:
         return frozenset(
             {
                 ModelCapability.STREAMING,
-                ModelCapability.TOOLS,
-                ModelCapability.STRUCTURED_OUTPUT,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+                ModelCapability.JSON_SCHEMA,
             }
         )
 
@@ -112,8 +113,8 @@ def _request(**updates) -> RuntimeSessionRequest:
             "allowed_models": ["test-model"],
             "capabilities": {
                 "streaming": True,
-                "tools": True,
-                "structured_output": True,
+                "native_tool_calling": True,
+                "json_schema": True,
             },
             "model": "test-model",
         },
@@ -233,7 +234,7 @@ async def test_native_direct_streams_and_completes_without_external_runtime() ->
     step_index = event_types.index(RuntimeEventType.STEP_COMPLETED)
     assert completed_index < action_index < step_index
     action_event = events[action_index]
-    assert action_event.payload["batch"]["source_format"] == "structured_json"
+    assert action_event.payload["batch"]["source_format"] == "json_schema"
     assert (
         outcome.checkpoint["last_action_batch_key"] == action_event.payload["batch"]["content_hash"]
     )
@@ -301,55 +302,8 @@ async def test_direct_repeated_rejected_question_exhausts_one_correction() -> No
 
 
 @pytest.mark.asyncio
-async def test_direct_corrects_pseudo_final_once_before_completion() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="Could you clarify?",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
-    valid = _action_envelope(
-        "final",
-        content="The corrected authoritative answer.",
-        completion={"answered_user_intent": True, "requires_user_response": False},
-    )
-    native, model = _sequenced_native([invalid, valid])
-    request = _request()
-    handle = await native.create_session(request)
-
-    outcome = await native.execute(handle.external_session_id, request, RuntimeServices())
-
-    assert outcome.status is RuntimeSessionStatus.COMPLETED
-    assert outcome.output == {"content": "The corrected authoritative answer."}
-    assert len(model.requests) == 2
-    assert model.requests[1].tools == ()
-    assert "semantic_completion_observation" in model.requests[1].messages[-1].content
-
-
-@pytest.mark.asyncio
-async def test_direct_repeated_invalid_final_exhausts_semantic_correction() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="I still need more information.",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
-    native, model = _sequenced_native([invalid, invalid])
-    request = _request()
-    handle = await native.create_session(request)
-
-    outcome = await native.execute(handle.external_session_id, request, RuntimeServices())
-
-    assert outcome.status is RuntimeSessionStatus.FAILED
-    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
-    assert len(model.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_direct_corrected_ask_user_returns_to_clarification_gate() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="I cannot choose the target.",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
+async def test_direct_protocol_corrected_ask_user_returns_to_clarification_gate() -> None:
+    invalid = '{"answer":"I cannot choose the target."}'
     ask = json.loads(
         _action_envelope(
             "ask_user",
@@ -383,25 +337,35 @@ async def test_direct_corrected_ask_user_returns_to_clarification_gate() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("structured_output", [True, False])
-@pytest.mark.parametrize("pseudo_final", ["legacy pseudo final", "{not-json"])
-async def test_direct_legacy_final_requires_structured_correction(
-    structured_output: bool,
-    pseudo_final: str,
+@pytest.mark.parametrize(
+    ("capability", "invalid", "failure_type"),
+    [
+        ("json_schema", "我是 Claude。", "NON_JSON_RESPONSE"),
+        (
+            "json_object",
+            '{"final":{"content":"我是 DeepSeek。"}}',
+            "ACTION_SCHEMA_MISMATCH",
+        ),
+    ],
+)
+async def test_direct_invalid_response_gets_one_constrained_protocol_correction(
+    capability: str,
+    invalid: str,
+    failure_type: str,
 ) -> None:
     valid = _action_envelope(
         "final",
         content="Structured correction.",
         completion={"answered_user_intent": True, "requires_user_response": False},
     )
-    native, model = _sequenced_native([pseudo_final, valid])
+    native, model = _sequenced_native([invalid, valid])
     request = _request(
         model_endpoint_snapshot={
             **_request().model_endpoint_snapshot,
             "capabilities": {
                 "streaming": True,
-                "tools": True,
-                "structured_output": structured_output,
+                "native_tool_calling": True,
+                capability: True,
             },
         }
     )
@@ -412,7 +376,55 @@ async def test_direct_legacy_final_requires_structured_correction(
     assert outcome.status is RuntimeSessionStatus.COMPLETED
     assert outcome.output == {"content": "Structured correction."}
     assert len(model.requests) == 2
-    assert (model.requests[1].response_format is not None) is structured_output
+    assert model.requests[0].response_format == model.requests[1].response_format
+    assert model.requests[1].response_format["type"] == capability
+    assert model.requests[1].tools == ()
+    correction_text = model.requests[1].messages[1].content
+    assert failure_type in correction_text
+    assert "Structured correction." not in correction_text
+
+
+@pytest.mark.asyncio
+async def test_direct_real_regression_reports_both_protocol_failures_without_raw_output() -> None:
+    native, model = _sequenced_native(
+        [
+            "我是 Claude。",
+            '{"final":{"content":"我是 DeepSeek。"}}',
+        ]
+    )
+    request = _request(
+        model_endpoint_snapshot={
+            **_request().model_endpoint_snapshot,
+            "capabilities": {
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
+        }
+    )
+    handle = await native.create_session(request)
+
+    outcome = await native.execute(handle.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.FAILED
+    assert outcome.error["code"] == "AGENT_ACTION_CORRECTION_EXHAUSTED"
+    assert outcome.error["details"] == {
+        "original_response_type": "plain_text",
+        "parse_failure_type": "NON_JSON_RESPONSE",
+        "provider_capabilities": [
+            "json_object",
+            "native_tool_calling",
+            "streaming",
+        ],
+        "response_format_sent": True,
+        "response_format_type": "json_object",
+        "correction_attempts": 1,
+        "last_parse_failure_type": "ACTION_SCHEMA_MISMATCH",
+        "last_schema_error_summary": "AgentAction root object must contain type",
+    }
+    assert "Claude" not in json.dumps(outcome.error, ensure_ascii=False)
+    assert "DeepSeek" not in json.dumps(outcome.error, ensure_ascii=False)
+    assert len(model.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -431,7 +443,7 @@ async def test_direct_pending_user_input_blocks_claimed_final_completion() -> No
     outcome = await native.execute(handle.external_session_id, request, RuntimeServices())
 
     assert outcome.status is RuntimeSessionStatus.FAILED
-    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+    assert outcome.error["code"] == "COMPLETION_GATE_CORRECTION_EXHAUSTED"
     assert len(model.requests) == 2
 
 
@@ -499,12 +511,8 @@ async def test_direct_recovers_committed_clarification_calls_without_provider_re
 
 
 @pytest.mark.asyncio
-async def test_direct_recovers_committed_semantic_final_correction_without_rebilling() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="I still need more information.",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
+async def test_direct_recovers_committed_protocol_correction_without_rebilling() -> None:
+    invalid = '{"answer":"not an AgentAction"}'
     final = _action_envelope(
         "final",
         content="Recovered semantic correction answer.",
@@ -526,7 +534,7 @@ async def test_direct_recovers_committed_semantic_final_correction_without_rebil
         for event in events
         if event.type is RuntimeEventType.MODEL_CALL_COMPLETED
     }
-    assert set(completed) == {"model:1", "semantic-final-correction:direct:1"}
+    assert set(completed) == {"model:1", "protocol-correction:model:1:1"}
     recovery_state = {
         "model_call_keys": list(completed),
         "recoverable_action_calls": {
@@ -721,8 +729,8 @@ async def test_direct_live_schema_exposes_final_but_rejects_unadvertised_ask_use
     outcome = await provider.execute(handle.external_session_id, request, RuntimeServices())
 
     assert outcome.status is RuntimeSessionStatus.FAILED
-    assert outcome.error["code"] == "MODEL_PROTOCOL_ERROR"
-    assert "ACTION_KIND_UNSUPPORTED" in outcome.error["message"]
+    assert outcome.error["code"] == "AGENT_ACTION_CORRECTION_EXHAUSTED"
+    assert outcome.error["details"]["last_parse_failure_type"] == "ACTION_SCHEMA_MISMATCH"
     model_request = provider.loop.gateway.registry.get("openai_compatible").requests[0]
     schema_text = json.dumps(model_request.response_format, sort_keys=True)
     assert '"final"' in schema_text
@@ -790,6 +798,27 @@ async def test_native_direct_honors_cancellation_before_model_call() -> None:
 
     assert outcome.status is RuntimeSessionStatus.CANCELLED
     assert outcome.error["code"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_native_rejects_endpoint_without_json_capability_before_model_call() -> None:
+    native, model = _sequenced_native([_action_envelope("final", content="unreachable")])
+    request = _request(
+        model_endpoint_snapshot={
+            **_request().model_endpoint_snapshot,
+            "capabilities": {
+                "streaming": True,
+                "native_tool_calling": True,
+            },
+        }
+    )
+    handle = await native.create_session(request)
+
+    outcome = await native.execute(handle.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.FAILED
+    assert outcome.error["code"] == "PROVIDER_STRUCTURED_OUTPUT_UNSUPPORTED"
+    assert model.requests == []
 
 
 @pytest.mark.asyncio

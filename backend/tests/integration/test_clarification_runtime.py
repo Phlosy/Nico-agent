@@ -63,7 +63,7 @@ def _ask_batch():
                     },
                 }
             ),
-            structured_output=True,
+            response_format_type="json_schema",
         )
     )
 
@@ -97,7 +97,7 @@ def _final_batch():
                     },
                 }
             ),
-            structured_output=True,
+            response_format_type="json_schema",
         )
     )
 
@@ -122,7 +122,7 @@ async def _seed_direct_run(database: Database) -> dict[str, object]:
             base_url="https://models.example/v1",
             credential_ref="env:NICO_MODEL_SECRET_CLARIFICATION_TEST",
             allowed_models=["clarification-model"],
-            capabilities={"streaming": True, "structured_output": True},
+            capabilities={"streaming": True, "json_schema": True},
         )
         session.add_all([project, agent, endpoint])
         await session.flush()

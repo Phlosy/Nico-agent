@@ -47,9 +47,9 @@ class ReactCheckpoint(BaseModel):
     clarification_correction_attempted: bool = False
     clarification_source_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
     clarification_observation: dict[str, Any] | None = None
-    semantic_final_correction_attempted: bool = False
-    semantic_final_source_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
-    semantic_final_observation: dict[str, Any] | None = None
+    completion_gate_correction_attempted: bool = False
+    completion_gate_source_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
+    completion_gate_observation: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint_hash: str = Field(min_length=64, max_length=64)
 
@@ -170,9 +170,9 @@ def make_react_checkpoint(
     clarification_correction_attempted: bool = False,
     clarification_source_batch_key: str | None = None,
     clarification_observation: dict[str, Any] | None = None,
-    semantic_final_correction_attempted: bool = False,
-    semantic_final_source_batch_key: str | None = None,
-    semantic_final_observation: dict[str, Any] | None = None,
+    completion_gate_correction_attempted: bool = False,
+    completion_gate_source_batch_key: str | None = None,
+    completion_gate_observation: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
 ) -> ReactCheckpoint:
     payload = {
@@ -202,9 +202,9 @@ def make_react_checkpoint(
         "clarification_correction_attempted": clarification_correction_attempted,
         "clarification_source_batch_key": clarification_source_batch_key,
         "clarification_observation": clarification_observation,
-        "semantic_final_correction_attempted": semantic_final_correction_attempted,
-        "semantic_final_source_batch_key": semantic_final_source_batch_key,
-        "semantic_final_observation": semantic_final_observation,
+        "completion_gate_correction_attempted": completion_gate_correction_attempted,
+        "completion_gate_source_batch_key": completion_gate_source_batch_key,
+        "completion_gate_observation": completion_gate_observation,
         "usage": usage or {},
     }
     payload["checkpoint_hash"] = _hash(payload)

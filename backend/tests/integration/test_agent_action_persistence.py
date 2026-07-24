@@ -62,7 +62,7 @@ class FinalModelProvider:
         self.calls = 0
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.JSON_OBJECT})
 
     async def stream(self, request):
         self.calls += 1
@@ -142,7 +142,7 @@ async def _seed_direct_run(database: Database) -> dict[str, UUID]:
             base_url="https://models.example/v1",
             credential_ref="env:NICO_MODEL_SECRET_ACTION_TEST",
             allowed_models=["action-model"],
-            capabilities={"streaming": True},
+            capabilities={"streaming": True, "json_object": True},
         )
         session.add_all([project, agent, endpoint])
         await session.flush()
@@ -449,7 +449,7 @@ async def test_multi_action_projection_is_atomic_and_retry_is_idempotent() -> No
         ask_batch = parse_agent_actions(
             ModelResponse(
                 text=json.dumps(ask_payload),
-                structured_output=True,
+                response_format_type="json_schema",
             )
         )
         async with database.admin_transaction() as session:

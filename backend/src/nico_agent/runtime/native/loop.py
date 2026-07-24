@@ -27,7 +27,12 @@ from nico_agent.models.contracts import (
     ModelToolDefinition,
     ModelUsage,
 )
-from nico_agent.models.errors import ModelError, ModelProtocolError
+from nico_agent.models.errors import (
+    AgentActionCorrectionExhausted,
+    ModelCapabilityMismatch,
+    ModelError,
+    ModelProtocolError,
+)
 from nico_agent.models.gateway import ModelGateway
 from nico_agent.runtime.clarification import (
     ClarificationDecisionKind,
@@ -51,6 +56,7 @@ from nico_agent.runtime.contracts import (
     RuntimeServices,
     RuntimeSessionRequest,
     RuntimeSessionStatus,
+    RuntimeToolIdentity,
     RuntimeToolIntent,
     RuntimeToolOutcome,
     RuntimeToolSpec,
@@ -69,7 +75,7 @@ from nico_agent.runtime.native.action_parser import (
     active_agent_action_kinds,
     agent_action_response_format,
     parse_agent_actions,
-    parse_compatibility_agent_actions,
+    protocol_correction_instruction,
 )
 from nico_agent.runtime.native.checkpoint import (
     PlanCheckpoint,
@@ -107,6 +113,10 @@ from nico_agent.runtime.native.reflection import (
     ReflectionDecision,
     parse_reflection,
     reflection_response_format,
+)
+from nico_agent.runtime.native.response_format import (
+    select_json_response_format,
+    supports_json_response,
 )
 from nico_agent.runtime.native.setup_proof import execute_setup_proof
 from nico_agent.tools.errors import ToolApprovalRequired
@@ -248,6 +258,7 @@ class NativeAgentLoop:
             tool_versions = _exact_tool_versions(tools)
         except ValueError as exc:
             return await self._fail(emit, "TOOL_VERSION_AMBIGUOUS", str(exc))
+        request = _with_authorized_tools(request, tools)
         definitions = tuple(
             ModelToolDefinition(
                 name=spec.name,
@@ -1089,7 +1100,7 @@ class NativeAgentLoop:
                     usage=checkpoint.usage,
                 )
             clarification_observation = state.get("clarification_observation")
-            semantic_observation = state.get("semantic_final_observation")
+            semantic_observation = state.get("completion_gate_observation")
             if isinstance(clarification_observation, dict):
                 call_key = (
                     str(state.get("user_input_source_call_key"))
@@ -1131,7 +1142,7 @@ class NativeAgentLoop:
                     if resuming_user_input
                     else _next_named_call_key(
                         (
-                            f"semantic-final-correction:plan:{checkpoint.plan_revision}:"
+                            f"completion-gate-correction:plan:{checkpoint.plan_revision}:"
                             f"{step.key}:{attempt}:1"
                         ),
                         request.recovery_state,
@@ -1150,15 +1161,15 @@ class NativeAgentLoop:
                 round_tools = ()
                 response_format = _final_action_response_format(endpoint)
                 action_repair = {
-                    "kind": "semantic_final_correction",
+                    "kind": "completion_gate_correction",
                     "ordinal": 1,
                     "reason_code": str(
-                        state.get("semantic_final_reason_code") or "SEMANTIC_FINAL_REJECTED"
+                        state.get("completion_gate_reason_code") or "COMPLETION_GATE_REJECTED"
                     ),
                     "observation_ref": (
-                        f"agent_action_batch:{state.get('semantic_final_source_batch_key')}"
+                        f"agent_action_batch:{state.get('completion_gate_source_batch_key')}"
                     ),
-                    "source_batch_key": state.get("semantic_final_source_batch_key"),
+                    "source_batch_key": state.get("completion_gate_source_batch_key"),
                 }
             else:
                 call_key = (
@@ -1236,7 +1247,7 @@ class NativeAgentLoop:
                     (
                         "CLARIFICATION_CORRECTION_INVALID"
                         if isinstance(clarification_observation, dict)
-                        else "SEMANTIC_FINAL_CORRECTION_INVALID"
+                        else "COMPLETION_GATE_CORRECTION_INVALID"
                     ),
                     "Plan correction calls cannot execute Tool Actions",
                     checkpoint=checkpoint.model_dump(mode="json"),
@@ -1449,7 +1460,7 @@ class NativeAgentLoop:
                             ),
                             "waiting_user_input": False,
                             "user_input_source_call_key": None,
-                            "semantic_final_observation": None,
+                            "completion_gate_observation": None,
                             "clarification_observation": None,
                         }
                     )
@@ -1523,7 +1534,7 @@ class NativeAgentLoop:
                         "clarification_source_batch_key": (round_result.action_batch.content_hash),
                         "clarification_reason_code": decision.reason_code,
                         "clarification_observation": observation,
-                        "semantic_final_observation": None,
+                        "completion_gate_observation": None,
                     }
                 )
                 checkpoint = make_plan_checkpoint(
@@ -1569,10 +1580,10 @@ class NativeAgentLoop:
                 _completion_gate_facts(request),
             )
             if not semantic_verdict.accepted:
-                if state.get("semantic_final_correction_attempted") is True:
+                if state.get("completion_gate_correction_attempted") is True:
                     return await self._fail(
                         emit,
-                        "SEMANTIC_FINAL_CORRECTION_EXHAUSTED",
+                        "COMPLETION_GATE_CORRECTION_EXHAUSTED",
                         "the Plan step repeated an invalid final after one correction",
                         checkpoint=checkpoint.model_dump(mode="json"),
                         usage=usage,
@@ -1588,8 +1599,8 @@ class NativeAgentLoop:
                 ) -> RuntimeActionOutcome:
                     return RuntimeActionOutcome(
                         status="blocked",
-                        outcome_ref=f"semantic_completion:{reason_code}",
-                        observation_ref=f"semantic_completion:{normalized.action_id}",
+                        outcome_ref=f"completion_gate:{reason_code}",
+                        observation_ref=f"completion_gate:{normalized.action_id}",
                         value=observation,
                     )
 
@@ -1609,10 +1620,12 @@ class NativeAgentLoop:
                 state.update(
                     {
                         "round": round_number,
-                        "semantic_final_correction_attempted": True,
-                        "semantic_final_source_batch_key": (round_result.action_batch.content_hash),
-                        "semantic_final_reason_code": semantic_verdict.reason_code,
-                        "semantic_final_observation": correction_observation,
+                        "completion_gate_correction_attempted": True,
+                        "completion_gate_source_batch_key": (
+                            round_result.action_batch.content_hash
+                        ),
+                        "completion_gate_reason_code": semantic_verdict.reason_code,
+                        "completion_gate_observation": correction_observation,
                     }
                 )
                 checkpoint = make_plan_checkpoint(
@@ -1945,8 +1958,8 @@ class NativeAgentLoop:
             ) -> RuntimeActionOutcome:
                 return RuntimeActionOutcome(
                     status="blocked",
-                    outcome_ref=f"semantic_completion:{reason_code}",
-                    observation_ref=f"semantic_completion:{normalized.action_id}",
+                    outcome_ref=f"completion_gate:{reason_code}",
+                    observation_ref=f"completion_gate:{normalized.action_id}",
                     value=corrective_observation,
                 )
 
@@ -2228,6 +2241,12 @@ class NativeAgentLoop:
                     "store_artifact is reserved for native Artifact storage",
                 )
             definitions = (*definitions, _artifact_definition())
+        request = _with_authorized_tools(
+            request,
+            tools,
+            include_coordination=coordination_enabled,
+            include_artifact=artifact_enabled,
+        )
         max_iterations = _budget(request, "max_iterations", 8, minimum=1, maximum=64)
         max_tool_calls = _budget(request, "max_tool_calls", 32, minimum=0, maximum=1024)
         token_limit = _budget(request, "token_limit", 0, minimum=0, maximum=10**9)
@@ -2295,19 +2314,19 @@ class NativeAgentLoop:
                 checkpoint.clarification_correction_attempted
                 and checkpoint.clarification_observation is not None
             )
-            semantic_final_round = (
-                checkpoint.semantic_final_correction_attempted
-                and checkpoint.semantic_final_observation is not None
+            completion_gate_round = (
+                checkpoint.completion_gate_correction_attempted
+                and checkpoint.completion_gate_observation is not None
             )
             context_version = (
                 checkpoint.context_version
                 if resuming_user_input
                 else checkpoint.context_version + 1
             )
-            if semantic_final_round:
+            if completion_gate_round:
                 context = build_completion_repair_context(
                     request,
-                    observation=checkpoint.semantic_final_observation or {},
+                    observation=checkpoint.completion_gate_observation or {},
                     version=context_version,
                     history=checkpoint.history,
                 )
@@ -2315,13 +2334,13 @@ class NativeAgentLoop:
                     checkpoint.last_model_call_key
                     if resuming_user_input
                     else _next_named_call_key(
-                        "semantic-final-correction:react:1",
+                        "completion-gate-correction:react:1",
                         request.recovery_state,
                     )
                 )
                 round_tools = ()
                 response_format = _final_action_response_format(endpoint)
-                step_key = "semantic-final-correction:react:1"
+                step_key = "completion-gate-correction:react:1"
             elif clarification_round:
                 context = build_clarification_repair_context(
                     request,
@@ -2353,7 +2372,7 @@ class NativeAgentLoop:
                     else _next_call_key(checkpoint.iteration, request.recovery_state)
                 )
                 round_tools = definitions
-                response_format = None
+                response_format = _final_action_response_format(endpoint)
                 step_key = f"reasoning:{checkpoint.iteration}"
             if not call_key:
                 return await self._fail(
@@ -2385,15 +2404,15 @@ class NativeAgentLoop:
                     action_step_key=step_key,
                     action_repair=(
                         {
-                            "kind": "semantic_final_correction",
+                            "kind": "completion_gate_correction",
                             "ordinal": 1,
-                            "reason_code": "SEMANTIC_FINAL_REJECTED",
+                            "reason_code": "COMPLETION_GATE_REJECTED",
                             "observation_ref": (
-                                f"agent_action_batch:{checkpoint.semantic_final_source_batch_key}"
+                                f"agent_action_batch:{checkpoint.completion_gate_source_batch_key}"
                             ),
-                            "source_batch_key": checkpoint.semantic_final_source_batch_key,
+                            "source_batch_key": checkpoint.completion_gate_source_batch_key,
                         }
-                        if semantic_final_round
+                        if completion_gate_round
                         else {
                             "kind": "clarification_correction",
                             "ordinal": 1,
@@ -2434,10 +2453,10 @@ class NativeAgentLoop:
                 },
             )
 
-            if response.tool_calls and semantic_final_round:
+            if response.tool_calls and completion_gate_round:
                 return await self._fail(
                     emit,
-                    "SEMANTIC_FINAL_CORRECTION_INVALID",
+                    "COMPLETION_GATE_CORRECTION_INVALID",
                     "semantic final correction cannot execute Tool Actions",
                     checkpoint=checkpoint.model_dump(mode="json"),
                     usage=usage,
@@ -2485,9 +2504,9 @@ class NativeAgentLoop:
                     consumed_message_ids=checkpoint.consumed_message_ids,
                     **_web_checkpoint_state(checkpoint),
                     **_clarification_checkpoint_state(checkpoint),
-                    **_semantic_final_checkpoint_state(
+                    **_completion_gate_checkpoint_state(
                         checkpoint,
-                        semantic_final_observation=None,
+                        completion_gate_observation=None,
                     ),
                     usage=usage,
                 )
@@ -2538,7 +2557,7 @@ class NativeAgentLoop:
                         },
                         **_web_checkpoint_state(checkpoint),
                         **_clarification_checkpoint_state(checkpoint),
-                        **_semantic_final_checkpoint_state(checkpoint),
+                        **_completion_gate_checkpoint_state(checkpoint),
                         usage=usage,
                     )
 
@@ -2644,9 +2663,9 @@ class NativeAgentLoop:
                             checkpoint,
                             clarification_observation=None,
                         ),
-                        **_semantic_final_checkpoint_state(
+                        **_completion_gate_checkpoint_state(
                             checkpoint,
-                            semantic_final_observation=None,
+                            completion_gate_observation=None,
                         ),
                         usage=usage,
                     )
@@ -2715,9 +2734,9 @@ class NativeAgentLoop:
                         clarification_source_batch_key=batch.content_hash,
                         clarification_observation=observation,
                     ),
-                    **_semantic_final_checkpoint_state(
+                    **_completion_gate_checkpoint_state(
                         checkpoint,
-                        semantic_final_observation=None,
+                        completion_gate_observation=None,
                     ),
                     usage=usage,
                 )
@@ -2744,10 +2763,10 @@ class NativeAgentLoop:
                 _completion_gate_facts(request),
             )
             if not semantic_verdict.accepted:
-                if checkpoint.semantic_final_correction_attempted:
+                if checkpoint.completion_gate_correction_attempted:
                     return await self._fail(
                         emit,
-                        "SEMANTIC_FINAL_CORRECTION_EXHAUSTED",
+                        "COMPLETION_GATE_CORRECTION_EXHAUSTED",
                         "the model repeated an invalid final after one correction",
                         checkpoint=checkpoint.model_dump(mode="json"),
                         usage=usage,
@@ -2763,8 +2782,8 @@ class NativeAgentLoop:
                 ) -> RuntimeActionOutcome:
                     return RuntimeActionOutcome(
                         status="blocked",
-                        outcome_ref=f"semantic_completion:{reason_code}",
-                        observation_ref=f"semantic_completion:{normalized.action_id}",
+                        outcome_ref=f"completion_gate:{reason_code}",
+                        observation_ref=f"completion_gate:{normalized.action_id}",
                         value=observation,
                     )
 
@@ -2797,11 +2816,11 @@ class NativeAgentLoop:
                     consumed_message_ids=checkpoint.consumed_message_ids,
                     **_web_checkpoint_state(checkpoint),
                     **_clarification_checkpoint_state(checkpoint),
-                    **_semantic_final_checkpoint_state(
+                    **_completion_gate_checkpoint_state(
                         checkpoint,
-                        semantic_final_correction_attempted=True,
-                        semantic_final_source_batch_key=batch.content_hash,
-                        semantic_final_observation=semantic_observation,
+                        completion_gate_correction_attempted=True,
+                        completion_gate_source_batch_key=batch.content_hash,
+                        completion_gate_observation=semantic_observation,
                     ),
                     usage=usage,
                 )
@@ -3252,7 +3271,7 @@ class NativeAgentLoop:
                     observed_web_urls=observed_web_urls,
                 ),
                 **_clarification_checkpoint_state(checkpoint),
-                **_semantic_final_checkpoint_state(checkpoint),
+                **_completion_gate_checkpoint_state(checkpoint),
                 usage=checkpoint.usage,
             )
             await emit(
@@ -3288,7 +3307,7 @@ class NativeAgentLoop:
                 observed_web_urls=observed_web_urls,
             ),
             **_clarification_checkpoint_state(checkpoint),
-            **_semantic_final_checkpoint_state(checkpoint),
+            **_completion_gate_checkpoint_state(checkpoint),
             usage=checkpoint.usage,
         )
         await emit(
@@ -3359,7 +3378,7 @@ class NativeAgentLoop:
             consumed_message_ids=tuple(consumed),
             **_web_checkpoint_state(checkpoint),
             **_clarification_checkpoint_state(checkpoint),
-            **_semantic_final_checkpoint_state(checkpoint),
+            **_completion_gate_checkpoint_state(checkpoint),
             usage=checkpoint.usage,
         )
         await emit(
@@ -3384,6 +3403,7 @@ class NativeAgentLoop:
         persist_actions: bool = False,
         action_step_key: str | None = None,
         action_repair: dict[str, Any] | None = None,
+        protocol_correction: dict[str, Any] | None = None,
     ) -> _ModelRound:
         handler = _intervention_handler.get()
         if handler is not None:
@@ -3413,12 +3433,22 @@ class NativeAgentLoop:
                 "content_hash": context.content_hash,
             },
         )
+        requested_response_format = response_format or request.model_config_data.get(
+            "response_format"
+        )
+        selected_response_format = (
+            select_json_response_format(endpoint, requested_response_format)
+            if isinstance(requested_response_format, dict)
+            else None
+        )
+        if requested_response_format is not None and selected_response_format is None:
+            raise ModelCapabilityMismatch("json_object or json_schema")
         model_request = ModelRequest(
             model=model,
             messages=context.messages,
             endpoint=endpoint,
             tools=tools,
-            response_format=response_format or request.model_config_data.get("response_format"),
+            response_format=selected_response_format,
             temperature=request.model_config_data.get("temperature"),
             max_output_tokens=request.model_config_data.get("max_output_tokens"),
             timeout_seconds=request.model_config_data.get("timeout_seconds"),
@@ -3441,6 +3471,72 @@ class NativeAgentLoop:
                 "run_step_key": action_step_key,
             }
         request_hash = _hash_json(request_redacted)
+
+        async def correct_protocol(
+            failure: AgentActionParseError,
+            usage_payload: dict[str, Any],
+        ) -> _ModelRound:
+            if protocol_correction is not None:
+                raise AgentActionCorrectionExhausted(
+                    {
+                        **protocol_correction,
+                        "correction_attempts": 1,
+                        "last_parse_failure_type": failure.code,
+                        "last_schema_error_summary": failure.message[:500],
+                    }
+                ) from failure
+            origin = {
+                "original_response_type": _response_type(response),
+                "parse_failure_type": failure.code,
+                "provider_capabilities": _public_provider_capabilities(endpoint),
+                "response_format_sent": model_request.response_format is not None,
+                "response_format_type": (
+                    model_request.response_format.get("type")
+                    if model_request.response_format is not None
+                    else None
+                ),
+            }
+            correction_context = build_phase_context(
+                request,
+                phase="agent_action_protocol_correction",
+                instruction=protocol_correction_instruction(failure),
+                payload={
+                    "parse_failure_type": failure.code,
+                    "schema_error_summary": failure.message[:500],
+                },
+                version=context.version + 1,
+                source_refs=("protocol:agent-action-v1",),
+            )
+            corrected = await self._model_round(
+                request,
+                endpoint=endpoint,
+                model=model,
+                context=correction_context,
+                call_key=_protocol_correction_call_key(call_key),
+                tools=(),
+                emit=emit,
+                response_format=model_request.response_format,
+                context_reason="agent_action_protocol_correction",
+                persist_actions=True,
+                action_step_key=action_step_key,
+                action_repair={
+                    "kind": "parse_correction",
+                    "ordinal": 1,
+                    "reason_code": failure.code,
+                    "observation_ref": f"model_call:{call_key}",
+                },
+                protocol_correction=origin,
+            )
+            return _ModelRound(
+                response=corrected.response,
+                usage_payload=_merge_usage(usage_payload, corrected.usage_payload),
+                context_hash=corrected.context_hash,
+                context_version=corrected.context_version,
+                call_key=corrected.call_key,
+                action_batch_key=corrected.action_batch_key,
+                action_batch=corrected.action_batch,
+            )
+
         recoverable = request.recovery_state.get("recoverable_action_calls", {})
         recovered_call = (
             recoverable.get(call_key) if persist_actions and isinstance(recoverable, dict) else None
@@ -3451,14 +3547,6 @@ class NativeAgentLoop:
                     "persisted terminal ModelCall request does not match its recovery request"
                 )
             response = _recovered_model_response(recovered_call)
-            batch = await self._emit_action_batch(
-                response,
-                call_key=call_key,
-                run_step_key=action_step_key,
-                emit=emit,
-                recovered=recovered_call.get("action_batch_exists") is not True,
-                repair=action_repair,
-            )
             usage_payload = {
                 **_usage(response.usage),
                 "cost": (
@@ -3468,6 +3556,17 @@ class NativeAgentLoop:
                 ),
                 "cost_status": str(recovered_call.get("cost_status", "unknown")),
             }
+            try:
+                batch = await self._emit_action_batch(
+                    response,
+                    call_key=call_key,
+                    run_step_key=action_step_key,
+                    emit=emit,
+                    recovered=recovered_call.get("action_batch_exists") is not True,
+                    repair=action_repair,
+                )
+            except AgentActionParseError as exc:
+                return await correct_protocol(exc, usage_payload)
             return _ModelRound(
                 response,
                 usage_payload,
@@ -3567,7 +3666,11 @@ class NativeAgentLoop:
         response = ModelResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
-            structured_output=model_request.response_format is not None,
+            response_format_type=(
+                model_request.response_format.get("type", "none")
+                if model_request.response_format is not None
+                else "none"
+            ),
             finish_reason=finish_reason,
             usage=usage,
             provider_request_id=request_id,
@@ -3576,7 +3679,7 @@ class NativeAgentLoop:
             "content": response.text,
             "finish_reason": finish_reason,
             "tool_calls": [call.model_dump(mode="json") for call in tool_calls],
-            "structured_output": response.structured_output,
+            "response_format_type": response.response_format_type,
         }
         cost, cost_status = _cost(endpoint, usage)
         await emit(
@@ -3595,16 +3698,19 @@ class NativeAgentLoop:
             },
         )
         action_batch = None
-        if persist_actions:
-            action_batch = await self._emit_action_batch(
-                response,
-                call_key=call_key,
-                run_step_key=action_step_key,
-                emit=emit,
-                recovered=False,
-                repair=action_repair,
-            )
         usage_payload = {**_usage(usage), "cost": cost, "cost_status": cost_status}
+        if persist_actions:
+            try:
+                action_batch = await self._emit_action_batch(
+                    response,
+                    call_key=call_key,
+                    run_step_key=action_step_key,
+                    emit=emit,
+                    recovered=False,
+                    repair=action_repair,
+                )
+            except AgentActionParseError as exc:
+                return await correct_protocol(exc, usage_payload)
         return _ModelRound(
             response,
             usage_payload,
@@ -3625,10 +3731,7 @@ class NativeAgentLoop:
         recovered: bool,
         repair: dict[str, Any] | None = None,
     ) -> AgentActionBatch:
-        try:
-            batch = _parse_live_action_batch(response)
-        except AgentActionParseError as exc:
-            raise ModelProtocolError(f"{exc.code}: {exc.message}") from exc
+        batch = _parse_live_action_batch(response)
         await emit(
             RuntimeEventType.ACTION_BATCH_CREATED,
             None,
@@ -3756,7 +3859,7 @@ class NativeAgentLoop:
                     if semantic_correction_attempted:
                         return await self._fail(
                             emit,
-                            "SEMANTIC_FINAL_CORRECTION_EXHAUSTED",
+                            "COMPLETION_GATE_CORRECTION_EXHAUSTED",
                             "the model repeated an invalid final after one correction",
                             checkpoint=checkpoint,
                             usage=usage,
@@ -3772,8 +3875,8 @@ class NativeAgentLoop:
                     ) -> RuntimeActionOutcome:
                         return RuntimeActionOutcome(
                             status="blocked",
-                            outcome_ref=f"semantic_completion:{reason_code}",
-                            observation_ref=f"semantic_completion:{normalized.action_id}",
+                            outcome_ref=f"completion_gate:{reason_code}",
+                            observation_ref=f"completion_gate:{normalized.action_id}",
                             value=corrective_observation,
                         )
 
@@ -3796,7 +3899,7 @@ class NativeAgentLoop:
                         observation=observation,
                         version=active_round.context_version + 1,
                     )
-                    correction_step_key = "semantic-final-correction:1"
+                    correction_step_key = "completion-gate-correction:1"
                     checkpoint = {
                         **checkpoint,
                         "loop_state": "reasoning",
@@ -3804,9 +3907,9 @@ class NativeAgentLoop:
                         "context_hash": correction_context.content_hash,
                         "last_model_call_key": active_round.call_key,
                         "last_action_batch_key": active_batch.content_hash,
-                        "semantic_final_correction_attempted": True,
-                        "semantic_final_source_batch_key": active_batch.content_hash,
-                        "semantic_final_observation": observation,
+                        "completion_gate_correction_attempted": True,
+                        "completion_gate_source_batch_key": active_batch.content_hash,
+                        "completion_gate_observation": observation,
                         "usage": usage,
                     }
                     await emit(RuntimeEventType.CHECKPOINT_SAVED, None, checkpoint)
@@ -3817,7 +3920,7 @@ class NativeAgentLoop:
                             "step_key": correction_step_key,
                             "step_type": "reasoning",
                             "iteration": 2,
-                            "name": "direct.semantic-final-correction",
+                            "name": "direct.completion-gate-correction",
                         },
                     )
                     try:
@@ -3826,13 +3929,13 @@ class NativeAgentLoop:
                             endpoint=endpoint,
                             model=model,
                             context=correction_context,
-                            call_key="semantic-final-correction:direct:1",
+                            call_key="completion-gate-correction:direct:1",
                             tools=(),
                             response_format=_final_action_response_format(endpoint),
                             persist_actions=True,
                             action_step_key=correction_step_key,
                             action_repair={
-                                "kind": "semantic_final_correction",
+                                "kind": "completion_gate_correction",
                                 "ordinal": 1,
                                 "reason_code": verdict.reason_code,
                                 "observation_ref": (
@@ -3856,7 +3959,7 @@ class NativeAgentLoop:
                             "step_key": correction_step_key,
                             "step_type": "reasoning",
                             "iteration": 2,
-                            "name": "direct.semantic-final-correction",
+                            "name": "direct.completion-gate-correction",
                             "model_call_key": corrected.call_key,
                             "context_version": correction_context.version,
                             "decision": (
@@ -3867,7 +3970,7 @@ class NativeAgentLoop:
                     if corrected.response.tool_calls or corrected.action_batch is None:
                         return await self._fail(
                             emit,
-                            "SEMANTIC_FINAL_CORRECTION_INVALID",
+                            "COMPLETION_GATE_CORRECTION_INVALID",
                             "semantic final correction must return a committed final or ask_user",
                             checkpoint=checkpoint,
                             usage=usage,
@@ -4182,6 +4285,16 @@ class NativeAgentLoop:
                     "nico_native requires a model name",
                 ),
             )
+        if not supports_json_response(endpoint):
+            return (
+                endpoint,
+                model,
+                await NativeAgentLoop._fail(
+                    emit,
+                    "PROVIDER_STRUCTURED_OUTPUT_UNSUPPORTED",
+                    "nico_native requires endpoint capability json_object or json_schema",
+                ),
+            )
         return endpoint, model, None
 
     @staticmethod
@@ -4192,6 +4305,8 @@ class NativeAgentLoop:
         checkpoint: dict[str, Any] | None = None,
     ) -> RuntimeOutcome:
         error = {"code": exc.code, "message": exc.message}
+        if exc.details:
+            error["details"] = exc.details
         await emit(RuntimeEventType.RUN_FAILED, None, {"error": error})
         return RuntimeOutcome.terminal(
             status=RuntimeSessionStatus.FAILED,
@@ -4228,8 +4343,19 @@ class NativeAgentLoop:
         )
 
 
-# Compatibility name retained for callers from Goal G.
-NativeDirectLoop = NativeAgentLoop
+def _with_authorized_tools(
+    request: RuntimeSessionRequest,
+    tools: tuple[RuntimeToolSpec, ...],
+    *,
+    include_coordination: bool = False,
+    include_artifact: bool = False,
+) -> RuntimeSessionRequest:
+    identities = [RuntimeToolIdentity(name=tool.name, version=tool.version) for tool in tools]
+    if include_coordination:
+        identities.append(RuntimeToolIdentity(name="delegate_agent", version="native-1"))
+    if include_artifact:
+        identities.append(RuntimeToolIdentity(name="store_artifact", version="native-1"))
+    return request.model_copy(update={"authorized_tools": tuple(identities)})
 
 
 def _exact_tool_versions(tools: tuple[RuntimeToolSpec, ...]) -> dict[str, str]:
@@ -4295,7 +4421,7 @@ def _pending_actions(
 
 
 def _pending_action_batch(actions: tuple[dict[str, Any], ...]) -> AgentActionBatch:
-    return parse_compatibility_agent_actions(
+    return parse_agent_actions(
         ModelResponse(
             tool_calls=tuple(
                 ModelToolCall(
@@ -4530,7 +4656,7 @@ def _recovered_model_response(value: dict[str, Any]) -> ModelResponse:
         return ModelResponse(
             text=str(response.get("content", "")),
             tool_calls=tool_calls,
-            structured_output=response.get("structured_output") is True,
+            response_format_type=str(response.get("response_format_type", "none")),
             finish_reason=(
                 str(response["finish_reason"])
                 if response.get("finish_reason") is not None
@@ -4604,14 +4730,14 @@ def _clarification_checkpoint_state(
     return state
 
 
-def _semantic_final_checkpoint_state(
+def _completion_gate_checkpoint_state(
     checkpoint: ReactCheckpoint,
     **updates: Any,
 ) -> dict[str, Any]:
     state = {
-        "semantic_final_correction_attempted": checkpoint.semantic_final_correction_attempted,
-        "semantic_final_source_batch_key": checkpoint.semantic_final_source_batch_key,
-        "semantic_final_observation": checkpoint.semantic_final_observation,
+        "completion_gate_correction_attempted": checkpoint.completion_gate_correction_attempted,
+        "completion_gate_source_batch_key": checkpoint.completion_gate_source_batch_key,
+        "completion_gate_observation": checkpoint.completion_gate_observation,
     }
     state.update(updates)
     return state
@@ -4641,26 +4767,46 @@ def _repaired_output(
 
 
 def _parse_live_action_batch(response: ModelResponse) -> AgentActionBatch:
-    """Activate only Actions whose complete runtime capability path is present."""
+    return parse_agent_actions(
+        response,
+        allowed_actions=active_agent_action_kinds(
+            clarification_gate_enabled=True,
+            user_input_handler_enabled=_user_input_handler.get() is not None,
+        ),
+    )
 
+
+def _response_type(response: ModelResponse) -> str:
     if response.tool_calls:
-        return parse_compatibility_agent_actions(response)
+        return "native_tool_calls"
     text = response.text.strip()
+    if not text:
+        return "empty"
     if text.startswith("{"):
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            payload = None
-        if isinstance(payload, dict) and payload.get("type") in {"final", "ask_user"}:
-            return parse_agent_actions(
-                response,
-                allowed_actions=active_agent_action_kinds(
-                    clarification_gate_enabled=True,
-                    user_input_handler_enabled=_user_input_handler.get() is not None,
-                ),
-                allow_legacy_plain_text=True,
-            )
-    return parse_compatibility_agent_actions(response)
+        return "json_text"
+    return "plain_text"
+
+
+def _public_provider_capabilities(endpoint: dict[str, Any]) -> list[str]:
+    capabilities = endpoint.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return []
+    public_names = {
+        "streaming",
+        "json_object",
+        "json_schema",
+        "native_tool_calling",
+    }
+    return sorted(
+        key for key, enabled in capabilities.items() if key in public_names and enabled is True
+    )
+
+
+def _protocol_correction_call_key(call_key: str) -> str:
+    candidate = f"protocol-correction:{call_key}:1"
+    if len(candidate) <= 200:
+        return candidate
+    return f"protocol-correction:{hashlib.sha256(call_key.encode()).hexdigest()}:1"
 
 
 def _required_action_handler() -> RuntimeActionHandler:
@@ -4709,16 +4855,13 @@ async def _dispatch_final_content(
 
 
 def _final_action_response_format(endpoint: dict[str, Any]) -> dict[str, Any] | None:
-    capabilities = endpoint.get("capabilities")
-    return agent_action_response_format(
+    requested = agent_action_response_format(
         active_agent_action_kinds(
             clarification_gate_enabled=True,
             user_input_handler_enabled=_user_input_handler.get() is not None,
-        ),
-        structured_output_supported=(
-            isinstance(capabilities, dict) and capabilities.get("structured_output") is True
-        ),
+        )
     )
+    return select_json_response_format(endpoint, requested)
 
 
 def _clarification_facts(

@@ -64,8 +64,9 @@ class OpenAICompatibleProvider:
         return frozenset(
             {
                 ModelCapability.STREAMING,
-                ModelCapability.TOOLS,
-                ModelCapability.STRUCTURED_OUTPUT,
+                ModelCapability.JSON_OBJECT,
+                ModelCapability.JSON_SCHEMA,
+                ModelCapability.NATIVE_TOOL_CALLING,
             }
         )
 

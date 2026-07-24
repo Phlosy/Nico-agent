@@ -48,7 +48,7 @@ def _ask(
                     },
                 }
             ),
-            structured_output=True,
+            response_format_type="json_schema",
         )
     )
     action = batch.actions[0]

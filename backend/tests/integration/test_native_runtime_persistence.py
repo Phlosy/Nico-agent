@@ -52,7 +52,7 @@ class FakeModelProvider:
     name = "openai_compatible"
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.JSON_OBJECT})
 
     async def stream(self, request):
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
@@ -129,7 +129,8 @@ async def test_native_worker_persists_context_model_call_and_terminal_guards() -
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["fake-model"],
-                capabilities={"streaming": True},
+                provider_key="deepseek",
+                capabilities={"streaming": True, "json_object": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()
@@ -208,6 +209,17 @@ async def test_native_worker_persists_context_model_call_and_terminal_guards() -
             assert runtime.provider_resolution_source == "agent_version"
             assert runtime.legacy_resolver_used is False
             assert runtime.provider_compatibility["implementation"] == "native"
+            assert runtime.execution_manifest["runtime_identity"] == {
+                "provider": "deepseek",
+                "model_id": "fake-model",
+                "runtime_name": "nico_native",
+                "agent_name": f"agent-{suffix}",
+                "agent_version": 1,
+            }
+            rendered_system = context.rendered_messages[0]["content"]
+            assert "Provider: deepseek" in rendered_system
+            assert "Model ID: fake-model" in rendered_system
+            assert "Agent Version: 1" in rendered_system
             call_id = call.id
 
         other_context = TenantContext(ids["other"], "integration-test", uuid4())
@@ -249,7 +261,7 @@ async def test_conversation_compaction_freezes_summary_and_selects_bounded_conte
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["fake-model"],
-                capabilities={"streaming": True},
+                capabilities={"streaming": True, "json_object": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()

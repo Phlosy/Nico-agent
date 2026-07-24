@@ -1,4 +1,4 @@
-"""Pure parsing from provider-neutral ModelResponse into AgentAction facts."""
+"""Strict parsing from provider-neutral responses into AgentAction facts."""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ from nico_agent.runtime.actions import (
     AskUserActionInput,
     FinalAction,
     FinalActionInput,
-    FinalCompletion,
-    IntentCandidate,
-    IntentResolution,
     ToolCallAction,
+    ToolCallActionInput,
 )
 
-_ALL_ACTIONS = frozenset(AgentActionKind)
-_FINAL_EFFECT_FIELDS = frozenset({"tool_call", "tool_calls", "effect", "effects"})
+_ALL_ACTIONS: frozenset[AgentActionKind] = frozenset(AgentActionKind)
+
+FINAL_ACTION_EXAMPLE = '{"type":"final","content":"最终答案"}'
+TOOL_CALL_ACTION_EXAMPLE = '{"type":"tool_call","tool_name":"tool_name","arguments":{}}'
 
 
 class AgentActionParseError(ValueError):
@@ -40,136 +40,188 @@ def active_agent_action_kinds(
     clarification_gate_enabled: bool,
     user_input_handler_enabled: bool,
 ) -> frozenset[AgentActionKind]:
-    kinds = {
-        AgentActionKind.FINAL,
-        AgentActionKind.TOOL_CALL,
-    }
+    kinds = {AgentActionKind.FINAL, AgentActionKind.TOOL_CALL}
     if clarification_gate_enabled and user_input_handler_enabled:
         kinds.add(AgentActionKind.ASK_USER)
     return frozenset(kinds)
+
+
+def agent_action_protocol_instruction(
+    allowed_actions: frozenset[AgentActionKind],
+) -> str:
+    """Render protocol prose and examples from the same active contract."""
+
+    examples = [f"Final: {FINAL_ACTION_EXAMPLE}"]
+    if AgentActionKind.TOOL_CALL in allowed_actions:
+        examples.append(f"Tool call: {TOOL_CALL_ACTION_EXAMPLE}")
+    if AgentActionKind.ASK_USER in allowed_actions:
+        examples.append(
+            'Ask user: {"type":"ask_user","question":"...","reason":"...",'
+            '"intent":{"interpreted_intent":"...","confidence":0.5,'
+            '"candidates":[{"candidate_id":"candidate-1","intent":"...",'
+            '"confidence":0.5}],"ambiguity":0.5,"risk":"unknown",'
+            '"risk_reasons":[],"missing_information":["..."],'
+            '"safe_partial_answer_possible":false}}'
+        )
+    return "\n".join(
+        (
+            "AgentAction output protocol:",
+            "- Return exactly one JSON object for every response.",
+            "- Output no text before or after the JSON object.",
+            "- Do not use Markdown or JSON code fences.",
+            "- The root object must contain a supported type.",
+            *examples,
+            "Forbidden: plain text such as 最终答案是……",
+            'Forbidden: {"final":{"content":"..."}}',
+            'Forbidden: {"answer":"..."}',
+        )
+    )
+
+
+def protocol_correction_instruction(error: AgentActionParseError) -> str:
+    if error.code == "NON_JSON_RESPONSE":
+        problem = "Your response was not JSON."
+    elif error.code == "MALFORMED_JSON":
+        problem = "Your response started as JSON but was malformed."
+    else:
+        problem = f"Your JSON did not satisfy AgentAction ({error.code})."
+    return "\n".join(
+        (
+            problem,
+            "Return only one corrected AgentAction JSON object.",
+            f"Valid final: {FINAL_ACTION_EXAMPLE}",
+            f"Valid tool call: {TOOL_CALL_ACTION_EXAMPLE}",
+            "Do not return a wrapper object, aliases, Markdown, or surrounding text.",
+        )
+    )
 
 
 def parse_agent_actions(
     response: ModelResponse,
     *,
     allowed_actions: frozenset[AgentActionKind] = _ALL_ACTIONS,
-    allow_legacy_plain_text: bool = True,
 ) -> AgentActionBatch:
-    """Parse one response without dispatching, persisting, or inferring from phrases."""
+    """Strictly parse one response without aliases, wrappers, or inference."""
 
     text = response.text.strip()
     if response.tool_calls:
         if text:
             raise AgentActionParseError(
-                "ACTION_FINAL_EFFECT_MIXTURE",
-                "a response cannot contain both text and provider Tool calls",
+                "INVALID_TOOL_CALL",
+                "a response cannot mix provider tool calls with JSON text",
             )
-        if AgentActionKind.TOOL_CALL not in allowed_actions:
-            raise AgentActionParseError(
-                "ACTION_KIND_UNSUPPORTED",
-                "tool_call is not enabled for this Action contract",
-            )
-        return _tool_action_batch(response)
-    if not text:
-        raise AgentActionParseError("ACTION_RESPONSE_EMPTY", "model response is empty")
-
+        _require_allowed(AgentActionKind.TOOL_CALL, allowed_actions)
+        return _native_tool_action_batch(response)
+    if not text or not text.startswith("{"):
+        raise AgentActionParseError(
+            "NON_JSON_RESPONSE",
+            "AgentAction response must be exactly one JSON object",
+        )
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        if response.structured_output or not allow_legacy_plain_text or text.startswith(("{", "[")):
-            raise AgentActionParseError(
-                "ACTION_JSON_INVALID",
-                "AgentAction response is not valid JSON",
-            ) from exc
-        return _legacy_final_batch(text)
+        raise AgentActionParseError(
+            "MALFORMED_JSON",
+            "AgentAction response contains malformed JSON or surrounding text",
+        ) from exc
     if not isinstance(payload, dict):
         raise AgentActionParseError(
-            "ACTION_ENVELOPE_INVALID",
-            "AgentAction JSON must be one object",
+            "ACTION_SCHEMA_MISMATCH",
+            "AgentAction JSON root must be one object",
         )
 
     action_type = payload.get("type")
-    if action_type == AgentActionKind.FINAL:
-        if _FINAL_EFFECT_FIELDS.intersection(payload):
+    if action_type is None:
+        raise AgentActionParseError(
+            "ACTION_SCHEMA_MISMATCH",
+            "AgentAction root object must contain type",
+        )
+    if action_type not in {kind.value for kind in AgentActionKind}:
+        raise AgentActionParseError(
+            "UNKNOWN_ACTION_TYPE",
+            f"unknown AgentAction type: {action_type!r}",
+        )
+
+    kind = AgentActionKind(action_type)
+    _require_allowed(kind, allowed_actions)
+    if kind is AgentActionKind.FINAL:
+        content = payload.get("content")
+        if isinstance(content, str) and not content.strip():
             raise AgentActionParseError(
-                "ACTION_FINAL_EFFECT_MIXTURE",
-                "a final Action cannot contain effect fields",
+                "EMPTY_FINAL_CONTENT",
+                "final content must not be empty",
             )
-        _require_allowed(AgentActionKind.FINAL, allowed_actions)
-        parsed = _validate(FinalActionInput, payload)
+        parsed = _validate(FinalActionInput, payload, "ACTION_SCHEMA_MISMATCH")
         action: AgentAction = FinalAction(
             action_id=_action_id(parsed.model_dump(mode="json")),
             content=parsed.content,
             intent=parsed.intent,
             completion=parsed.completion,
         )
-    elif action_type == AgentActionKind.ASK_USER:
-        _require_allowed(AgentActionKind.ASK_USER, allowed_actions)
-        parsed_ask = _validate(AskUserActionInput, payload)
+    elif kind is AgentActionKind.TOOL_CALL:
+        parsed_tool = _validate(ToolCallActionInput, payload, "INVALID_TOOL_CALL")
+        action = ToolCallAction(
+            action_id=_action_id(parsed_tool.model_dump(mode="json")),
+            position=0,
+            provider_call_id=f"json:{_action_id(parsed_tool.model_dump(mode='json'))[:48]}",
+            name=parsed_tool.tool_name,
+            arguments=parsed_tool.arguments,
+        )
+    else:
+        parsed_ask = _validate(AskUserActionInput, payload, "ACTION_SCHEMA_MISMATCH")
         action = AskUserAction(
             action_id=_action_id(parsed_ask.model_dump(mode="json")),
             question=parsed_ask.question,
             reason=parsed_ask.reason,
             intent=parsed_ask.intent,
         )
-    else:
-        raise AgentActionParseError(
-            "ACTION_KIND_UNSUPPORTED",
-            f"unsupported AgentAction type: {action_type!r}",
-        )
-    source = (
-        ActionSourceFormat.STRUCTURED_JSON
-        if response.structured_output
-        else ActionSourceFormat.PLAIN_JSON
-    )
-    return _batch((action,), source)
-
-
-def parse_compatibility_agent_actions(response: ModelResponse) -> AgentActionBatch:
-    """Shadow-normalize the currently authoritative pre-Action loop behavior.
-
-    During U5, ordinary non-Tool text remains a legacy final even when another
-    phase requested structured JSON. Provider Tool calls remain authoritative
-    when a provider also emits incidental text. U6 replaces this compatibility
-    path with active Action dispatch.
-    """
-
-    if response.tool_calls:
-        return parse_agent_actions(
-            response.model_copy(update={"text": "", "structured_output": False})
-        )
-    text = response.text.strip()
-    if not text:
-        raise AgentActionParseError("ACTION_RESPONSE_EMPTY", "model response is empty")
-    return _legacy_final_batch(text)
+    return _batch((action,), _json_source(response))
 
 
 def agent_action_json_schema(
     allowed_actions: frozenset[AgentActionKind],
 ) -> dict[str, Any]:
-    """Return the non-Tool Action schema for the enabled dispatcher surface."""
-
-    enabled = allowed_actions.intersection({AgentActionKind.FINAL, AgentActionKind.ASK_USER})
+    enabled = allowed_actions.intersection(_ALL_ACTIONS)
     if not enabled:
-        raise ValueError("at least one non-Tool AgentAction must be enabled")
+        raise ValueError("at least one AgentAction must be enabled")
     if enabled == {AgentActionKind.FINAL}:
         return FinalActionInput.model_json_schema()
+    if enabled == {AgentActionKind.TOOL_CALL}:
+        return ToolCallActionInput.model_json_schema()
     if enabled == {AgentActionKind.ASK_USER}:
         return AskUserActionInput.model_json_schema()
-    envelope = Annotated[
-        FinalActionInput | AskUserActionInput,
-        Field(discriminator="type"),
-    ]
-    return TypeAdapter(envelope).json_schema()
+    if enabled == {AgentActionKind.FINAL, AgentActionKind.TOOL_CALL}:
+        return TypeAdapter(
+            Annotated[
+                FinalActionInput | ToolCallActionInput,
+                Field(discriminator="type"),
+            ]
+        ).json_schema()
+    if enabled == {AgentActionKind.FINAL, AgentActionKind.ASK_USER}:
+        return TypeAdapter(
+            Annotated[
+                FinalActionInput | AskUserActionInput,
+                Field(discriminator="type"),
+            ]
+        ).json_schema()
+    if enabled == {AgentActionKind.TOOL_CALL, AgentActionKind.ASK_USER}:
+        return TypeAdapter(
+            Annotated[
+                ToolCallActionInput | AskUserActionInput,
+                Field(discriminator="type"),
+            ]
+        ).json_schema()
+    return TypeAdapter(
+        Annotated[
+            FinalActionInput | ToolCallActionInput | AskUserActionInput,
+            Field(discriminator="type"),
+        ]
+    ).json_schema()
 
 
 def agent_action_response_format(
     allowed_actions: frozenset[AgentActionKind],
-    *,
-    structured_output_supported: bool,
-) -> dict[str, Any] | None:
-    if not structured_output_supported:
-        return None
+) -> dict[str, Any]:
     return {
         "type": "json_schema",
         "json_schema": {
@@ -180,14 +232,14 @@ def agent_action_response_format(
     }
 
 
-def _tool_action_batch(response: ModelResponse) -> AgentActionBatch:
+def _native_tool_action_batch(response: ModelResponse) -> AgentActionBatch:
     seen: set[str] = set()
     actions: list[AgentAction] = []
     for position, call in enumerate(response.tool_calls):
         if call.id in seen:
             raise AgentActionParseError(
-                "ACTION_DUPLICATE_CALL_ID",
-                f"duplicate provider Tool call id: {call.id}",
+                "INVALID_TOOL_CALL",
+                f"duplicate provider tool call id: {call.id}",
             )
         seen.add(call.id)
         identity = {
@@ -207,42 +259,17 @@ def _tool_action_batch(response: ModelResponse) -> AgentActionBatch:
                 )
             )
         except ValidationError as exc:
-            raise _metadata_error(exc) from exc
-    return _batch(tuple(actions), ActionSourceFormat.PROVIDER_TOOL_CALLS)
+            raise AgentActionParseError(
+                "INVALID_TOOL_CALL",
+                f"provider tool call is invalid: {exc.errors()[0]['type']}",
+            ) from exc
+    return _batch(tuple(actions), ActionSourceFormat.NATIVE_TOOL_CALLS)
 
 
-def _legacy_final_batch(text: str) -> AgentActionBatch:
-    intent = IntentResolution(
-        interpreted_intent="Legacy plain-text final compatibility",
-        confidence=0,
-        candidates=(
-            IntentCandidate(
-                candidate_id="legacy-plain-text",
-                intent="Preserve the pre-AgentAction final behavior",
-                confidence=0,
-            ),
-        ),
-        ambiguity=1,
-        risk="unknown",
-        risk_reasons=(),
-        missing_information=(),
-        safe_partial_answer_possible=False,
-    )
-    completion = FinalCompletion(
-        answered_user_intent=True,
-        requires_user_response=False,
-    )
-    try:
-        action = FinalAction(
-            action_id=_action_id({"kind": "legacy_final", "content": text}),
-            content=text,
-            intent=intent,
-            completion=completion,
-            compatibility_mode=True,
-        )
-    except ValidationError as exc:
-        raise _metadata_error(exc) from exc
-    return _batch((action,), ActionSourceFormat.LEGACY_PLAIN_TEXT)
+def _json_source(response: ModelResponse) -> ActionSourceFormat:
+    if response.response_format_type == "json_schema":
+        return ActionSourceFormat.JSON_SCHEMA
+    return ActionSourceFormat.JSON_OBJECT
 
 
 def _batch(
@@ -268,18 +295,14 @@ def _action_id(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _validate(model: Any, payload: dict[str, Any]) -> Any:
+def _validate(model: Any, payload: dict[str, Any], code: str) -> Any:
     try:
         return model.model_validate(payload)
     except ValidationError as exc:
-        raise _metadata_error(exc) from exc
-
-
-def _metadata_error(exc: ValidationError) -> AgentActionParseError:
-    return AgentActionParseError(
-        "ACTION_METADATA_INVALID",
-        f"AgentAction metadata is invalid: {exc.errors()[0]['type']}",
-    )
+        raise AgentActionParseError(
+            code,
+            f"AgentAction schema validation failed: {exc.errors()[0]['type']}",
+        ) from exc
 
 
 def _require_allowed(
@@ -288,6 +311,6 @@ def _require_allowed(
 ) -> None:
     if kind not in allowed:
         raise AgentActionParseError(
-            "ACTION_KIND_UNSUPPORTED",
-            f"{kind.value} is not enabled for this Action contract",
+            "ACTION_SCHEMA_MISMATCH",
+            f"{kind.value} is not enabled for this AgentAction contract",
         )

@@ -41,7 +41,7 @@ class CaptureModelProvider:
         self.requests: list[ModelRequest] = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.JSON_OBJECT})
 
     async def stream(self, request: ModelRequest):
         self.requests.append(request)
@@ -180,7 +180,7 @@ def _request() -> RuntimeSessionRequest:
             "base_url": "https://models.example/v1",
             "credential_ref": "env:REDACTED_TEST_REFERENCE",
             "allowed_models": ["capture-model"],
-            "capabilities": {"streaming": True},
+            "capabilities": {"streaming": True, "json_object": True},
             "model": "capture-model",
         },
     )
@@ -304,7 +304,7 @@ def test_prior_prompt_injection_stays_untrusted_and_cannot_widen_frozen_policy()
 
 
 @pytest.mark.asyncio
-async def test_clarification_like_plain_text_cannot_bypass_completion_metadata() -> None:
+async def test_plain_text_cannot_bypass_agent_action_protocol() -> None:
     model = CaptureModelProvider(_CLARIFICATION_LIKE_OUTPUT)
     provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
     request = _request()
@@ -319,6 +319,7 @@ async def test_clarification_like_plain_text_cannot_bypass_completion_metadata()
 
     assert len(model.requests) == 2
     assert outcome.status is RuntimeSessionStatus.FAILED
-    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+    assert outcome.error["code"] == "AGENT_ACTION_CORRECTION_EXHAUSTED"
+    assert outcome.error["details"]["parse_failure_type"] == "NON_JSON_RESPONSE"
     assert events[-1].type is RuntimeEventType.RUN_FAILED
     assert RuntimeEventType.RUN_PAUSED not in [event.type for event in events]

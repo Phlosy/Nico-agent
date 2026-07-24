@@ -65,7 +65,7 @@ class KnowledgeAwareModelProvider:
         self.rendered = ""
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING})
+        return frozenset({ModelCapability.STREAMING, ModelCapability.JSON_OBJECT})
 
     async def stream(self, request):
         self.rendered = "\n".join(message.content or "" for message in request.messages)
@@ -199,7 +199,7 @@ async def test_runtime_consumes_only_published_frozen_knowledge_and_tracks_effec
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["goal-k-model"],
-                capabilities={"streaming": True},
+                capabilities={"streaming": True, "json_object": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()

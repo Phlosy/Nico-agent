@@ -268,8 +268,14 @@ class RuntimeExecutionService:
                     AgentVersion.id == run.agent_version_id,
                 )
             )
+            agent = await session.scalar(
+                select(Agent).where(
+                    Agent.tenant_id == claim.tenant_id,
+                    Agent.id == run.agent_id,
+                )
+            )
             tenant = await session.scalar(select(Tenant).where(Tenant.id == claim.tenant_id))
-            if task is None or version is None or tenant is None:
+            if task is None or version is None or agent is None or tenant is None:
                 raise RuntimeLeaseLost(str(claim.run_id))
 
             resolution = self._provider_resolution(version)
@@ -384,7 +390,11 @@ class RuntimeExecutionService:
                     execution_mode=execution_mode.value,
                     loop_state="initializing",
                     execution_manifest={
-                        **self._execution_manifest(version),
+                        **self._execution_manifest(
+                            version,
+                            agent=agent,
+                            endpoint_snapshot=model_endpoint_snapshot,
+                        ),
                         "tool_approval_policy": tool_approval_policy,
                         "run_started_at": run_started_at.astimezone(UTC).isoformat(),
                     },
@@ -425,6 +435,16 @@ class RuntimeExecutionService:
                 runtime_session.execution_manifest = {
                     **runtime_session.execution_manifest,
                     "run_started_at": run_started_at.astimezone(UTC).isoformat(),
+                }
+                runtime_session.revision += 1
+            if "runtime_identity" not in runtime_session.execution_manifest:
+                runtime_session.execution_manifest = {
+                    **runtime_session.execution_manifest,
+                    "runtime_identity": self._runtime_identity(
+                        version,
+                        agent=agent,
+                        endpoint_snapshot=runtime_session.model_endpoint_snapshot,
+                    ),
                 }
                 runtime_session.revision += 1
             if not runtime_session.coordination_policy_snapshot:
@@ -1963,7 +1983,12 @@ class RuntimeExecutionService:
         return RuntimeExecutionMode(candidate)
 
     @staticmethod
-    def _execution_manifest(version: AgentVersion) -> dict[str, Any]:
+    def _execution_manifest(
+        version: AgentVersion,
+        *,
+        agent: Agent,
+        endpoint_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "agent_version_id": str(version.id),
@@ -1979,6 +2004,41 @@ class RuntimeExecutionService:
                 str(version.model_endpoint_id) if version.model_endpoint_id else None
             ),
             "model": version.model_name or version.model_config_json.get("model"),
+            "runtime_identity": RuntimeExecutionService._runtime_identity(
+                version,
+                agent=agent,
+                endpoint_snapshot=endpoint_snapshot,
+            ),
+        }
+
+    @staticmethod
+    def _runtime_identity(
+        version: AgentVersion,
+        *,
+        agent: Agent,
+        endpoint_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        endpoint = endpoint_snapshot or {}
+        return {
+            "provider": (
+                endpoint.get("provider_key")
+                or endpoint.get("stable_key")
+                or endpoint.get("protocol")
+                or "unconfigured"
+            ),
+            "model_id": (
+                endpoint.get("model")
+                or version.model_name
+                or version.model_config_json.get("model")
+                or "unconfigured"
+            ),
+            "runtime_name": resolve_runtime_provider_name(
+                runtime_provider=version.runtime_provider,
+                run_config=version.run_config,
+                model_config=version.model_config_json,
+            ),
+            "agent_name": agent.name,
+            "agent_version": version.version,
         }
 
     async def _tool_approval_policy(
@@ -2045,6 +2105,7 @@ class RuntimeExecutionService:
         return {
             "id": str(endpoint.id),
             "stable_key": endpoint.stable_key,
+            "provider_key": endpoint.provider_key,
             "revision": endpoint.revision,
             "protocol": endpoint.protocol,
             "base_url": endpoint.base_url,
@@ -2707,7 +2768,6 @@ class RuntimeExecutionService:
             arguments_hash=cls._hash_json(arguments) if isinstance(arguments, dict) else None,
             question_hash=cls._hash_json(question) if isinstance(question, str) else None,
             reason_hash=cls._hash_json(reason) if isinstance(reason, str) else None,
-            compatibility_mode=payload.get("compatibility_mode") is True,
         )
 
     @staticmethod
@@ -2758,7 +2818,7 @@ class RuntimeExecutionService:
             "post_model_call_commit",
             "parse_correction",
             "clarification_correction",
-            "semantic_final_correction",
+            "completion_gate_correction",
             "replay",
         }:
             raise ValueError("unsupported AgentAction repair kind")
@@ -3052,7 +3112,6 @@ class RuntimeExecutionService:
             "arguments_hash": record.arguments_hash,
             "question_hash": record.question_hash,
             "reason_hash": record.reason_hash,
-            "compatibility_mode": record.compatibility_mode,
             "status": record.status,
         }
 

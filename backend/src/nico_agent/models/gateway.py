@@ -134,7 +134,11 @@ class ModelGateway:
         return ModelResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
-            structured_output=request.response_format is not None,
+            response_format_type=(
+                request.response_format.get("type", "none")
+                if request.response_format is not None
+                else "none"
+            ),
             finish_reason=finish_reason,
             usage=usage,
             provider_request_id=request_id,
@@ -172,15 +176,25 @@ class ModelGateway:
         ):
             raise ModelCapabilityMismatch(ModelCapability.STREAMING.value)
         if request.tools and (
-            ModelCapability.TOOLS not in capabilities
-            or not endpoint_capabilities.get("tools", False)
+            ModelCapability.NATIVE_TOOL_CALLING not in capabilities
+            or not endpoint_capabilities.get("native_tool_calling", False)
         ):
-            raise ModelCapabilityMismatch(ModelCapability.TOOLS.value)
-        if request.response_format and (
-            ModelCapability.STRUCTURED_OUTPUT not in capabilities
-            or not endpoint_capabilities.get("structured_output", False)
-        ):
-            raise ModelCapabilityMismatch(ModelCapability.STRUCTURED_OUTPUT.value)
+            raise ModelCapabilityMismatch(ModelCapability.NATIVE_TOOL_CALLING.value)
+        if request.response_format:
+            response_format_type = request.response_format.get("type")
+            if not isinstance(response_format_type, str):
+                raise ModelProtocolError("response_format type must be a string")
+            capability_by_format = {
+                "json_object": ModelCapability.JSON_OBJECT,
+                "json_schema": ModelCapability.JSON_SCHEMA,
+            }
+            required = capability_by_format.get(response_format_type)
+            if required is None:
+                raise ModelProtocolError(
+                    f"unsupported response_format type {response_format_type!r}"
+                )
+            if required not in capabilities or not endpoint_capabilities.get(required.value, False):
+                raise ModelCapabilityMismatch(required.value)
 
     async def _apply_rate_limit(self, request: ModelRequest) -> None:
         config = request.endpoint.get("rate_limit", {})

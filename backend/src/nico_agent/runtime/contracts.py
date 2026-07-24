@@ -169,6 +169,13 @@ class RuntimeProviderDescriptor(BaseModel):
     compatibility: dict[str, Any] = Field(default_factory=dict)
 
 
+class RuntimeToolIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    version: str = Field(min_length=1, max_length=50)
+
+
 class RuntimeSessionRequest(BaseModel):
     """Complete immutable input needed to (re)construct one provider session."""
 
@@ -200,6 +207,7 @@ class RuntimeSessionRequest(BaseModel):
     event_sequence: int = Field(default=0, ge=0)
     resume_session_id: str | None = Field(default=None, min_length=1, max_length=500)
     tool_session: RuntimeToolSession | None = None
+    authorized_tools: tuple[RuntimeToolIdentity, ...] = ()
 
 
 class RuntimeToolSpec(BaseModel):

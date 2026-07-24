@@ -53,8 +53,8 @@ class ReplanningModelProvider:
         return frozenset(
             {
                 ModelCapability.STREAMING,
-                ModelCapability.TOOLS,
-                ModelCapability.STRUCTURED_OUTPUT,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_SCHEMA,
             }
         )
 
@@ -108,8 +108,8 @@ class PlanningToolModelProvider:
         return frozenset(
             {
                 ModelCapability.STREAMING,
-                ModelCapability.TOOLS,
-                ModelCapability.STRUCTURED_OUTPUT,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_SCHEMA,
             }
         )
 
@@ -231,7 +231,7 @@ async def test_native_plan_runtime_persists_revisions_evaluations_and_read_api()
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["plan-model"],
-                capabilities={"streaming": True, "structured_output": True},
+                capabilities={"streaming": True, "json_schema": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()
@@ -401,7 +401,7 @@ async def test_native_plan_step_uses_real_tool_gateway_and_parent_trace(tmp_path
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["plan-tool-model"],
-                capabilities={"streaming": True, "structured_output": True, "tools": True},
+                capabilities={"streaming": True, "json_schema": True, "native_tool_calling": True},
             )
             session.add_all([project, agent, endpoint])
             await session.flush()

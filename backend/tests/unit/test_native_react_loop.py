@@ -46,7 +46,13 @@ class SequencedModelProvider:
         self.requests = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset(
+            {
+                ModelCapability.STREAMING,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+            }
+        )
 
     async def stream(self, request):
         self.requests.append(request)
@@ -254,7 +260,11 @@ def _request(**updates) -> RuntimeSessionRequest:
             "base_url": "https://models.example/v1",
             "credential_ref": "env:NICO_MODEL_SECRET_TEST",
             "allowed_models": ["test-model"],
-            "capabilities": {"streaming": True, "tools": True},
+            "capabilities": {
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
             "model": "test-model",
         },
         model_config_data={"temperature": 0},
@@ -472,6 +482,8 @@ async def test_react_executes_exact_tool_and_continues_with_observation() -> Non
     assert handler.intents[0].checkpoint["loop_state"] == "waiting_for_tool"
     assert len(model.requests) == 2
     assert (model.requests[0].messages[0].content or "").count(NATIVE_CONTINUITY_POLICY) == 1
+    assert "Authorized tools for this Run" in (model.requests[0].messages[0].content or "")
+    assert "- file.write@1.0.0" in (model.requests[0].messages[0].content or "")
     assert model.requests[1].messages[-2].role == "assistant"
     assert model.requests[1].messages[-2].tool_calls[0]["id"] == "provider-call-1"
     assert model.requests[1].messages[-1].role == "tool"
@@ -557,62 +569,6 @@ async def test_react_allows_genuine_ambiguity_and_suspends_for_user_input() -> N
     assert outcome.wake_condition["type"] == "user_input"
     assert outcome.checkpoint["loop_state"] == "waiting_for_user_input"
     assert len(user_input.intents) == 1
-
-
-@pytest.mark.asyncio
-async def test_react_corrects_pseudo_final_once_before_completion() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="I still need a response.",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
-    valid = _action_envelope(
-        "final",
-        content="Corrected ReAct answer.",
-        completion={"answered_user_intent": True, "requires_user_response": False},
-    )
-    model = SequencedModelProvider(
-        [_text_response(invalid, "invalid"), _text_response(valid, "corrected")]
-    )
-    provider = _native(model)
-    request = _request()
-    session = await provider.create_session(request)
-
-    outcome = await provider.execute(
-        session.external_session_id,
-        request,
-        RuntimeServices(tool_handler=RecordingToolHandler()),
-    )
-
-    assert outcome.status is RuntimeSessionStatus.COMPLETED
-    assert outcome.output == {"content": "Corrected ReAct answer."}
-    assert model.requests[1].tools == ()
-    assert "semantic_completion_observation" in model.requests[1].messages[-1].content
-
-
-@pytest.mark.asyncio
-async def test_react_repeated_invalid_final_exhausts_semantic_correction() -> None:
-    invalid = _action_envelope(
-        "final",
-        content="I still need a response.",
-        completion={"answered_user_intent": False, "requires_user_response": True},
-    )
-    model = SequencedModelProvider(
-        [_text_response(invalid, "invalid"), _text_response(invalid, "invalid-again")]
-    )
-    provider = _native(model)
-    request = _request()
-    session = await provider.create_session(request)
-
-    outcome = await provider.execute(
-        session.external_session_id,
-        request,
-        RuntimeServices(tool_handler=RecordingToolHandler()),
-    )
-
-    assert outcome.status is RuntimeSessionStatus.FAILED
-    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
-    assert len(model.requests) == 2
 
 
 @pytest.mark.asyncio

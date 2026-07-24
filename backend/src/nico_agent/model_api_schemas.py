@@ -19,7 +19,13 @@ class ModelEndpointCreate(BaseModel):
     base_url: str = Field(min_length=1, max_length=2000)
     credential_ref: str = Field(pattern=r"^env:NICO_MODEL_SECRET_[A-Z0-9_]{1,100}$", max_length=300)
     allowed_models: list[str] = Field(default_factory=list, max_length=1000)
-    capabilities: dict[str, Any] = Field(default_factory=lambda: {"streaming": True, "tools": True})
+    capabilities: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "streaming": True,
+            "native_tool_calling": True,
+            "json_object": True,
+        }
+    )
     rate_limit: dict[str, Any] = Field(default_factory=dict)
     tls_policy: dict[str, Any] = Field(default_factory=dict)
 
@@ -96,7 +102,6 @@ class AgentActionRead(FromAttributesModel):
     arguments_hash: str | None
     question_hash: str | None
     reason_hash: str | None
-    compatibility_mode: bool
     status: str
     outcome_ref: str | None
     observation_ref: str | None

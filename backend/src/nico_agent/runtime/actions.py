@@ -27,10 +27,9 @@ class ActionRisk(StrEnum):
 
 
 class ActionSourceFormat(StrEnum):
-    STRUCTURED_JSON = "structured_json"
-    PLAIN_JSON = "plain_json"
-    PROVIDER_TOOL_CALLS = "provider_tool_calls"
-    LEGACY_PLAIN_TEXT = "legacy_plain_text"
+    JSON_OBJECT = "json_object"
+    JSON_SCHEMA = "json_schema"
+    NATIVE_TOOL_CALLS = "native_tool_calls"
 
 
 class ActionModel(BaseModel):
@@ -62,8 +61,28 @@ class FinalCompletion(ActionModel):
 class FinalActionInput(ActionModel):
     type: Literal["final"]
     content: LongText
-    intent: IntentResolution
-    completion: FinalCompletion
+    intent: IntentResolution | None = None
+    completion: FinalCompletion | None = None
+
+
+class ToolCallActionInput(ActionModel):
+    type: Literal["tool_call"]
+    tool_name: Annotated[str, Field(min_length=1, max_length=120)]
+    arguments: dict[str, Any]
+
+    @field_validator("arguments")
+    @classmethod
+    def bound_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
+        rendered = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        if len(rendered) > 256_000:
+            raise ValueError("tool arguments exceed the AgentAction bound")
+        return value
 
 
 class AskUserActionInput(ActionModel):
@@ -78,9 +97,8 @@ class FinalAction(ActionModel):
     kind: Literal["final"] = "final"
     action_id: ActionId
     content: LongText
-    intent: IntentResolution
-    completion: FinalCompletion
-    compatibility_mode: bool = False
+    intent: IntentResolution | None = None
+    completion: FinalCompletion | None = None
 
 
 class ToolCallAction(ActionModel):

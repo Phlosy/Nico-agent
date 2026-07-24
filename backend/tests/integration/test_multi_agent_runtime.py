@@ -88,7 +88,13 @@ class MultiAgentModelProvider:
         self.requests = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset(
+            {
+                ModelCapability.STREAMING,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+            }
+        )
 
     async def stream(self, request):
         self.requests.append(request)
@@ -180,7 +186,11 @@ async def _seed(database: Database):
             base_url="https://models.example/v1",
             credential_ref="env:NICO_MODEL_SECRET_TEST",
             allowed_models=["multi-model"],
-            capabilities={"streaming": True, "tools": True},
+            capabilities={
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
         )
         agents = [
             Agent(

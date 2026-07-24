@@ -165,6 +165,33 @@ async def test_approval_wake_preserves_only_a_live_handshake_lease() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_terminal_transition_always_releases_the_worker_lease() -> None:
+    now = datetime.now(UTC)
+    run = _run(RunStatus.RUNNING)
+    run.lease_owner = "worker:protocol"
+    run.lease_token = uuid4()
+    run.lease_expires_at = now + timedelta(minutes=1)
+    run.heartbeat_at = now
+
+    await RunLifecycleAuthority.transition(
+        Mock(),
+        TenantContext(run.tenant_id, "worker:protocol", uuid4()),
+        run,
+        target=RunStatus.FAILED,
+        reason="agent_action_protocol_failed",
+        loop_state=RuntimeLoopState.FAILED,
+        occurred_at=now,
+    )
+
+    assert run.status == RunStatus.FAILED.value
+    assert run.ended_at == now
+    assert run.lease_owner is None
+    assert run.lease_token is None
+    assert run.lease_expires_at is None
+    assert run.heartbeat_at is None
+
+
+@pytest.mark.asyncio
 async def test_user_input_wake_preserves_live_handshake_lease_until_checkpoint_suspend() -> None:
     now = datetime.now(UTC)
     run = _run(RunStatus.WAITING_FOR_USER_INPUT)

@@ -300,7 +300,7 @@
         "max_model_calls": 2,
         "max_tool_effects": 0,
         "answer_contains_any": [],
-        "error_code": "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+        "error_code": "AGENT_ACTION_CORRECTION_EXHAUSTED"
       },
       "intent_profile": {
         "confidence": 0.9,
@@ -312,16 +312,12 @@
       },
       "hermetic_script": [
         {
-          "kind": "final",
-          "content": "仍需用户回复。",
-          "answered_user_intent": false,
-          "requires_user_response": true
+          "kind": "invalid_action",
+          "content": "仍需用户回复。"
         },
         {
-          "kind": "final",
-          "content": "仍需用户回复。",
-          "answered_user_intent": false,
-          "requires_user_response": true
+          "kind": "invalid_action",
+          "content": "仍需用户回复。"
         }
       ]
     },

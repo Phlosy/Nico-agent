@@ -14,305 +14,199 @@ from nico_agent.runtime.actions import (
 )
 from nico_agent.runtime.native.action_parser import (
     AgentActionParseError,
+    active_agent_action_kinds,
     agent_action_json_schema,
+    agent_action_protocol_instruction,
     agent_action_response_format,
     parse_agent_actions,
-    parse_compatibility_agent_actions,
 )
 
 
-def test_live_action_schema_includes_ask_user_only_when_gate_and_handler_are_enabled() -> None:
-    from nico_agent.runtime.native.action_parser import active_agent_action_kinds
-
-    assert AgentActionKind.ASK_USER not in active_agent_action_kinds(
-        clarification_gate_enabled=False,
-        user_input_handler_enabled=True,
-    )
-    assert AgentActionKind.ASK_USER not in active_agent_action_kinds(
-        clarification_gate_enabled=True,
-        user_input_handler_enabled=False,
-    )
-    assert AgentActionKind.ASK_USER in active_agent_action_kinds(
-        clarification_gate_enabled=True,
-        user_input_handler_enabled=True,
+def _parse(payload: dict, *, response_format_type: str = "json_object"):
+    return parse_agent_actions(
+        ModelResponse(
+            text=json.dumps(payload, ensure_ascii=False),
+            response_format_type=response_format_type,
+        )
     )
 
 
 def _intent() -> dict:
     return {
-        "interpreted_intent": "Configure the second option discussed earlier",
-        "confidence": 0.82,
+        "interpreted_intent": "Delete one of several objects",
+        "confidence": 0.45,
         "candidates": [
             {
-                "candidate_id": "second-option",
-                "intent": "Configure the second option",
-                "confidence": 0.82,
-            },
-            {
-                "candidate_id": "first-option",
-                "intent": "Configure the first option",
-                "confidence": 0.18,
-            },
+                "candidate_id": "candidate-1",
+                "intent": "Delete the selected object",
+                "confidence": 0.45,
+            }
         ],
-        "ambiguity": 0.18,
-        "risk": "low",
-        "risk_reasons": [],
-        "missing_information": [],
-        "safe_partial_answer_possible": True,
+        "ambiguity": 0.8,
+        "risk": "high",
+        "risk_reasons": ["Deletion is irreversible."],
+        "missing_information": ["Exact object identifier"],
+        "safe_partial_answer_possible": False,
     }
 
 
-def _final_payload() -> dict:
-    return {
-        "type": "final",
-        "content": "Configure the second option with the documented defaults.",
-        "intent": _intent(),
-        "completion": {
-            "answered_user_intent": True,
-            "requires_user_response": False,
-        },
-    }
+def test_valid_final_is_strict_immutable_agent_action() -> None:
+    batch = _parse({"type": "final", "content": "hello"})
 
-
-def _ask_payload() -> dict:
-    intent = _intent()
-    intent.update(
-        {
-            "interpreted_intent": "Delete one of several recently discussed objects",
-            "confidence": 0.45,
-            "ambiguity": 0.8,
-            "risk": "high",
-            "risk_reasons": ["Deletion is irreversible without a backup."],
-            "missing_information": ["Exact object type and identifier"],
-            "safe_partial_answer_possible": False,
-        }
-    )
-    return {
-        "type": "ask_user",
-        "question": "Which exact object should be deleted?",
-        "reason": "Several targets are similarly plausible and deletion is high risk.",
-        "intent": intent,
-    }
-
-
-def _parse_payload(payload: dict, *, structured_output: bool = False):
-    return parse_agent_actions(
-        ModelResponse(
-            text=json.dumps(payload, ensure_ascii=False),
-            structured_output=structured_output,
-        )
-    )
-
-
-def test_structured_final_and_ask_user_actions_are_immutable_and_bounded() -> None:
-    final_batch = _parse_payload(_final_payload())
-    ask_batch = _parse_payload(_ask_payload())
-
-    final = final_batch.actions[0]
-    ask = ask_batch.actions[0]
-    assert isinstance(final, FinalAction)
-    assert final.completion.answered_user_intent is True
-    assert final.compatibility_mode is False
-    assert isinstance(ask, AskUserAction)
-    assert ask.intent.risk == "high"
-    assert ask.intent.missing_information == ("Exact object type and identifier",)
-    assert len(final.action_id) == len(ask.action_id) == 64
+    action = batch.actions[0]
+    assert isinstance(action, FinalAction)
+    assert action.content == "hello"
+    assert batch.source_format == "json_object"
     with pytest.raises(ValidationError):
-        final.content = "mutated"
+        action.content = "changed"
 
 
 @pytest.mark.parametrize(
-    ("path", "code"),
+    ("raw", "code"),
     [
-        (("question",), "ACTION_METADATA_INVALID"),
-        (("reason",), "ACTION_METADATA_INVALID"),
-        (("intent", "candidates"), "ACTION_METADATA_INVALID"),
-        (("intent", "ambiguity"), "ACTION_METADATA_INVALID"),
-        (("intent", "risk"), "ACTION_METADATA_INVALID"),
-        (("intent", "missing_information"), "ACTION_METADATA_INVALID"),
-        (("intent", "confidence"), "ACTION_METADATA_INVALID"),
+        ("hello", "NON_JSON_RESPONSE"),
+        ('{"final":{"content":"hello"}}', "ACTION_SCHEMA_MISMATCH"),
+        ('{"answer":"hello"}', "ACTION_SCHEMA_MISMATCH"),
+        ('{"content":"hello"}', "ACTION_SCHEMA_MISMATCH"),
+        ('{"type":"something_else"}', "UNKNOWN_ACTION_TYPE"),
+        ('{"type":"final","content":""}', "EMPTY_FINAL_CONTENT"),
+        ('```json\n{"type":"final","content":"hello"}\n```', "NON_JSON_RESPONSE"),
+        (
+            'Here is the result:\n{"type":"final","content":"hello"}',
+            "NON_JSON_RESPONSE",
+        ),
+        ('{"type":"final","content":"hello"} trailing', "MALFORMED_JSON"),
+        ('{"type":"final","content":"hello"', "MALFORMED_JSON"),
     ],
 )
-def test_ask_user_requires_complete_policy_metadata(
-    path: tuple[str, ...],
+def test_invalid_responses_have_stable_protocol_error_categories(
+    raw: str,
     code: str,
 ) -> None:
-    payload = _ask_payload()
-    target = payload
-    for key in path[:-1]:
-        target = target[key]
-    target.pop(path[-1])
-
     with pytest.raises(AgentActionParseError) as captured:
-        _parse_payload(payload)
+        parse_agent_actions(ModelResponse(text=raw, response_format_type="json_object"))
 
     assert captured.value.code == code
 
 
-def test_final_preserves_contradictory_metadata_for_completion_gate() -> None:
-    payload = _final_payload()
-    payload["completion"]["requires_user_response"] = True
+def test_content_json_tool_call_uses_the_same_internal_action_contract() -> None:
+    batch = _parse(
+        {
+            "type": "tool_call",
+            "tool_name": "search",
+            "arguments": {"query": "example"},
+        }
+    )
 
-    batch = _parse_payload(payload)
-
-    assert batch.actions[0].completion.answered_user_intent is True
-    assert batch.actions[0].completion.requires_user_response is True
+    action = batch.actions[0]
+    assert isinstance(action, ToolCallAction)
+    assert action.name == "search"
+    assert action.arguments == {"query": "example"}
+    assert action.provider_call_id.startswith("json:")
 
 
 @pytest.mark.parametrize(
-    ("payload", "code"),
+    "payload",
     [
-        (
-            {**_final_payload(), "tool_call": {"name": "file.write"}},
-            "ACTION_FINAL_EFFECT_MIXTURE",
-        ),
-        ({"type": "unknown", "content": "no"}, "ACTION_KIND_UNSUPPORTED"),
-        (
-            {
-                **_final_payload(),
-                "intent": {**_intent(), "confidence": 1.5},
-            },
-            "ACTION_METADATA_INVALID",
-        ),
-        (
-            {**_final_payload(), "content": "x" * 256_001},
-            "ACTION_METADATA_INVALID",
-        ),
+        {"type": "tool_call", "arguments": {}},
+        {"type": "tool_call", "tool_name": "", "arguments": {}},
+        {"type": "tool_call", "tool_name": "search", "arguments": []},
+        {
+            "type": "tool_call",
+            "tool_name": "search",
+            "arguments": {},
+            "unknown": True,
+        },
     ],
 )
-def test_structural_errors_are_stable_and_effect_free(payload: dict, code: str) -> None:
+def test_invalid_content_tool_calls_are_classified(payload: dict) -> None:
     with pytest.raises(AgentActionParseError) as captured:
-        _parse_payload(payload)
+        _parse(payload)
 
-    assert captured.value.code == code
+    assert captured.value.code == "INVALID_TOOL_CALL"
 
 
-def test_provider_tool_calls_preserve_order_and_identity_and_reject_duplicates() -> None:
+def test_native_tool_calls_preserve_order_and_reject_mixed_text_or_duplicates() -> None:
     response = ModelResponse(
         tool_calls=(
             ModelToolCall(id="provider-a", name="web.search", arguments={"query": "Nico"}),
-            ModelToolCall(
-                id="provider-b",
-                name="file.write",
-                arguments={"path": "result.txt", "content": "ok"},
-            ),
+            ModelToolCall(id="provider-b", name="file.write", arguments={"path": "result"}),
         )
     )
-
     batch = parse_agent_actions(response)
 
-    assert all(isinstance(action, ToolCallAction) for action in batch.actions)
-    assert [action.position for action in batch.actions] == [0, 1]
+    assert batch.source_format == "native_tool_calls"
     assert [action.provider_call_id for action in batch.actions] == [
         "provider-a",
         "provider-b",
     ]
-    assert [action.name for action in batch.actions] == ["web.search", "file.write"]
+    assert [action.position for action in batch.actions] == [0, 1]
 
-    duplicate = response.model_copy(
-        update={"tool_calls": (response.tool_calls[0], response.tool_calls[0])}
-    )
-    with pytest.raises(AgentActionParseError) as captured:
-        parse_agent_actions(duplicate)
-    assert captured.value.code == "ACTION_DUPLICATE_CALL_ID"
+    with pytest.raises(AgentActionParseError) as mixed:
+        parse_agent_actions(response.model_copy(update={"text": '{"type":"final","content":"x"}'}))
+    assert mixed.value.code == "INVALID_TOOL_CALL"
 
-
-def test_final_plus_provider_effect_is_rejected_before_dispatch() -> None:
-    response = ModelResponse(
-        text=json.dumps(_final_payload()),
-        tool_calls=(ModelToolCall(id="call-1", name="file.write", arguments={"path": "result"}),),
-    )
-
-    with pytest.raises(AgentActionParseError) as captured:
-        parse_agent_actions(response)
-
-    assert captured.value.code == "ACTION_FINAL_EFFECT_MIXTURE"
-
-
-def test_structured_output_and_plain_json_produce_equivalent_actions() -> None:
-    plain = _parse_payload(_final_payload())
-    structured = _parse_payload(_final_payload(), structured_output=True)
-
-    assert plain.actions == structured.actions
-    assert plain.source_format == "plain_json"
-    assert structured.source_format == "structured_json"
-
-
-def test_clarification_like_plain_text_is_only_a_legacy_final() -> None:
-    text = "你是想问平台时间戳，还是系统时间来自哪里？"
-
-    batch = parse_agent_actions(ModelResponse(text=text))
-
-    assert isinstance(batch.actions[0], FinalAction)
-    assert not isinstance(batch.actions[0], AskUserAction)
-    assert batch.actions[0].content == text
-    assert batch.actions[0].compatibility_mode is True
-    assert batch.source_format == "legacy_plain_text"
-
-
-def test_shadow_compatibility_preserves_structured_phase_json_as_legacy_final() -> None:
-    response = ModelResponse(
-        text='{"output":{"answer":"unchanged"}}',
-        structured_output=True,
-    )
-
-    batch = parse_compatibility_agent_actions(response)
-
-    assert batch.source_format == "legacy_plain_text"
-    assert isinstance(batch.actions[0], FinalAction)
-    assert batch.actions[0].content == response.text
-    assert batch.actions[0].compatibility_mode is True
-
-
-def test_shadow_compatibility_keeps_provider_tools_authoritative_over_incidental_text() -> None:
-    response = ModelResponse(
-        text="provider preamble",
-        tool_calls=(ModelToolCall(id="call-1", name="web.search", arguments={"query": "Nico"}),),
-    )
-
-    batch = parse_compatibility_agent_actions(response)
-
-    assert batch.source_format == "provider_tool_calls"
-    assert isinstance(batch.actions[0], ToolCallAction)
-    assert batch.actions[0].provider_call_id == "call-1"
-
-
-def test_capability_filtered_schema_does_not_advertise_inactive_actions() -> None:
-    final_only = agent_action_json_schema(frozenset({AgentActionKind.FINAL}))
-    with_ask = agent_action_json_schema(
-        frozenset({AgentActionKind.FINAL, AgentActionKind.ASK_USER})
-    )
-    unsupported = agent_action_response_format(
-        frozenset({AgentActionKind.FINAL}),
-        structured_output_supported=False,
-    )
-    supported = agent_action_response_format(
-        frozenset({AgentActionKind.FINAL}),
-        structured_output_supported=True,
-    )
-
-    assert "ask_user" not in json.dumps(final_only)
-    assert "ask_user" in json.dumps(with_ask)
-    assert "tool_call" not in json.dumps(with_ask)
-    assert unsupported is None
-    assert supported["type"] == "json_schema"
-
-
-def test_equivalent_provider_tool_facts_have_same_platform_action_identity() -> None:
-    first = parse_agent_actions(
-        ModelResponse(
-            tool_calls=(
-                ModelToolCall(id="openai-call", name="web.search", arguments={"query": "Nico"}),
-            )
+    with pytest.raises(AgentActionParseError) as duplicate:
+        parse_agent_actions(
+            response.model_copy(update={"tool_calls": (response.tool_calls[0],) * 2})
         )
-    ).actions[0]
-    second = parse_agent_actions(
-        ModelResponse(
-            tool_calls=(
-                ModelToolCall(id="gemini-0", name="web.search", arguments={"query": "Nico"}),
-            )
-        )
-    ).actions[0]
+    assert duplicate.value.code == "INVALID_TOOL_CALL"
 
-    assert first.action_id == second.action_id
-    assert first.provider_call_id != second.provider_call_id
+
+def test_ask_user_is_available_only_when_runtime_capabilities_are_active() -> None:
+    inactive = active_agent_action_kinds(
+        clarification_gate_enabled=True,
+        user_input_handler_enabled=False,
+    )
+    active = active_agent_action_kinds(
+        clarification_gate_enabled=True,
+        user_input_handler_enabled=True,
+    )
+    payload = {
+        "type": "ask_user",
+        "question": "Which object?",
+        "reason": "The target is ambiguous.",
+        "intent": _intent(),
+    }
+
+    with pytest.raises(AgentActionParseError) as captured:
+        parse_agent_actions(
+            ModelResponse(text=json.dumps(payload)),
+            allowed_actions=inactive,
+        )
+    assert captured.value.code == "ACTION_SCHEMA_MISMATCH"
+
+    batch = parse_agent_actions(
+        ModelResponse(text=json.dumps(payload)),
+        allowed_actions=active,
+    )
+    assert isinstance(batch.actions[0], AskUserAction)
+
+
+def test_response_format_source_is_explicit_and_actions_are_equivalent() -> None:
+    plain = _parse({"type": "final", "content": "hello"})
+    schema = _parse(
+        {"type": "final", "content": "hello"},
+        response_format_type="json_schema",
+    )
+
+    assert plain.actions == schema.actions
+    assert plain.source_format == "json_object"
+    assert schema.source_format == "json_schema"
+
+
+def test_schema_and_prompt_are_centralized_on_the_active_contract() -> None:
+    kinds = frozenset({AgentActionKind.FINAL, AgentActionKind.TOOL_CALL})
+    schema = agent_action_json_schema(kinds)
+    response_format = agent_action_response_format(kinds)
+    prompt = agent_action_protocol_instruction(kinds)
+
+    rendered = json.dumps(schema)
+    assert "FinalActionInput" in rendered
+    assert "ToolCallActionInput" in rendered
+    assert "AskUserActionInput" not in rendered
+    assert response_format["type"] == "json_schema"
+    assert '{"type":"final","content":"最终答案"}' in prompt
+    assert '{"type":"tool_call","tool_name":"tool_name","arguments":{}}' in prompt
+    assert '{"final":{"content":"..."}}' in prompt
+    assert '{"answer":"..."}' in prompt

@@ -365,7 +365,11 @@ class ProviderOnboardingCoordinator:
             "locations": [{"key": "custom", "base_url": base_url, "default": True}],
             "discovery": discovery,
             "recommended_models": [],
-            "capabilities": {"streaming": True, "tools": True},
+            "capabilities": {
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
             "custom": True,
         }
 

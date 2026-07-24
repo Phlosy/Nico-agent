@@ -78,7 +78,7 @@ def _candidate(*, model: str | None = "model-a") -> CandidateConfiguration:
         base_url="https://api.openai.com/v1",
         credential_ref="env:NICO_MODEL_SECRET_TEST",
         model=model,
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
 

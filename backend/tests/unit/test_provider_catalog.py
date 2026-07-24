@@ -32,7 +32,7 @@ def test_catalog_contains_the_versioned_safe_provider_baseline() -> None:
     catalog = get_provider_catalog()
 
     assert catalog.schema_version == 1
-    assert catalog.catalog_revision == "2026-07-20"
+    assert catalog.catalog_revision == "2026-07-24"
     assert {provider.key for provider in catalog.providers} == EXPECTED_PROVIDER_KEYS
     assert {provider.protocol for provider in catalog.providers} == {
         "openai_compatible",
@@ -46,10 +46,19 @@ def test_catalog_contains_the_versioned_safe_provider_baseline() -> None:
         assert all(location.base_url.startswith("https://") for location in provider.locations)
         assert "secret" not in provider.model_dump_json().lower()
 
+    deepseek = next(item for item in catalog.providers if item.key == "deepseek")
     assert {
         "deepseek-v4-flash",
         "deepseek-v4-pro",
-    } <= set(next(item for item in catalog.providers if item.key == "deepseek").recommended_models)
+    } <= set(deepseek.recommended_models)
+    assert deepseek.capabilities == {
+        "streaming": True,
+        "native_tool_calling": True,
+        "json_object": True,
+    }
+    assert "json_schema" not in deepseek.capabilities
+    assert all("tools" not in provider.capabilities for provider in catalog.providers)
+    assert all("structured_output" not in provider.capabilities for provider in catalog.providers)
     assert all(len(provider.recommended_models) >= 2 for provider in catalog.providers)
 
 
@@ -65,7 +74,7 @@ def test_custom_provider_accepts_an_approved_local_http_gateway(
         credential_ref="secret:providers/custom-local-ollama",
         model="qwen3:8b",
         provider_options={"nico_custom_display_name": "Local Ollama"},
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
     ProviderOnboardingService._validate_candidate(candidate)
@@ -79,7 +88,7 @@ def test_custom_provider_rejects_a_credential_owned_by_another_route() -> None:
         credential_ref="env:NICO_MODEL_SECRET_OPENAI",
         model="acme-chat",
         provider_options={"nico_custom_display_name": "Acme"},
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
     with pytest.raises(Exception, match="dedicated local credential"):
@@ -94,7 +103,7 @@ def test_custom_provider_rejects_unapproved_options() -> None:
         credential_ref="secret:providers/custom-acme",
         model="acme-chat",
         provider_options={"nico_custom_display_name": "Acme", "unsafe": "value"},
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
     with pytest.raises(Exception, match="unsupported options"):
@@ -110,7 +119,7 @@ def test_custom_provider_rejects_unapproved_plain_http_host() -> None:
             credential_ref="secret:providers/custom-lan",
             model="local-model",
             provider_options={"nico_custom_display_name": "LAN Model"},
-            catalog_revision="2026-07-20",
+            catalog_revision="2026-07-24",
         )
 
 
@@ -157,7 +166,7 @@ def test_candidate_hash_is_canonical_and_semantic() -> None:
         credential_ref="env:NICO_MODEL_SECRET_OPENAI",
         model="gpt-5.6-terra",
         provider_options={"region": "global", "workspace_id": None},
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
     reordered = CandidateConfiguration(
         provider_key="openai",
@@ -166,7 +175,7 @@ def test_candidate_hash_is_canonical_and_semantic() -> None:
         credential_ref="env:NICO_MODEL_SECRET_OPENAI",
         model="gpt-5.6-terra",
         provider_options={"workspace_id": None, "region": "global"},
-        catalog_revision="2026-07-20",
+        catalog_revision="2026-07-24",
     )
 
     assert canonical_candidate_hash(first) == canonical_candidate_hash(reordered)
@@ -193,7 +202,7 @@ def test_candidate_rejects_unsafe_metadata(field: str, value: str) -> None:
         "credential_ref": "env:NICO_MODEL_SECRET_OPENAI",
         "model": "gpt-5.6-terra",
         "provider_options": {},
-        "catalog_revision": "2026-07-20",
+        "catalog_revision": "2026-07-24",
     }
     payload[field] = value
 

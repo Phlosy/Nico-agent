@@ -102,7 +102,11 @@ async def _seed_existing_agent(database: Database):
             base_url="https://models.example/v1",
             credential_ref="env:NICO_MODEL_SECRET_TEST",
             allowed_models=["test-model"],
-            capabilities={"streaming": True, "tools": True},
+            capabilities={
+                "streaming": True,
+                "native_tool_calling": True,
+                "json_object": True,
+            },
             verified_probe_id=model_probe.id,
             verified_at=now,
         )

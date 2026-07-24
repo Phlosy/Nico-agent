@@ -90,7 +90,13 @@ class SequencedToolModelProvider:
     name = "openai_compatible"
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset(
+            {
+                ModelCapability.STREAMING,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+            }
+        )
 
     async def stream(self, request):
         observations = sum(message.role == "tool" for message in request.messages)
@@ -147,7 +153,13 @@ class WebSearchModelProvider:
         self.requests = []
 
     def describe_capabilities(self):
-        return frozenset({ModelCapability.STREAMING, ModelCapability.TOOLS})
+        return frozenset(
+            {
+                ModelCapability.STREAMING,
+                ModelCapability.NATIVE_TOOL_CALLING,
+                ModelCapability.JSON_OBJECT,
+            }
+        )
 
     async def stream(self, request):
         self.requests.append(request)
@@ -243,7 +255,11 @@ async def test_native_react_persists_multi_round_tool_and_checkpoint_graph(tmp_p
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["react-model"],
-                capabilities={"streaming": True, "tools": True},
+                capabilities={
+                    "streaming": True,
+                    "native_tool_calling": True,
+                    "json_object": True,
+                },
             )
             session.add_all([project, agent, endpoint])
             await session.flush()
@@ -410,7 +426,11 @@ async def test_native_react_observes_web_search_with_platform_tool_call_id() -> 
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["web-model"],
-                capabilities={"streaming": True, "tools": True},
+                capabilities={
+                    "streaming": True,
+                    "native_tool_calling": True,
+                    "json_object": True,
+                },
             )
             session.add_all([project, agent, endpoint])
             await session.flush()
@@ -547,7 +567,11 @@ async def test_sensitive_tool_approval_suspends_decides_and_recovers_exactly_onc
                 base_url="https://models.example/v1",
                 credential_ref="env:NICO_MODEL_SECRET_TEST",
                 allowed_models=["react-model"],
-                capabilities={"streaming": True, "tools": True},
+                capabilities={
+                    "streaming": True,
+                    "native_tool_calling": True,
+                    "json_object": True,
+                },
             )
             session.add_all([project, agent, endpoint])
             await session.flush()

@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class ModelCapability(StrEnum):
     STREAMING = "streaming"
-    TOOLS = "tools"
-    STRUCTURED_OUTPUT = "structured_output"
+    JSON_OBJECT = "json_object"
+    JSON_SCHEMA = "json_schema"
+    NATIVE_TOOL_CALLING = "native_tool_calling"
 
 
 class ModelStreamEventType(StrEnum):
@@ -92,7 +93,7 @@ class ModelResponse(BaseModel):
 
     text: str = ""
     tool_calls: tuple[ModelToolCall, ...] = ()
-    structured_output: bool = False
+    response_format_type: Literal["none", "json_object", "json_schema"] = "none"
     finish_reason: str | None = None
     usage: ModelUsage = Field(default_factory=ModelUsage)
     provider_request_id: str | None = None

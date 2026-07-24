@@ -91,7 +91,7 @@ def _ask_batch():
                     },
                 }
             ),
-            structured_output=True,
+            response_format_type="json_schema",
         )
     )
 

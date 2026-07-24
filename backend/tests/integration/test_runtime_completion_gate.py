@@ -74,7 +74,7 @@ def _final_batch(*, answered: bool, requires_user: bool, content: str):
                     },
                 }
             ),
-            structured_output=True,
+            response_format_type="json_schema",
         )
     )
 
@@ -101,7 +101,7 @@ async def _seed_leased_direct_run(database: Database) -> tuple[RunClaim, str]:
             base_url="https://models.example/v1",
             credential_ref="env:NICO_MODEL_SECRET_COMPLETION_TEST",
             allowed_models=["completion-model"],
-            capabilities={"streaming": True, "structured_output": True},
+            capabilities={"streaming": True, "json_schema": True},
         )
         session.add_all([project, agent, endpoint])
         await session.flush()
@@ -169,7 +169,7 @@ async def _seed_leased_direct_run(database: Database) -> tuple[RunClaim, str]:
         await session.flush()
         runtime.current_context_snapshot_id = context.id
         for sequence, call_key in enumerate(
-            ("model:1", "semantic-final-correction:direct:1"),
+            ("model:1", "completion-gate-correction:direct:1"),
             start=1,
         ):
             session.add_all(
@@ -213,7 +213,7 @@ async def _seed_leased_direct_run(database: Database) -> tuple[RunClaim, str]:
 
 
 @pytest.mark.asyncio
-async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent() -> None:
+async def test_completion_gate_verdict_and_correction_are_durable_and_idempotent() -> None:
     settings = Settings(environment="test", _env_file=None)
     engine = create_async_engine(settings.resolved_database_url)
     database = Database(engine)
@@ -231,14 +231,14 @@ async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent(
         )
         source_verdict = evaluate_final_action(
             source.actions[0],
-            CompletionGateFacts(),
+            CompletionGateFacts(pending_user_input_count=1),
         )
         corrected_verdict = evaluate_final_action(
             corrected.actions[0],
             CompletionGateFacts(),
         )
         assert source_verdict.accepted is False
-        assert source_verdict.reason_code == "USER_RESPONSE_REQUIRED"
+        assert source_verdict.reason_code == "PENDING_USER_INPUT"
         assert corrected_verdict.accepted is True
 
         service = RuntimeExecutionService(database)
@@ -256,12 +256,12 @@ async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent(
             sequence=2,
             type=RuntimeEventType.ACTION_BATCH_CREATED,
             payload={
-                "call_key": "semantic-final-correction:direct:1",
-                "run_step_key": "semantic-final-correction:direct:1",
+                "call_key": "completion-gate-correction:direct:1",
+                "run_step_key": "completion-gate-correction:direct:1",
                 "parse_revision": 1,
                 "batch": corrected.model_dump(mode="json"),
                 "repair": {
-                    "kind": "semantic_final_correction",
+                    "kind": "completion_gate_correction",
                     "ordinal": 1,
                     "reason_code": source_verdict.reason_code,
                     "observation_ref": f"agent_action_batch:{source.content_hash}",
@@ -283,8 +283,8 @@ async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent(
         async def block_invalid(action, _ordinal):
             return RuntimeActionOutcome(
                 status="blocked",
-                outcome_ref=f"semantic_completion:{source_verdict.reason_code}",
-                observation_ref=f"semantic_completion:{action.action_id}",
+                outcome_ref=f"completion_gate:{source_verdict.reason_code}",
+                observation_ref=f"completion_gate:{action.action_id}",
                 value=source_verdict.corrective_observation(),
             )
 
@@ -292,7 +292,7 @@ async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent(
             return RuntimeActionOutcome(
                 status="succeeded",
                 outcome_ref=f"final:{action.action_id}",
-                observation_ref="model_call:semantic-final-correction:direct:1",
+                observation_ref="model_call:completion-gate-correction:direct:1",
                 value={"content": action.content},
             )
 
@@ -332,10 +332,10 @@ async def test_semantic_final_verdict_and_correction_are_durable_and_idempotent(
                 "answered_user_intent": False,
                 "requires_user_response": True,
             }
-            assert actions[0].outcome_ref == "semantic_completion:USER_RESPONSE_REQUIRED"
+            assert actions[0].outcome_ref == "completion_gate:PENDING_USER_INPUT"
             assert repair_count == 1
             assert repair is not None
-            assert repair.kind == "semantic_final_correction"
+            assert repair.kind == "completion_gate_correction"
             assert repair.source_batch_id == batches[0].id
             assert repair.result_batch_id == batches[1].id
     finally:

@@ -318,7 +318,7 @@ class FakeProviderClient(FakeClient):
     def provider_catalog(self):
         return {
             "schema_version": 1,
-            "catalog_revision": "2026-07-20",
+            "catalog_revision": "2026-07-24",
             "providers": [
                 {
                     "key": "openai",

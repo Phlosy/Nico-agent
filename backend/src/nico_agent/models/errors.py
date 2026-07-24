@@ -41,6 +41,15 @@ class ModelProtocolError(ModelError):
         super().__init__("MODEL_PROTOCOL_ERROR", message)
 
 
+class AgentActionCorrectionExhausted(ModelError):
+    def __init__(self, details: dict[str, object]) -> None:
+        super().__init__(
+            "AGENT_ACTION_CORRECTION_EXHAUSTED",
+            "the model repeated an invalid AgentAction after one protocol correction",
+        )
+        self.details = details
+
+
 class ModelDiscoveryUnavailable(ModelError):
     def __init__(self, message: str = "model discovery is unavailable for this provider") -> None:
         super().__init__("MODEL_DISCOVERY_UNAVAILABLE", message)

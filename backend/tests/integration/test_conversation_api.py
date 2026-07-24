@@ -996,6 +996,72 @@ async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(app_clien
 
 
 @pytest.mark.asyncio
+async def test_agent_action_protocol_failure_does_not_block_the_next_turn(app_client) -> None:
+    app, client = app_client
+    _tenant_id, headers = await _bootstrap(client, "ConversationProtocolFailure")
+    project, agent, _version = await _project_and_agent(
+        client,
+        headers,
+        mock={
+            "fail": True,
+            "error_code": "AGENT_ACTION_CORRECTION_EXHAUSTED",
+        },
+    )
+    conversation = await _create_conversation(
+        client,
+        headers,
+        project,
+        agent,
+        key="protocol-failure-queue",
+    )
+    turns = []
+    for index, message in enumerate(("你是什么模型", "你有哪些工具"), start=1):
+        response = await client.post(
+            f"/api/v1/conversations/{conversation['id']}/turns",
+            json={"user_input": message},
+            headers={**headers, "Idempotency-Key": f"protocol-turn-{index}"},
+        )
+        assert response.status_code == 202, response.text
+        turns.append(response.json())
+
+    worker = RuntimeWorker(
+        app.state.database,
+        RuntimeProviderRegistry([MockRuntimeProvider()]),
+        worker_id="protocol-failure-queue-worker",
+        lease_seconds=5,
+        heartbeat_seconds=0.05,
+    )
+    assert await worker.execute_once() is True
+    first = (
+        await client.get(
+            f"/api/v1/conversation-turns/{turns[0]['id']}",
+            headers=headers,
+        )
+    ).json()
+    queue = (
+        await client.get(
+            f"/api/v1/conversations/{conversation['id']}/queue",
+            headers=headers,
+        )
+    ).json()
+
+    assert first["status"] == "failed"
+    assert first["error"]["code"] == "AGENT_ACTION_CORRECTION_EXHAUSTED"
+    assert queue["state"] == "active"
+    assert queue["head_turn"]["id"] == turns[1]["id"]
+
+    assert await worker.execute_once() is True
+    second = (
+        await client.get(
+            f"/api/v1/conversation-turns/{turns[1]['id']}",
+            headers=headers,
+        )
+    ).json()
+    assert second["status"] == "failed"
+    assert second["error"]["code"] == "AGENT_ACTION_CORRECTION_EXHAUSTED"
+
+
+@pytest.mark.asyncio
 async def test_failed_conversation_turn_retries_with_frozen_version(app_client) -> None:
     app, client = app_client
     tenant_id, headers = await _bootstrap(client, "ConversationRetry")
