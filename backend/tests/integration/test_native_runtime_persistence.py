@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from uuid import uuid4
 
@@ -55,7 +56,10 @@ class FakeModelProvider:
 
     async def stream(self, request):
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
-        yield ModelStreamEvent(type=ModelStreamEventType.TEXT_DELTA, text_delta="native")
+        yield ModelStreamEvent(
+            type=ModelStreamEventType.TEXT_DELTA,
+            text_delta=_final_action("native"),
+        )
         yield ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,
             finish_reason="stop",
@@ -67,6 +71,36 @@ class FakeModelProvider:
             ),
             provider_request_id="fake-request-1",
         )
+
+
+def _final_action(content: str) -> str:
+    return json.dumps(
+        {
+            "type": "final",
+            "content": content,
+            "intent": {
+                "interpreted_intent": "Answer the current task",
+                "confidence": 0.95,
+                "candidates": [
+                    {
+                        "candidate_id": "answer",
+                        "intent": "Answer the current task",
+                        "confidence": 0.95,
+                    }
+                ],
+                "ambiguity": 0.05,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+            "completion": {
+                "answered_user_intent": True,
+                "requires_user_response": False,
+            },
+        },
+        separators=(",", ":"),
+    )
 
 
 @pytest.mark.asyncio
@@ -313,5 +347,16 @@ async def test_conversation_compaction_freezes_summary_and_selects_bounded_conte
             assert snapshot.conversation_summary_hash == hashlib.sha256(b"native").hexdigest()
             assert snapshot.token_budget is None
             assert "conversation_summary" in str(snapshot.rendered_messages)
+            assert snapshot.schema_version == 2
+            assert [item["role"] for item in snapshot.rendered_messages] == [
+                "system",
+                "user",
+                "user",
+            ]
+            assert snapshot.rendered_messages[-1]["content"] == "continue beta"
+            assert not any(
+                item["role"] == "assistant" and item["content"] == "native"
+                for item in snapshot.rendered_messages
+            )
     finally:
         await engine.dispose()

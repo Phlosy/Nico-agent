@@ -27,7 +27,12 @@ from nico_agent.api_schemas import (
 )
 from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database, TenantContext
-from nico_agent.domain.errors import AccessDenied, DomainConflict, ResourceNotFound
+from nico_agent.domain.errors import (
+    AccessDenied,
+    DomainConflict,
+    InvalidStateTransition,
+    ResourceNotFound,
+)
 from nico_agent.domain.models import (
     Agent,
     AgentVersion,
@@ -688,6 +693,10 @@ class ControlPlaneService:
     ) -> Run:
         async with self.database.tenant_transaction(context) as session:
             run = await self._run(session, context, run_id, for_update=True)
+            if command.target is RunStatus.WAITING_FOR_USER_INPUT:
+                # This durable wait is owned only by UserInputService, which
+                # atomically binds it to one dispatched AskUserAction/request.
+                raise InvalidStateTransition("run", run.status, command.target.value)
             now = datetime.now(UTC)
             event_type = {
                 RunStatus.PLANNING: "RunPlanningStarted",

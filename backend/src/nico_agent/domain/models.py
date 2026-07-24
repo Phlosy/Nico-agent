@@ -31,6 +31,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from nico_agent.database import Base
 from nico_agent.domain.states import (
+    AgentActionBatchStatus,
+    AgentActionStatus,
     AgentStatus,
     AgentVersionStatus,
     ApprovalStatus,
@@ -61,6 +63,7 @@ from nico_agent.domain.states import (
     ToolApprovalStatus,
     ToolCallStatus,
     ToolDefinitionStatus,
+    UserInputRequestStatus,
 )
 
 
@@ -2099,6 +2102,404 @@ class RunStep(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class AgentActionBatch(Base, TimestampMixin):
+    """One complete provider-neutral decision batch for a terminal ModelCall."""
+
+    __tablename__ = "agent_action_batches"
+    __table_args__ = (
+        CheckConstraint("schema_version > 0", name="ck_agent_action_batches_schema_version"),
+        CheckConstraint("parse_revision > 0", name="ck_agent_action_batches_parse_revision"),
+        CheckConstraint("action_count > 0", name="ck_agent_action_batches_action_count"),
+        CheckConstraint(
+            "dispatch_cursor >= 0 AND dispatch_cursor <= action_count",
+            name="ck_agent_action_batches_dispatch_cursor",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'dispatching', 'completed', 'failed')",
+            name="ck_agent_action_batches_status",
+        ),
+        CheckConstraint(
+            "source_format IN "
+            "('structured_json', 'plain_json', 'provider_tool_calls', 'legacy_plain_text')",
+            name="ck_agent_action_batches_source_format",
+        ),
+        CheckConstraint("length(batch_key) = 64", name="ck_agent_action_batches_key"),
+        CheckConstraint("length(response_hash) = 64", name="ck_agent_action_batches_response_hash"),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "runtime_session_id"],
+            ["runtime_sessions.tenant_id", "runtime_sessions.run_id", "runtime_sessions.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "context_snapshot_id"],
+            ["context_snapshots.tenant_id", "context_snapshots.run_id", "context_snapshots.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_context",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "model_call_id"],
+            ["model_calls.tenant_id", "model_calls.run_id", "model_calls.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_model_call",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "run_step_id"],
+            ["run_steps.tenant_id", "run_steps.run_id", "run_steps.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_run_step",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "replay_of_batch_id"],
+            [
+                "agent_action_batches.tenant_id",
+                "agent_action_batches.run_id",
+                "agent_action_batches.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_agent_action_batches_replay_of",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_action_batches_tenant_id_id"),
+        UniqueConstraint("tenant_id", "run_id", "id", name="uq_agent_action_batches_tenant_run_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "model_call_id",
+            name="uq_agent_action_batches_model_call",
+        ),
+        Index(
+            "ix_agent_action_batches_run_created",
+            "tenant_id",
+            "run_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    runtime_session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    context_snapshot_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    model_call_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_step_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    replay_of_batch_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    parse_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    batch_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_format: Mapped[str] = mapped_column(String(32), nullable=False)
+    response_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispatch_cursor: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=AgentActionBatchStatus.PENDING.value
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class AgentActionRecord(Base, TimestampMixin):
+    """Immutable Action intent plus bounded dispatch outcome references."""
+
+    __tablename__ = "agent_actions"
+    __table_args__ = (
+        CheckConstraint("ordinal >= 0", name="ck_agent_actions_ordinal"),
+        CheckConstraint(
+            "kind IN ('final', 'tool_call', 'ask_user')",
+            name="ck_agent_actions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'dispatched', 'succeeded', 'failed', 'blocked')",
+            name="ck_agent_actions_status",
+        ),
+        CheckConstraint("length(action_id) = 64", name="ck_agent_actions_action_id"),
+        CheckConstraint(
+            "content_hash IS NULL OR length(content_hash) = 64",
+            name="ck_agent_actions_content_hash",
+        ),
+        CheckConstraint(
+            "arguments_hash IS NULL OR length(arguments_hash) = 64",
+            name="ck_agent_actions_arguments_hash",
+        ),
+        CheckConstraint(
+            "question_hash IS NULL OR length(question_hash) = 64",
+            name="ck_agent_actions_question_hash",
+        ),
+        CheckConstraint(
+            "reason_hash IS NULL OR length(reason_hash) = 64",
+            name="ck_agent_actions_reason_hash",
+        ),
+        CheckConstraint(
+            "octet_length(intent_redacted::text) <= 32768",
+            name="ck_agent_actions_intent_bound",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "batch_id"],
+            [
+                "agent_action_batches.tenant_id",
+                "agent_action_batches.run_id",
+                "agent_action_batches.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_agent_actions_batch",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_actions_tenant_id_id"),
+        UniqueConstraint("tenant_id", "run_id", "id", name="uq_agent_actions_tenant_run_id"),
+        UniqueConstraint(
+            "tenant_id", "run_id", "batch_id", "ordinal", name="uq_agent_actions_batch_ordinal"
+        ),
+        UniqueConstraint(
+            "tenant_id", "run_id", "batch_id", "action_id", name="uq_agent_actions_batch_action"
+        ),
+        Index("ix_agent_actions_batch", "tenant_id", "run_id", "batch_id", "ordinal"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    action_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_call_id: Mapped[str | None] = mapped_column(String(300))
+    tool_name: Mapped[str | None] = mapped_column(String(120))
+    intent_redacted: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    completion: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    arguments_hash: Mapped[str | None] = mapped_column(String(64))
+    question_hash: Mapped[str | None] = mapped_column(String(64))
+    reason_hash: Mapped[str | None] = mapped_column(String(64))
+    compatibility_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=AgentActionStatus.PENDING.value
+    )
+    outcome_ref: Mapped[str | None] = mapped_column(String(500))
+    observation_ref: Mapped[str | None] = mapped_column(String(500))
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class UserInputRequest(Base, TimestampMixin):
+    """One protected answer boundary for a dispatched AskUserAction."""
+
+    __tablename__ = "user_input_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('requested', 'answered', 'expired', 'cancelled')",
+            name="ck_user_input_requests_status",
+        ),
+        CheckConstraint("length(request_hash) = 64", name="ck_user_input_requests_hash"),
+        CheckConstraint("length(wake_key) = 64", name="ck_user_input_requests_wake_key"),
+        CheckConstraint(
+            "answer_hash IS NULL OR length(answer_hash) = 64",
+            name="ck_user_input_requests_answer_hash",
+        ),
+        CheckConstraint(
+            "octet_length(input_schema::text) <= 32768",
+            name="ck_user_input_requests_schema_bound",
+        ),
+        CheckConstraint(
+            "answer_payload IS NULL OR octet_length(answer_payload::text) <= 65536",
+            name="ck_user_input_requests_answer_bound",
+        ),
+        CheckConstraint(
+            "(status = 'requested' AND answer_payload IS NULL AND answer_hash IS NULL "
+            "AND answer_ref IS NULL AND answer_idempotency_key IS NULL "
+            "AND answered_by IS NULL AND answered_at IS NULL AND resolved_at IS NULL) OR "
+            "(status = 'answered' AND answer_payload IS NOT NULL AND answer_hash IS NOT NULL "
+            "AND answer_ref IS NOT NULL AND answer_idempotency_key IS NOT NULL "
+            "AND answered_by IS NOT NULL AND answered_at IS NOT NULL "
+            "AND resolved_at IS NOT NULL) OR "
+            "(status IN ('expired', 'cancelled') AND answer_payload IS NULL "
+            "AND answer_hash IS NULL AND answer_ref IS NULL "
+            "AND answer_idempotency_key IS NOT NULL AND answered_by IS NOT NULL "
+            "AND answered_at IS NULL AND resolved_at IS NOT NULL)",
+            name="ck_user_input_requests_resolution_shape",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_user_input_requests_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "runtime_session_id"],
+            ["runtime_sessions.tenant_id", "runtime_sessions.run_id", "runtime_sessions.id"],
+            ondelete="RESTRICT",
+            name="fk_user_input_requests_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "action_batch_id"],
+            [
+                "agent_action_batches.tenant_id",
+                "agent_action_batches.run_id",
+                "agent_action_batches.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_user_input_requests_batch",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "agent_action_id"],
+            ["agent_actions.tenant_id", "agent_actions.run_id", "agent_actions.id"],
+            ondelete="RESTRICT",
+            name="fk_user_input_requests_action",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_user_input_requests_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "agent_action_id",
+            name="uq_user_input_requests_action",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "wake_key",
+            name="uq_user_input_requests_wake_key",
+        ),
+        Index(
+            "uq_user_input_requests_active_run",
+            "tenant_id",
+            "run_id",
+            unique=True,
+            postgresql_where=text("status = 'requested'"),
+        ),
+        Index(
+            "ix_user_input_requests_reconcile",
+            "status",
+            "expires_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    runtime_session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    action_batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    agent_action_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    input_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    redacted_projection: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    wake_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=UserInputRequestStatus.REQUESTED.value
+    )
+    answer_payload: Mapped[Any | None] = mapped_column(JSONB)
+    answer_hash: Mapped[str | None] = mapped_column(String(64))
+    answer_ref: Mapped[str | None] = mapped_column(String(500))
+    answer_idempotency_key: Mapped[str | None] = mapped_column(String(200))
+    answered_by: Mapped[str | None] = mapped_column(String(200))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
+class AgentActionRepair(Base):
+    """Append-only relation between an Action decision and a bounded repair."""
+
+    __tablename__ = "agent_action_repairs"
+    __table_args__ = (
+        CheckConstraint("repair_ordinal > 0", name="ck_agent_action_repairs_ordinal"),
+        CheckConstraint(
+            "kind IN ('post_model_call_commit', 'parse_correction', "
+            "'clarification_correction', 'semantic_final_correction', 'replay')",
+            name="ck_agent_action_repairs_kind",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_repairs_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "runtime_session_id"],
+            ["runtime_sessions.tenant_id", "runtime_sessions.run_id", "runtime_sessions.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_repairs_session",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "source_model_call_id"],
+            ["model_calls.tenant_id", "model_calls.run_id", "model_calls.id"],
+            ondelete="RESTRICT",
+            name="fk_agent_action_repairs_source_model_call",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "source_batch_id"],
+            [
+                "agent_action_batches.tenant_id",
+                "agent_action_batches.run_id",
+                "agent_action_batches.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_agent_action_repairs_source_batch",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id", "result_batch_id"],
+            [
+                "agent_action_batches.tenant_id",
+                "agent_action_batches.run_id",
+                "agent_action_batches.id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_agent_action_repairs_result_batch",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_agent_action_repairs_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "source_model_call_id",
+            "kind",
+            "repair_ordinal",
+            name="uq_agent_action_repairs_source_kind_ordinal",
+        ),
+        Index(
+            "ix_agent_action_repairs_run_created",
+            "tenant_id",
+            "run_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    runtime_session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_model_call_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_batch_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    result_batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    repair_ordinal: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    reason_code: Mapped[str] = mapped_column(String(120), nullable=False)
+    observation_ref: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Plan(Base, TimestampMixin):

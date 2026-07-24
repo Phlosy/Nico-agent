@@ -58,6 +58,7 @@ class NicoNativeRuntimeProvider:
                 RuntimeCapability.COORDINATION,
                 RuntimeCapability.ARTIFACTS,
                 RuntimeCapability.INTERVENTIONS,
+                RuntimeCapability.USER_INPUT,
             }
         ),
         compatibility={

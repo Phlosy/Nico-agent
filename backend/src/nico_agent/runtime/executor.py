@@ -28,8 +28,9 @@ from nico_agent.runtime.contracts import (
 from nico_agent.runtime.errors import RuntimeLeaseLost
 from nico_agent.runtime.registry import RuntimeProviderRegistry
 from nico_agent.runtime.service import PreparedRuntime, RuntimeExecutionService
-from nico_agent.runtime.tools import GatewayRuntimeToolHandler
+from nico_agent.runtime.tools import GatewayRuntimeToolHandler, RunActionHandler
 from nico_agent.tools import ToolGateway
+from nico_agent.user_inputs.service import RunUserInputHandler, UserInputService
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,13 @@ class RuntimeWorker:
         )
         self.coordination_service = CoordinationService(database)
         self.intervention_service = ProjectInterventionService(database)
+        self.user_input_service = UserInputService(database)
         self.tool_gateway = tool_gateway
         self.artifact_service = artifact_service
 
     async def execute_once(self) -> bool:
         await self.database.reconcile_expired_tool_approvals()
+        await self.database.reconcile_user_input_requests()
         await self.database.reconcile_coordination_waiters()
         claim = await self.database.claim_next_run(self.worker_id, self.lease_seconds)
         if claim is None:
@@ -77,11 +80,25 @@ class RuntimeWorker:
         tool_handler: GatewayRuntimeToolHandler | None = None
         coordination_handler: RunCoordinationHandler | None = None
         artifact_handler: RunArtifactHandler | None = None
+        action_handler: RunActionHandler | None = None
+        user_input_handler: RunUserInputHandler | None = None
         try:
             prepared = await self.service.prepare_claim(
                 claim, worker_id=self.worker_id, registry=self.registry
             )
             provider = self.registry.get(prepared.provider_name)
+            if prepared.descriptor.implementation == "native":
+                action_handler = RunActionHandler(
+                    self.service,
+                    claim,
+                    worker_id=self.worker_id,
+                )
+            if RuntimeCapability.USER_INPUT in prepared.descriptor.capabilities:
+                user_input_handler = RunUserInputHandler(
+                    self.user_input_service,
+                    claim,
+                    worker_id=self.worker_id,
+                )
             if RuntimeCapability.COORDINATION in prepared.descriptor.capabilities:
                 coordination_handler = RunCoordinationHandler(
                     self.coordination_service,
@@ -123,6 +140,8 @@ class RuntimeWorker:
                 tool_handler=tool_handler,
                 coordination_handler=coordination_handler,
                 artifact_handler=artifact_handler,
+                action_handler=action_handler,
+                user_input_handler=user_input_handler,
             )
         except RuntimeLeaseLost:
             logger.info(
@@ -184,6 +203,8 @@ class RuntimeWorker:
         tool_handler: GatewayRuntimeToolHandler | None,
         coordination_handler: RunCoordinationHandler | None,
         artifact_handler: RunArtifactHandler | None,
+        action_handler: RunActionHandler | None,
+        user_input_handler: RunUserInputHandler | None,
     ) -> None:
         intervention_handler = (
             RunInterventionHandler(
@@ -211,6 +232,8 @@ class RuntimeWorker:
                         coordination_handler=coordination_handler,
                         artifact_handler=artifact_handler,
                         intervention_handler=intervention_handler,
+                        action_handler=action_handler,
+                        user_input_handler=user_input_handler,
                     ),
                 )
             else:
@@ -224,6 +247,8 @@ class RuntimeWorker:
                             coordination_handler=coordination_handler,
                             artifact_handler=artifact_handler,
                             intervention_handler=intervention_handler,
+                            action_handler=action_handler,
+                            user_input_handler=user_input_handler,
                         ),
                     )
             await stream_task

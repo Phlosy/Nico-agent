@@ -20,6 +20,9 @@ from nico_agent.coordination.policy import (
 from nico_agent.database import Database, RunClaim, TenantContext
 from nico_agent.domain.models import (
     Agent,
+    AgentActionBatch,
+    AgentActionRecord,
+    AgentActionRepair,
     AgentMessage,
     AgentVersion,
     Artifact,
@@ -45,8 +48,12 @@ from nico_agent.domain.models import (
     Task,
     Tenant,
     ToolApprovalRequest,
+    ToolCall,
+    UserInputRequest,
 )
 from nico_agent.domain.states import (
+    AgentActionBatchStatus,
+    AgentActionStatus,
     ConversationApprovalMode,
     ModelCallStatus,
     RunStatus,
@@ -58,6 +65,11 @@ from nico_agent.projects.interventions import ProjectInterventionService
 from nico_agent.projects.metadata import is_managed_project
 from nico_agent.projects.orchestration import ProjectOrchestrationService
 from nico_agent.runtime.contracts import (
+    ContextSeed,
+    ConversationContextMessage,
+    RuntimeActionBatchState,
+    RuntimeActionOutcome,
+    RuntimeActionState,
     RuntimeCapability,
     RuntimeEvent,
     RuntimeEventType,
@@ -94,6 +106,61 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.TIMED_OUT,
 }
 LEGACY_PROVIDER_RESOLVER_REMOVAL_VERSION = "0.4.0"
+
+
+def _merge_conversation_context(
+    seed: ContextSeed,
+    conversation_context: dict[str, Any],
+) -> ContextSeed:
+    """Attach one frozen Conversation selection without changing legacy rendering."""
+
+    source_refs = tuple(
+        dict.fromkeys(
+            (
+                *seed.source_refs,
+                *(str(item) for item in conversation_context.get("source_refs", [])),
+            )
+        )
+    )
+    untrusted_context = seed.untrusted_context + tuple(
+        conversation_context.get("untrusted_context", [])
+    )
+    update: dict[str, Any] = {
+        "source_refs": source_refs,
+        "untrusted_context": untrusted_context,
+        "effect_metadata": {
+            **seed.effect_metadata,
+            "conversation_context": conversation_context,
+        },
+    }
+    if conversation_context.get("schema_version") == 2:
+        raw_messages = conversation_context.get("conversation_messages", [])
+        if not isinstance(raw_messages, list):
+            raise ValueError("conversation messages must be a list")
+        update.update(
+            {
+                "schema_version": 3,
+                "conversation_messages": tuple(
+                    ConversationContextMessage.model_validate(item) for item in raw_messages
+                ),
+                "untrusted_context": tuple(
+                    _without_conversation_message(item) for item in untrusted_context
+                ),
+            }
+        )
+    return seed.model_copy(update=update)
+
+
+def _without_conversation_message(segment: dict[str, Any]) -> dict[str, Any]:
+    if segment.get("source") != "task:input":
+        return segment
+    content = segment.get("content")
+    if not isinstance(content, dict) or not isinstance(content.get("conversation"), dict):
+        return segment
+    return {
+        **segment,
+        "content": {key: value for key, value in content.items() if key != "message"},
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,17 +491,9 @@ class RuntimeExecutionService:
                     runtime_session.revision += 1
             context_seed = prepared_knowledge.context_seed
             if conversation_context is not None:
-                context_seed = context_seed.model_copy(
-                    update={
-                        "source_refs": context_seed.source_refs
-                        + tuple(conversation_context.get("source_refs", [])),
-                        "untrusted_context": context_seed.untrusted_context
-                        + tuple(conversation_context.get("untrusted_context", [])),
-                        "effect_metadata": {
-                            **context_seed.effect_metadata,
-                            "conversation_context": conversation_context,
-                        },
-                    }
+                context_seed = _merge_conversation_context(
+                    context_seed,
+                    conversation_context,
                 )
 
             if RunStatus(run.status) is RunStatus.PENDING:
@@ -495,6 +554,46 @@ class RuntimeExecutionService:
                     or 0,
                     "usage": self._recovered_usage(model_calls),
                 }
+                action_batch_by_call = {
+                    batch.model_call_id: batch
+                    for batch in await session.scalars(
+                        select(AgentActionBatch).where(
+                            AgentActionBatch.tenant_id == claim.tenant_id,
+                            AgentActionBatch.run_id == run.id,
+                        )
+                    )
+                }
+                recoverable_action_calls = {
+                    call.call_key: {
+                        "request_hash": call.request_hash,
+                        "response_redacted": call.response_redacted,
+                        "response_hash": call.response_hash,
+                        "provider_request_id": call.provider_request_id,
+                        "usage": call.usage,
+                        "usage_status": call.usage_status,
+                        "cost": call.cost,
+                        "cost_status": call.cost_status,
+                        "pricing_revision": call.pricing_revision,
+                        "action_batch_exists": call.id in action_batch_by_call,
+                        "action_batch_key": (
+                            action_batch_by_call[call.id].batch_key
+                            if call.id in action_batch_by_call
+                            else None
+                        ),
+                        "action_dispatch_cursor": (
+                            action_batch_by_call[call.id].dispatch_cursor
+                            if call.id in action_batch_by_call
+                            else 0
+                        ),
+                    }
+                    for call in model_calls
+                    if call.status == ModelCallStatus.COMPLETED.value
+                    and isinstance(call.request_redacted.get("agent_action"), dict)
+                    and call.request_redacted["agent_action"].get("expected") is True
+                    and isinstance(call.response_redacted, dict)
+                }
+                if recoverable_action_calls:
+                    recovery_state["recoverable_action_calls"] = recoverable_action_calls
                 latest_plan = await session.scalar(
                     select(Plan)
                     .where(Plan.tenant_id == claim.tenant_id, Plan.run_id == run.id)
@@ -566,6 +665,18 @@ class RuntimeExecutionService:
             budgets.setdefault("max_iterations", run.max_steps)
             if run.token_budget is not None:
                 budgets.setdefault("token_limit", run.token_budget)
+            pending_user_input_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(UserInputRequest)
+                    .where(
+                        UserInputRequest.tenant_id == run.tenant_id,
+                        UserInputRequest.run_id == run.id,
+                        UserInputRequest.status == "requested",
+                    )
+                )
+                or 0
+            )
             request = RuntimeSessionRequest(
                 tenant_id=claim.tenant_id,
                 run_id=run.id,
@@ -584,7 +695,10 @@ class RuntimeExecutionService:
                 run_config=version.run_config,
                 budgets=budgets,
                 execution_mode=execution_mode,
-                execution_manifest=runtime_session.execution_manifest,
+                execution_manifest={
+                    **runtime_session.execution_manifest,
+                    "completion_pending_user_input_count": pending_user_input_count,
+                },
                 context_seed=context_seed,
                 model_endpoint_snapshot=runtime_session.model_endpoint_snapshot,
                 coordination_policy_snapshot=runtime_session.coordination_policy_snapshot,
@@ -767,6 +881,189 @@ class RuntimeExecutionService:
             run.heartbeat_at = now
             run.lease_expires_at = now + timedelta(seconds=lease_seconds)
             return True
+
+    async def get_agent_action_batch_state(
+        self,
+        claim: RunClaim,
+        *,
+        worker_id: str,
+        batch_key: str,
+    ) -> RuntimeActionBatchState | None:
+        """Read one committed batch under the active lease.
+
+        The Native provider emits the batch before asking for this read. The
+        event forwarder and this method therefore form an explicit commit
+        barrier before any Action side effect can begin.
+        """
+
+        context = self._context(claim, worker_id)
+        async with self.database.tenant_transaction(context) as session:
+            run = await self._owned_run(session, claim, worker_id)
+            batch = await session.scalar(
+                select(AgentActionBatch).where(
+                    AgentActionBatch.tenant_id == run.tenant_id,
+                    AgentActionBatch.run_id == run.id,
+                    AgentActionBatch.batch_key == batch_key,
+                )
+            )
+            if batch is None:
+                return None
+            return await self._agent_action_batch_state(session, run, batch)
+
+    async def begin_agent_action(
+        self,
+        claim: RunClaim,
+        *,
+        worker_id: str,
+        batch_key: str,
+        ordinal: int,
+        action_id: str,
+    ) -> RuntimeActionBatchState:
+        context = self._context(claim, worker_id)
+        async with self.database.tenant_transaction(context) as session:
+            run = await self._owned_run(session, claim, worker_id)
+            batch, action = await self._locked_agent_action(
+                session,
+                run,
+                batch_key=batch_key,
+                ordinal=ordinal,
+                action_id=action_id,
+            )
+            if (
+                batch.status
+                in {
+                    AgentActionBatchStatus.COMPLETED.value,
+                    AgentActionBatchStatus.FAILED.value,
+                }
+                or batch.dispatch_cursor != ordinal
+                or action.status != AgentActionStatus.PENDING.value
+            ):
+                raise ValueError("AgentAction is not the first unresolved pending Action")
+            now = datetime.now(UTC)
+            action.status = AgentActionStatus.DISPATCHED.value
+            action.dispatched_at = now
+            action.revision += 1
+            batch.status = AgentActionBatchStatus.DISPATCHING.value
+            batch.revision += 1
+            self._record_action_dispatch(
+                session,
+                context,
+                run,
+                batch,
+                action,
+                "AgentActionDispatchStarted",
+                "runtime.action.begin",
+            )
+            await session.flush()
+            return await self._agent_action_batch_state(session, run, batch)
+
+    async def complete_agent_action(
+        self,
+        claim: RunClaim,
+        *,
+        worker_id: str,
+        batch_key: str,
+        ordinal: int,
+        action_id: str,
+        outcome: RuntimeActionOutcome,
+    ) -> RuntimeActionBatchState:
+        context = self._context(claim, worker_id)
+        async with self.database.tenant_transaction(context) as session:
+            run = await self._owned_run(session, claim, worker_id)
+            batch, action = await self._locked_agent_action(
+                session,
+                run,
+                batch_key=batch_key,
+                ordinal=ordinal,
+                action_id=action_id,
+            )
+            if (
+                batch.status
+                not in {
+                    AgentActionBatchStatus.PENDING.value,
+                    AgentActionBatchStatus.DISPATCHING.value,
+                }
+                or batch.dispatch_cursor != ordinal
+                or action.status != AgentActionStatus.DISPATCHED.value
+            ):
+                raise ValueError("AgentAction outcome does not match the active dispatch cursor")
+            persisted_status = (
+                AgentActionStatus.FAILED.value if outcome.status == "unknown" else outcome.status
+            )
+            now = datetime.now(UTC)
+            action.status = persisted_status
+            action.outcome_ref = (
+                f"unknown:{outcome.outcome_ref or 'effect'}"
+                if outcome.status == "unknown"
+                else outcome.outcome_ref
+            )
+            action.observation_ref = outcome.observation_ref
+            action.completed_at = now
+            action.revision += 1
+            if outcome.status == "succeeded":
+                batch.dispatch_cursor = ordinal + 1
+                if batch.dispatch_cursor == batch.action_count:
+                    batch.status = AgentActionBatchStatus.COMPLETED.value
+                    batch.completed_at = now
+                else:
+                    batch.status = AgentActionBatchStatus.DISPATCHING.value
+            else:
+                batch.status = AgentActionBatchStatus.FAILED.value
+                batch.completed_at = now
+            batch.revision += 1
+            self._record_action_dispatch(
+                session,
+                context,
+                run,
+                batch,
+                action,
+                "AgentActionDispatchCompleted",
+                "runtime.action.complete",
+            )
+            await session.flush()
+            return await self._agent_action_batch_state(session, run, batch)
+
+    async def release_agent_action(
+        self,
+        claim: RunClaim,
+        *,
+        worker_id: str,
+        batch_key: str,
+        ordinal: int,
+        action_id: str,
+    ) -> RuntimeActionBatchState:
+        """Release an Action whose handler suspended before executing its effect."""
+
+        context = self._context(claim, worker_id)
+        async with self.database.tenant_transaction(context) as session:
+            run = await self._owned_run(session, claim, worker_id)
+            batch, action = await self._locked_agent_action(
+                session,
+                run,
+                batch_key=batch_key,
+                ordinal=ordinal,
+                action_id=action_id,
+            )
+            if (
+                batch.dispatch_cursor != ordinal
+                or action.status != AgentActionStatus.DISPATCHED.value
+            ):
+                raise ValueError("only the active dispatched AgentAction can be released")
+            action.status = AgentActionStatus.PENDING.value
+            action.revision += 1
+            batch.status = AgentActionBatchStatus.DISPATCHING.value
+            batch.revision += 1
+            self._record_action_dispatch(
+                session,
+                context,
+                run,
+                batch,
+                action,
+                "AgentActionDispatchReleased",
+                "runtime.action.release",
+            )
+            await session.flush()
+            return await self._agent_action_batch_state(session, run, batch)
 
     async def complete_claim(
         self,
@@ -1022,6 +1319,35 @@ class RuntimeExecutionService:
                         event_type="RunWoken",
                         action="runtime.suspend.fast_wake",
                     )
+            elif wake_type == "user_input":
+                request_id = UUID(str(wake_condition["request_id"]))
+                user_input = await session.scalar(
+                    select(UserInputRequest).where(
+                        UserInputRequest.tenant_id == run.tenant_id,
+                        UserInputRequest.run_id == run.id,
+                        UserInputRequest.id == request_id,
+                    )
+                )
+                if user_input is None:
+                    raise ValueError("user input suspension has no durable request")
+                runtime_session.loop_state = RuntimeLoopState.WAITING_FOR_USER_INPUT.value
+                if (
+                    user_input.status != "requested"
+                    and RunStatus(run.status) is RunStatus.WAITING_FOR_USER_INPUT
+                ):
+                    await RunLifecycleAuthority.transition(
+                        session,
+                        context,
+                        run,
+                        target=RunStatus.RUNNING,
+                        reason="user_input_resolved_before_suspend",
+                        metadata={
+                            "request_id": str(user_input.id),
+                            "request_status": user_input.status,
+                        },
+                        event_type="RunWoken",
+                        action="runtime.suspend.fast_wake",
+                    )
             else:
                 if RunStatus(run.status) is not RunStatus.WAITING_FOR_SUBAGENT:
                     await RunLifecycleAuthority.transition(
@@ -1042,7 +1368,7 @@ class RuntimeExecutionService:
             # Checkpoint persistence is a separate Run fact revision. Lifecycle
             # revisions change only when the coarse status changes.
             run.revision += 1
-            if wake_type == "tool_approval":
+            if wake_type in {"tool_approval", "user_input"}:
                 # An approval decision can wake the Run before this transaction
                 # acquires its lock. The wake preserves the live handshake lease
                 # so persistence above remains authorized; release it only after
@@ -1054,7 +1380,11 @@ class RuntimeExecutionService:
                 event_type=(
                     "ToolApprovalWaitSuspended"
                     if wake_type == "tool_approval"
-                    else "RuntimeSuspended"
+                    else (
+                        "UserInputWaitSuspended"
+                        if wake_type == "user_input"
+                        else "RuntimeSuspended"
+                    )
                 ),
                 aggregate_type="runtime_session",
                 aggregate_id=runtime_session.id,
@@ -2120,6 +2450,13 @@ class RuntimeExecutionService:
                     "assistant" if payload.get("visibility") == "assistant" else "internal"
                 ),
             }
+        if event.type is RuntimeEventType.ACTION_BATCH_CREATED:
+            return await cls._project_agent_action_batch(
+                session,
+                run,
+                runtime_session,
+                event,
+            )
         if event.type is RuntimeEventType.TOOL_CALL_COMPLETED:
             run_step_id = payload.get("run_step_id")
             if run_step_id:
@@ -2187,6 +2524,559 @@ class RuntimeExecutionService:
         if event.type is RuntimeEventType.EVALUATION_COMPLETED:
             return await cls._project_runtime_evaluation(session, run, event)
         return payload
+
+    @classmethod
+    async def _project_agent_action_batch(
+        cls,
+        session: AsyncSession,
+        run: Run,
+        runtime_session: RuntimeSession,
+        event: RuntimeEvent,
+    ) -> dict[str, Any]:
+        payload = event.payload
+        call_key = str(payload.get("call_key", ""))
+        model_call = await cls._model_call_for_key(session, run, call_key)
+        if model_call.status != ModelCallStatus.COMPLETED.value:
+            raise ValueError("AgentAction batch requires a completed ModelCall")
+        if model_call.context_snapshot_id != runtime_session.current_context_snapshot_id:
+            raise ValueError("AgentAction batch context does not match the terminal ModelCall")
+
+        batch_payload = payload.get("batch")
+        if not isinstance(batch_payload, dict):
+            raise ValueError("AgentAction batch payload must be an object")
+        actions = batch_payload.get("actions")
+        if not isinstance(actions, list) or not actions:
+            raise ValueError("AgentAction batch requires at least one Action")
+        batch_key = str(batch_payload.get("content_hash", ""))
+        if len(batch_key) != 64:
+            raise ValueError("AgentAction batch requires a deterministic content hash")
+        if len(actions) > 32:
+            raise ValueError("AgentAction batch exceeds the Action limit")
+
+        existing = await session.scalar(
+            select(AgentActionBatch).where(
+                AgentActionBatch.tenant_id == run.tenant_id,
+                AgentActionBatch.run_id == run.id,
+                AgentActionBatch.model_call_id == model_call.id,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.batch_key != batch_key
+                or existing.response_hash != model_call.response_hash
+                or existing.action_count != len(actions)
+            ):
+                raise ValueError("terminal ModelCall already has a different AgentAction batch")
+            await cls._ensure_action_repair(
+                session,
+                run,
+                runtime_session,
+                model_call,
+                existing,
+                payload,
+            )
+            return cls._public_action_batch(existing, actions=None, replayed=True)
+
+        run_step_key = str(payload.get("run_step_key", ""))
+        run_step = await session.scalar(
+            select(RunStep).where(
+                RunStep.tenant_id == run.tenant_id,
+                RunStep.run_id == run.id,
+                RunStep.step_key == run_step_key,
+            )
+        )
+        if run_step is None:
+            raise ValueError("AgentAction batch requires a persisted RunStep")
+
+        replay_of_batch_id = None
+        replay_of_call_key = payload.get("replay_of_call_key")
+        if replay_of_call_key:
+            replay_model_call = await cls._model_call_for_key(
+                session,
+                run,
+                str(replay_of_call_key),
+            )
+            replay_of_batch_id = await session.scalar(
+                select(AgentActionBatch.id).where(
+                    AgentActionBatch.tenant_id == run.tenant_id,
+                    AgentActionBatch.run_id == run.id,
+                    AgentActionBatch.model_call_id == replay_model_call.id,
+                )
+            )
+
+        batch = AgentActionBatch(
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            runtime_session_id=runtime_session.id,
+            context_snapshot_id=model_call.context_snapshot_id,
+            model_call_id=model_call.id,
+            run_step_id=run_step.id,
+            replay_of_batch_id=replay_of_batch_id,
+            schema_version=int(batch_payload.get("schema_version", 1)),
+            parse_revision=int(payload.get("parse_revision", 1)),
+            batch_key=batch_key,
+            source_format=str(batch_payload.get("source_format", "")),
+            response_hash=str(model_call.response_hash or ""),
+            action_count=len(actions),
+        )
+        session.add(batch)
+        await session.flush()
+
+        records: list[AgentActionRecord] = []
+        seen_ordinals: set[int] = set()
+        seen_action_ids: set[str] = set()
+        for ordinal, action_payload in enumerate(actions):
+            if not isinstance(action_payload, dict):
+                raise ValueError("AgentAction payload must be an object")
+            declared_ordinal = action_payload.get("position", ordinal)
+            if type(declared_ordinal) is not int or declared_ordinal < 0:
+                raise ValueError("AgentAction ordinal must be a non-negative integer")
+            action_id = str(action_payload.get("action_id", ""))
+            if (
+                declared_ordinal in seen_ordinals
+                or action_id in seen_action_ids
+                or len(action_id) != 64
+            ):
+                raise ValueError("AgentAction identities and ordinals must be unique")
+            seen_ordinals.add(declared_ordinal)
+            seen_action_ids.add(action_id)
+            record = cls._agent_action_record(
+                run,
+                batch,
+                declared_ordinal,
+                action_payload,
+            )
+            session.add(record)
+            records.append(record)
+        if seen_ordinals != set(range(len(actions))):
+            raise ValueError("AgentAction ordinals must be contiguous")
+        await session.flush()
+        await cls._ensure_action_repair(
+            session,
+            run,
+            runtime_session,
+            model_call,
+            batch,
+            payload,
+        )
+        runtime_session.loop_state = "dispatching"
+        return cls._public_action_batch(
+            batch,
+            actions=[cls._public_action(record) for record in records],
+            replayed=False,
+        )
+
+    @classmethod
+    def _agent_action_record(
+        cls,
+        run: Run,
+        batch: AgentActionBatch,
+        ordinal: int,
+        payload: dict[str, Any],
+    ) -> AgentActionRecord:
+        kind = str(payload.get("kind", ""))
+        if kind not in {"final", "tool_call", "ask_user"}:
+            raise ValueError("unsupported persisted AgentAction kind")
+        intent = payload.get("intent")
+        intent_redacted = cls._redacted_intent(intent if isinstance(intent, dict) else {})
+        completion = payload.get("completion")
+        completion_projection = (
+            {
+                "answered_user_intent": bool(completion.get("answered_user_intent")),
+                "requires_user_response": bool(completion.get("requires_user_response")),
+            }
+            if isinstance(completion, dict)
+            else {}
+        )
+        content = payload.get("content")
+        arguments = payload.get("arguments")
+        question = payload.get("question")
+        reason = payload.get("reason")
+        return AgentActionRecord(
+            tenant_id=run.tenant_id,
+            run_id=run.id,
+            batch_id=batch.id,
+            ordinal=ordinal,
+            action_id=str(payload["action_id"]),
+            kind=kind,
+            provider_call_id=cls._optional_string(payload.get("provider_call_id"), 300),
+            tool_name=cls._optional_string(payload.get("name"), 120),
+            intent_redacted=intent_redacted,
+            completion=completion_projection,
+            content_hash=cls._hash_json(content) if isinstance(content, str) else None,
+            arguments_hash=cls._hash_json(arguments) if isinstance(arguments, dict) else None,
+            question_hash=cls._hash_json(question) if isinstance(question, str) else None,
+            reason_hash=cls._hash_json(reason) if isinstance(reason, str) else None,
+            compatibility_mode=payload.get("compatibility_mode") is True,
+        )
+
+    @staticmethod
+    def _redacted_intent(intent: dict[str, Any]) -> dict[str, Any]:
+        candidates = intent.get("candidates")
+        safe_candidates = (
+            [
+                {
+                    "candidate_id": str(candidate.get("candidate_id", ""))[:120],
+                    "confidence": candidate.get("confidence"),
+                }
+                for candidate in candidates[:8]
+                if isinstance(candidate, dict)
+            ]
+            if isinstance(candidates, list)
+            else []
+        )
+        return {
+            "confidence": intent.get("confidence"),
+            "candidates": safe_candidates,
+            "candidate_count": len(safe_candidates),
+            "ambiguity": intent.get("ambiguity"),
+            "risk": intent.get("risk"),
+            "risk_reason_count": len(intent.get("risk_reasons", []))
+            if isinstance(intent.get("risk_reasons"), list)
+            else 0,
+            "missing_information_count": len(intent.get("missing_information", []))
+            if isinstance(intent.get("missing_information"), list)
+            else 0,
+            "safe_partial_answer_possible": intent.get("safe_partial_answer_possible"),
+        }
+
+    @classmethod
+    async def _ensure_action_repair(
+        cls,
+        session: AsyncSession,
+        run: Run,
+        runtime_session: RuntimeSession,
+        model_call: ModelCall,
+        batch: AgentActionBatch,
+        payload: dict[str, Any],
+    ) -> None:
+        repair = payload.get("repair")
+        if not isinstance(repair, dict):
+            return
+        kind = str(repair.get("kind", ""))
+        if kind not in {
+            "post_model_call_commit",
+            "parse_correction",
+            "clarification_correction",
+            "semantic_final_correction",
+            "replay",
+        }:
+            raise ValueError("unsupported AgentAction repair kind")
+        ordinal = int(repair.get("ordinal", 1))
+        existing = await session.scalar(
+            select(AgentActionRepair.id).where(
+                AgentActionRepair.tenant_id == run.tenant_id,
+                AgentActionRepair.run_id == run.id,
+                AgentActionRepair.source_model_call_id == model_call.id,
+                AgentActionRepair.kind == kind,
+                AgentActionRepair.repair_ordinal == ordinal,
+            )
+        )
+        if existing is None:
+            source_batch_id = (
+                UUID(str(repair["source_batch_id"])) if repair.get("source_batch_id") else None
+            )
+            if source_batch_id is None and repair.get("source_batch_key"):
+                source_batch_id = await session.scalar(
+                    select(AgentActionBatch.id).where(
+                        AgentActionBatch.tenant_id == run.tenant_id,
+                        AgentActionBatch.run_id == run.id,
+                        AgentActionBatch.batch_key == str(repair["source_batch_key"]),
+                    )
+                )
+            session.add(
+                AgentActionRepair(
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    runtime_session_id=runtime_session.id,
+                    source_model_call_id=model_call.id,
+                    source_batch_id=source_batch_id,
+                    result_batch_id=batch.id,
+                    kind=kind,
+                    repair_ordinal=ordinal,
+                    reason_code=str(repair.get("reason_code", "ACTION_REPAIR"))[:120],
+                    observation_ref=cls._optional_string(repair.get("observation_ref"), 500),
+                )
+            )
+            await session.flush()
+
+    @staticmethod
+    async def _locked_agent_action(
+        session: AsyncSession,
+        run: Run,
+        *,
+        batch_key: str,
+        ordinal: int,
+        action_id: str,
+    ) -> tuple[AgentActionBatch, AgentActionRecord]:
+        batch = await session.scalar(
+            select(AgentActionBatch)
+            .where(
+                AgentActionBatch.tenant_id == run.tenant_id,
+                AgentActionBatch.run_id == run.id,
+                AgentActionBatch.batch_key == batch_key,
+            )
+            .with_for_update()
+        )
+        if batch is None:
+            raise ValueError("AgentAction batch is not committed")
+        action = await session.scalar(
+            select(AgentActionRecord)
+            .where(
+                AgentActionRecord.tenant_id == run.tenant_id,
+                AgentActionRecord.run_id == run.id,
+                AgentActionRecord.batch_id == batch.id,
+                AgentActionRecord.ordinal == ordinal,
+                AgentActionRecord.action_id == action_id,
+            )
+            .with_for_update()
+        )
+        if action is None:
+            raise ValueError("AgentAction identity does not match the committed ordinal")
+        return batch, action
+
+    @classmethod
+    async def _agent_action_batch_state(
+        cls,
+        session: AsyncSession,
+        run: Run,
+        batch: AgentActionBatch,
+    ) -> RuntimeActionBatchState:
+        records = list(
+            await session.scalars(
+                select(AgentActionRecord)
+                .where(
+                    AgentActionRecord.tenant_id == run.tenant_id,
+                    AgentActionRecord.run_id == run.id,
+                    AgentActionRecord.batch_id == batch.id,
+                )
+                .order_by(AgentActionRecord.ordinal)
+            )
+        )
+        if len(records) != batch.action_count:
+            raise ValueError("AgentAction batch is incomplete")
+        actions: list[RuntimeActionState] = []
+        for record in records:
+            actions.append(
+                RuntimeActionState(
+                    ordinal=record.ordinal,
+                    action_id=record.action_id,
+                    status=record.status,
+                    outcome_ref=record.outcome_ref,
+                    observation_ref=record.observation_ref,
+                    outcome=await cls._resolved_agent_action_outcome(session, run, record),
+                )
+            )
+        return RuntimeActionBatchState(
+            batch_key=batch.batch_key,
+            action_count=batch.action_count,
+            dispatch_cursor=batch.dispatch_cursor,
+            status=batch.status,
+            actions=tuple(actions),
+        )
+
+    @staticmethod
+    async def _resolved_agent_action_outcome(
+        session: AsyncSession,
+        run: Run,
+        action: AgentActionRecord,
+    ) -> RuntimeActionOutcome | None:
+        if action.status not in {
+            AgentActionStatus.SUCCEEDED.value,
+            AgentActionStatus.FAILED.value,
+            AgentActionStatus.BLOCKED.value,
+        }:
+            return None
+        outcome_ref = action.outcome_ref
+        if outcome_ref and outcome_ref.startswith("unknown:"):
+            return RuntimeActionOutcome(
+                status="unknown",
+                outcome_ref=outcome_ref.removeprefix("unknown:"),
+                observation_ref=action.observation_ref,
+            )
+        status = action.status
+        value: dict[str, Any] = {}
+        if outcome_ref and outcome_ref.startswith("tool_call:"):
+            try:
+                tool_call_id = UUID(outcome_ref.removeprefix("tool_call:"))
+            except ValueError:
+                tool_call_id = None
+            tool_call = (
+                await session.scalar(
+                    select(ToolCall).where(
+                        ToolCall.tenant_id == run.tenant_id,
+                        ToolCall.run_id == run.id,
+                        ToolCall.id == tool_call_id,
+                    )
+                )
+                if tool_call_id is not None
+                else None
+            )
+            if tool_call is not None:
+                value = {
+                    "call_id": action.provider_call_id or action.action_id,
+                    "tool_call_id": str(tool_call.id),
+                    "run_step_id": str(tool_call.run_step_id),
+                    "status": tool_call.status,
+                    "output": tool_call.result,
+                    "error": tool_call.error,
+                    "usage": tool_call.usage,
+                    "cached": True,
+                }
+        elif outcome_ref and outcome_ref.startswith("artifact:"):
+            try:
+                artifact_id = UUID(outcome_ref.removeprefix("artifact:"))
+            except ValueError:
+                artifact_id = None
+            artifact = (
+                await session.scalar(
+                    select(Artifact).where(
+                        Artifact.tenant_id == run.tenant_id,
+                        Artifact.owner_run_id == run.id,
+                        Artifact.id == artifact_id,
+                    )
+                )
+                if artifact_id is not None
+                else None
+            )
+            if artifact is not None:
+                value = {
+                    "artifact_id": str(artifact.id),
+                    "status": artifact.status,
+                    "name": artifact.name,
+                    "content_type": artifact.content_type,
+                    "sha256": artifact.sha256 or "",
+                    "size_bytes": artifact.size_bytes or 0,
+                    "shared_with_run_ids": [],
+                }
+        elif outcome_ref and outcome_ref.startswith("delegation:"):
+            try:
+                delegation_id = UUID(outcome_ref.removeprefix("delegation:"))
+            except ValueError:
+                delegation_id = None
+            delegation = (
+                await session.scalar(
+                    select(Delegation).where(
+                        Delegation.tenant_id == run.tenant_id,
+                        Delegation.parent_run_id == run.id,
+                        Delegation.id == delegation_id,
+                    )
+                )
+                if delegation_id is not None
+                else None
+            )
+            if delegation is not None:
+                value = {
+                    "action": "delegate",
+                    "status": "accepted",
+                    "delegation_id": str(delegation.id),
+                    "child_task_id": str(delegation.child_task_id),
+                    "child_run_id": str(delegation.child_run_id),
+                    "detail": {"recovered": True},
+                }
+        elif outcome_ref and outcome_ref.startswith("user_input:"):
+            try:
+                request_id = UUID(outcome_ref.removeprefix("user_input:"))
+            except ValueError:
+                request_id = None
+            user_input = (
+                await session.scalar(
+                    select(UserInputRequest).where(
+                        UserInputRequest.tenant_id == run.tenant_id,
+                        UserInputRequest.run_id == run.id,
+                        UserInputRequest.id == request_id,
+                    )
+                )
+                if request_id is not None
+                else None
+            )
+            if user_input is not None and user_input.status == "answered":
+                value = {
+                    "kind": "user_input",
+                    "trust": "untrusted",
+                    "request_id": str(user_input.id),
+                    "answer": user_input.answer_payload,
+                    "answer_hash": user_input.answer_hash,
+                }
+        return RuntimeActionOutcome(
+            status=status,
+            outcome_ref=outcome_ref,
+            observation_ref=action.observation_ref,
+            value=value,
+        )
+
+    @classmethod
+    def _record_action_dispatch(
+        cls,
+        session: AsyncSession,
+        context: TenantContext,
+        run: Run,
+        batch: AgentActionBatch,
+        action_record: AgentActionRecord,
+        event_type: str,
+        audit_action: str,
+    ) -> None:
+        cls._record(
+            session,
+            context,
+            event_type=event_type,
+            aggregate_type="agent_action",
+            aggregate_id=action_record.id,
+            action=audit_action,
+            payload={
+                "batch_id": str(batch.id),
+                "batch_key": batch.batch_key,
+                "ordinal": action_record.ordinal,
+                "kind": action_record.kind,
+                "status": action_record.status,
+                "dispatch_cursor": batch.dispatch_cursor,
+                "batch_status": batch.status,
+                "outcome_ref": action_record.outcome_ref,
+                "observation_ref": action_record.observation_ref,
+            },
+            run_id=run.id,
+        )
+
+    @staticmethod
+    def _public_action(record: AgentActionRecord) -> dict[str, Any]:
+        return {
+            "id": str(record.id),
+            "ordinal": record.ordinal,
+            "action_id": record.action_id,
+            "kind": record.kind,
+            "provider_call_id": record.provider_call_id,
+            "tool_name": record.tool_name,
+            "intent": record.intent_redacted,
+            "completion": record.completion,
+            "content_hash": record.content_hash,
+            "arguments_hash": record.arguments_hash,
+            "question_hash": record.question_hash,
+            "reason_hash": record.reason_hash,
+            "compatibility_mode": record.compatibility_mode,
+            "status": record.status,
+        }
+
+    @staticmethod
+    def _public_action_batch(
+        batch: AgentActionBatch,
+        *,
+        actions: list[dict[str, Any]] | None,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        return {
+            "id": str(batch.id),
+            "batch_key": batch.batch_key,
+            "model_call_id": str(batch.model_call_id),
+            "context_snapshot_id": str(batch.context_snapshot_id),
+            "run_step_id": str(batch.run_step_id),
+            "source_format": batch.source_format,
+            "parse_revision": batch.parse_revision,
+            "action_count": batch.action_count,
+            "dispatch_cursor": batch.dispatch_cursor,
+            "status": batch.status,
+            "actions": actions,
+            "replayed": replayed,
+        }
 
     @staticmethod
     async def _mark_knowledge_context(

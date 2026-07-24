@@ -1,0 +1,129 @@
+documentation checks passed: 89 Markdown files, 20 publication-surface files
+All checks passed!
+11 files already formatted
+..................................................................       [100%]
+66 passed in 0.84s
+........................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+........................................................................ [ 39%]
+........................................................................ [ 49%]
+........................................................................ [ 59%]
+........................................................................ [ 69%]
+........................................................................ [ 79%]
+........................................................................ [ 89%]
+........................................................................ [ 99%]
+.                                                                        [100%]
+721 passed in 16.34s
+[nico] starting real PostgreSQL, Redis and MinIO dependencies
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+[nico] MinIO is ready
+[nico] applying Alembic migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 20260716_0001, Enable platform PostgreSQL extensions.
+INFO  [alembic.runtime.migration] Running upgrade 20260716_0001 -> 20260717_0002, Create the tenant-scoped core control-plane schema.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0002 -> 20260717_0003, Add RuntimeSession persistence and the least-privilege Run claimer.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0003 -> 20260717_0004, Add versioned tools and immutable ToolCall execution records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0004 -> 20260717_0005, Freeze per-Run tool policy and bind ToolCall execution to a Run lease.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0005 -> 20260717_0006, Add tenant-scoped controlled Memory and Skill growth records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0006 -> 20260717_0007, Add immutable versioned pgvector chunks for active Memory.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0007 -> 20260717_0008, Add concurrency-safe idempotency keys for growth evaluations and reviews.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0008 -> 20260717_0009, Add database guards for reviewed Skill release and scoped canaries.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0009 -> 20260718_0010, Add the native model runtime persistence baseline.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0010 -> 20260718_0011, Add recoverable ReAct step and checkpoint metadata.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0011 -> 20260718_0012, Add versioned Plans, PlanSteps, and runtime evaluations.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0012 -> 20260718_0013, Add tenant-scoped dynamic delegation, messages, closure, and budget ledgers.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0013 -> 20260718_0014, Add content-addressed artifacts and explicit parent/child sharing links.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0014 -> 20260718_0015, Freeze published Memory/Skill context and track its runtime effect.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0015 -> 20260718_0016, Record provider compatibility and legacy resolver telemetry.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0016 -> 20260719_0017, Add durable conversations, turns, and conversation context references.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0017 -> 20260719_0018, Add staged Conversation attachments for bounded context materialization.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0018 -> 20260719_0019, Add durable ToolApprovalRequest facts and decision guards.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0019 -> 20260720_0020, Add Provider onboarding provenance and durable probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260720_0020 -> 20260720_0021, Expose a token-free maintenance correlation check for Provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 20260720_0021 -> 20260721_0022, Add project membership, stable sessions, supervision, and interventions.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0022 -> 20260721_0023, Index Projects that are due for managed supervision.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0023 -> 20260721_0024, Index collaboration timeline and supervision projections.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0024 -> 20260722_0025, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0025 -> 20260722_0026, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0026 -> 20260723_0027, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0027 -> 20260723_0028, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0028 -> 20260723_0029, Persist the Agent response-metrics display preference.
+[nico] proving the extension migration can roll back and reapply
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0029 -> 20260723_0028, Persist the Agent response-metrics display preference.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0028 -> 20260723_0027, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0027 -> 20260722_0026, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running downgrade 20260722_0026 -> 20260722_0025, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running downgrade 20260722_0025 -> 20260721_0024, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0024 -> 20260722_0025, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0025 -> 20260722_0026, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0026 -> 20260723_0027, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0027 -> 20260723_0028, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0028 -> 20260723_0029, Persist the Agent response-metrics display preference.
+[nico] running real dependency integration tests
+============================= test session starts ==============================
+platform linux -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/node7/xpk/Nico-agent/backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 158 items
+
+backend/tests/integration/test_agent_capability_activation.py ...        [  1%]
+backend/tests/integration/test_control_plane_api.py ......               [  5%]
+backend/tests/integration/test_conversation_api.py ..............        [ 14%]
+backend/tests/integration/test_conversation_model_request_audit.py .     [ 15%]
+backend/tests/integration/test_coordination_service.py ........          [ 20%]
+backend/tests/integration/test_database_read_tool.py .                   [ 20%]
+backend/tests/integration/test_growth_api.py .                           [ 21%]
+backend/tests/integration/test_growth_candidate_generation.py ......     [ 25%]
+backend/tests/integration/test_growth_persistence.py .......             [ 29%]
+backend/tests/integration/test_growth_review_lifecycle.py .........      [ 35%]
+backend/tests/integration/test_guided_setup_api.py .                     [ 36%]
+backend/tests/integration/test_guided_setup_proof.py .                   [ 36%]
+backend/tests/integration/test_hermes_mcp_boundary.py .                  [ 37%]
+backend/tests/integration/test_infrastructure.py ........                [ 42%]
+backend/tests/integration/test_model_runtime_api.py .                    [ 43%]
+backend/tests/integration/test_multi_agent_runtime.py .                  [ 43%]
+backend/tests/integration/test_native_plan_runtime.py ..                 [ 44%]
+backend/tests/integration/test_native_react_runtime.py ...               [ 46%]
+backend/tests/integration/test_native_runtime_persistence.py ..          [ 48%]
+backend/tests/integration/test_project_collaboration_api.py .......      [ 52%]
+backend/tests/integration/test_project_collaboration_e2e.py .            [ 53%]
+backend/tests/integration/test_project_collaboration_persistence.py ...  [ 55%]
+backend/tests/integration/test_project_interventions.py ..               [ 56%]
+backend/tests/integration/test_project_session_api.py .                  [ 56%]
+backend/tests/integration/test_project_supervision_worker.py ...         [ 58%]
+backend/tests/integration/test_provider_activation.py ....               [ 61%]
+backend/tests/integration/test_provider_maintenance.py ..                [ 62%]
+backend/tests/integration/test_provider_onboarding.py ..                 [ 63%]
+backend/tests/integration/test_provider_probe_worker.py ...              [ 65%]
+backend/tests/integration/test_python_sandbox.py .                       [ 66%]
+backend/tests/integration/test_runtime_knowledge_integration.py .        [ 67%]
+backend/tests/integration/test_runtime_leasing.py .......                [ 71%]
+backend/tests/integration/test_runtime_lifecycle.py .......              [ 75%]
+backend/tests/integration/test_runtime_worker.py .....                   [ 79%]
+backend/tests/integration/test_skill_release_lifecycle.py ....           [ 81%]
+backend/tests/integration/test_tool_gateway.py ..............            [ 90%]
+backend/tests/integration/test_tool_persistence.py ...                   [ 92%]
+backend/tests/integration/test_web_agent_e2e.py .                        [ 93%]
+backend/tests/integration/test_web_cache_rate_limit.py .                 [ 93%]
+backend/tests/integration/test_web_fetch_gateway.py .                    [ 94%]
+backend/tests/integration/test_web_onboarding.py ......                  [ 98%]
+backend/tests/integration/test_web_onboarding_api.py ..                  [ 99%]
+backend/tests/integration/test_web_search_gateway.py .                   [100%]
+
+============================= 158 passed in 57.46s =============================
+[nico] integration suite passed
+[nico] PASS Conversation Continuity Goal D AgentAction contract gates

@@ -75,7 +75,7 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         await engine.dispose()
 
     assert extensions == {"pgcrypto", "vector"}
-    assert revision == "20260723_0029"
+    assert revision == "20260723_0031"
     assert domain_tables == {
         "tenants",
         "projects",
@@ -100,6 +100,10 @@ async def test_migration_enables_extensions_and_core_schema(settings: Settings) 
         "model_endpoints",
         "context_snapshots",
         "model_calls",
+        "agent_action_batches",
+        "agent_actions",
+        "agent_action_repairs",
+        "user_input_requests",
         "conversations",
         "conversation_turns",
         "conversation_attachments",
@@ -150,6 +154,10 @@ async def test_runtime_role_and_force_rls_cover_every_core_table(settings: Setti
         "model_endpoints",
         "context_snapshots",
         "model_calls",
+        "agent_action_batches",
+        "agent_actions",
+        "agent_action_repairs",
+        "user_input_requests",
         "conversations",
         "conversation_turns",
         "conversation_attachments",
@@ -212,7 +220,11 @@ async def test_native_runtime_foreign_keys_bind_facts_to_the_same_run(settings: 
                             "'fk_runtime_sessions_last_model_call', "
                             "'fk_model_calls_replay_of', 'fk_run_steps_parent', "
                             "'fk_run_steps_context_snapshot', 'fk_run_steps_model_call', "
-                            "'fk_plan_steps_plan', 'fk_runtime_evaluations_plan_step')"
+                            "'fk_plan_steps_plan', 'fk_runtime_evaluations_plan_step', "
+                            "'fk_agent_action_batches_model_call', "
+                            "'fk_agent_action_batches_context', "
+                            "'fk_agent_action_batches_run_step', "
+                            "'fk_agent_actions_batch')"
                         )
                     )
                 ).all()
@@ -245,6 +257,19 @@ async def test_native_runtime_foreign_keys_bind_facts_to_the_same_run(settings: 
         "FOREIGN KEY (tenant_id, run_id, plan_step_id)"
         in definitions["fk_runtime_evaluations_plan_step"]
     )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, model_call_id)"
+        in definitions["fk_agent_action_batches_model_call"]
+    )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, context_snapshot_id)"
+        in definitions["fk_agent_action_batches_context"]
+    )
+    assert (
+        "FOREIGN KEY (tenant_id, run_id, run_step_id)"
+        in definitions["fk_agent_action_batches_run_step"]
+    )
+    assert "FOREIGN KEY (tenant_id, run_id, batch_id)" in definitions["fk_agent_actions_batch"]
 
 
 @pytest.mark.asyncio

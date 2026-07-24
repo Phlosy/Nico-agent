@@ -40,6 +40,7 @@ from nico_agent.plan_api import router as plan_router
 from nico_agent.projects.api import router as project_collaboration_router
 from nico_agent.provider_onboarding.api import router as provider_onboarding_router
 from nico_agent.tool_approvals.api import router as tool_approval_router
+from nico_agent.user_inputs.api import router as user_input_router
 from nico_agent.web_onboarding.api import router as web_onboarding_router
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,9 @@ def create_app(
             "PROJECT_NOT_MANAGED",
             "PROJECT_SESSION_CONVERSATION_STALE",
             "TOOL_APPROVAL_ALREADY_DECIDED",
+            "USER_INPUT_ALREADY_RESOLVED",
+            "USER_INPUT_CANCELLED",
+            "USER_INPUT_EXPIRED",
             "AGENT_APPROVAL_MODE_LOCKED",
             "CONVERSATION_APPROVAL_MODE_LOCKED",
             "CONVERSATION_QUEUE_FULL",
@@ -261,6 +265,7 @@ def create_app(
     app.include_router(plan_router)
     app.include_router(provider_onboarding_router)
     app.include_router(tool_approval_router)
+    app.include_router(user_input_router)
     app.include_router(web_onboarding_router)
 
     return app

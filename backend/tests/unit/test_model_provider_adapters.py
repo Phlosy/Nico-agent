@@ -20,6 +20,8 @@ from nico_agent.models.providers import (
     OpenAICompatibleProvider,
 )
 from nico_agent.models.registry import ModelProviderRegistry
+from nico_agent.runtime.actions import FinalAction
+from nico_agent.runtime.native.action_parser import parse_agent_actions
 
 
 class FakeSecrets:
@@ -89,6 +91,132 @@ def _tool_request(protocol: str, base_url: str, model: str) -> ModelRequest:
 def _assert_provider_safe_tool_name(value: str) -> None:
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value)
     assert value != "web.search"
+
+
+def _final_action_text() -> str:
+    return json.dumps(
+        {
+            "type": "final",
+            "content": "Provider-neutral answer",
+            "intent": {
+                "interpreted_intent": "Answer the current request",
+                "confidence": 0.9,
+                "candidates": [
+                    {
+                        "candidate_id": "answer",
+                        "intent": "Answer the current request",
+                        "confidence": 0.9,
+                    }
+                ],
+                "ambiguity": 0.1,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+            "completion": {
+                "answered_user_intent": True,
+                "requires_user_response": False,
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_final_fixtures_normalize_to_equivalent_actions() -> None:
+    action_text = _final_action_text()
+
+    async def openai_handler(request: httpx.Request) -> httpx.Response:
+        chunk = {
+            "choices": [
+                {
+                    "delta": {"content": action_text},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+        return httpx.Response(
+            200,
+            content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+        )
+
+    async def anthropic_handler(request: httpx.Request) -> httpx.Response:
+        payloads = [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": action_text},
+            },
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 1},
+            },
+            {"type": "message_stop"},
+        ]
+        return httpx.Response(
+            200,
+            content="".join(f"data: {json.dumps(item)}\n\n" for item in payloads),
+        )
+
+    async def gemini_handler(request: httpx.Request) -> httpx.Response:
+        chunk = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": action_text}]},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 2,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 3,
+            },
+        }
+        return httpx.Response(200, content=f"data: {json.dumps(chunk)}\n\n")
+
+    fixtures = (
+        (
+            OpenAICompatibleProvider(
+                client=_client(openai_handler),
+                secret_resolver=FakeSecrets(),
+                resolver=lambda host, port: ["93.184.216.34"],
+            ),
+            _request("openai_compatible", "https://models.example/v1", "openai-test"),
+        ),
+        (
+            AnthropicMessagesProvider(
+                client=_client(anthropic_handler),
+                secret_resolver=FakeSecrets(),
+                resolver=lambda host, port: ["93.184.216.34"],
+            ),
+            _request("anthropic_messages", "https://api.anthropic.com", "claude-test"),
+        ),
+        (
+            GoogleGeminiProvider(
+                client=_client(gemini_handler),
+                secret_resolver=FakeSecrets(),
+                resolver=lambda host, port: ["93.184.216.34"],
+            ),
+            _request(
+                "google_gemini",
+                "https://generativelanguage.googleapis.com/v1beta",
+                "gemini-test",
+            ),
+        ),
+    )
+    actions = []
+    for provider, request in fixtures:
+        response = await ModelGateway(
+            ModelProviderRegistry([provider]),
+            max_attempts=1,
+        ).complete(request)
+        actions.append(parse_agent_actions(response).actions[0])
+
+    assert all(isinstance(action, FinalAction) for action in actions)
+    assert actions[0] == actions[1] == actions[2]
 
 
 @pytest.mark.asyncio

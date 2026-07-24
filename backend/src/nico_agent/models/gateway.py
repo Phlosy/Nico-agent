@@ -134,6 +134,7 @@ class ModelGateway:
         return ModelResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
+            structured_output=request.response_format is not None,
             finish_reason=finish_reason,
             usage=usage,
             provider_request_id=request_id,

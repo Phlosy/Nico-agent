@@ -30,6 +30,10 @@ classDiagram
     ConversationTurn "1" --> "many" ContextSnapshot
     Run "1" *-- "many" ModelCall
     ContextSnapshot "1" --> "many" ModelCall
+    ModelCall "1" --> "one" AgentActionBatch
+    RunStep "1" --> "many" AgentActionBatch
+    AgentActionBatch "1" *-- "many" AgentActionRecord
+    AgentActionBatch "1" --> "many" AgentActionRepair
     ModelEndpoint "1" --> "many" AgentVersion
     Run "1" *-- "many" RunStep
     Run "1" *-- "many" Plan
@@ -86,6 +90,9 @@ Team membership, fixed business Workflow, and Plugin loading are not implemented
 | ModelEndpoint | Tenant-owned immutable endpoint semantics plus operational credential/rate-limit state | Referenced semantics require a new revision |
 | ContextSnapshot | Reconstructable, hashed model context for one Run, optionally linked to a ConversationTurn | Immutable and same-Run/same-Conversation constrained |
 | ModelCall | Streaming model request/result, usage, cost and provider request ID | Terminal records are immutable and bound to the same Run/context |
+| AgentActionBatch | Complete ordered provider-neutral decision for one terminal ModelCall | One atomic batch per ModelCall; identity/source facts are immutable and dispatch cursor only moves forward |
+| AgentActionRecord | Redacted immutable `final`/`tool_call`/`ask_user` intent at one ordinal | Stores bounded policy metadata and content/argument/question hashes, not duplicate payload bodies |
+| AgentActionRepair | Append-only replay or bounded correction relation | Same-Run source/result references are immutable; post-ModelCall crash repair is recorded exactly once |
 | RunStep | Ordered execution progress within a Run | Terminal steps cannot be rewritten |
 | Plan | One immutable-semantic planning revision for a Run | Replan appends a revision; old revisions remain readable |
 | PlanStep | Version-bound step definition and execution projection | Definition and terminal state cannot be overwritten |
@@ -151,6 +158,8 @@ RuntimeSession also records how the Provider was selected. New AgentVersions res
 - The application sets Tenant context for each transaction; PostgreSQL
   `FORCE ROW LEVEL SECURITY` supplies a second isolation boundary.
 - State transitions and their Event/Audit records commit in one transaction.
+- AgentAction batches, all of their ordinals and any associated repair relation
+  commit atomically; every reference is constrained to the same Tenant and Run.
 - Published AgentVersion and SkillVersion rows, Plan semantics, RuntimeEvaluation,
   Event, AuditRecord, terminal Run/RunStep/PlanStep/ToolCall/ToolApprovalRequest/Delegation/Artifact,
   and GrowthSource provenance are immutable.

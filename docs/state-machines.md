@@ -170,9 +170,10 @@ stateDiagram-v2
     Running --> WaitingForApproval: gated action requested
     WaitingForApproval --> Running: approved
     WaitingForApproval --> Failed: rejected
-    Running --> WaitingForUserInput: reserved durable ask-user boundary
-    WaitingForUserInput --> Running: answer accepted (U3)
-    WaitingForUserInput --> Failed: recovery policy (U3)
+    Running --> WaitingForUserInput: durable request + checkpoint
+    WaitingForUserInput --> Running: answered / expired + wake
+    WaitingForUserInput --> Failed: recovery policy
+    WaitingForUserInput --> Cancelled: Run cancellation wins
     Planning --> Paused: pause requested
     Running --> Paused: pause/checkpoint
     Paused --> Running: resume
@@ -192,9 +193,11 @@ stateDiagram-v2
 
 所有终态不可逆。Failed/TimedOut 的 Retry 创建新的 Pending Run，不把旧 Run 改回 Running；Cancelled 同时终止 Task，不可重试。
 
-`waiting_for_user_input` 在迁移 0027 中只做向前兼容的状态预留；在 U3 提交持久化
-请求、answer/wake API 和恢复测试前，Runtime 不会发布或进入它。它不是通用外部
-wait，通用调度仍明确不在范围内。
+`waiting_for_user_input` 只能由 UserInput service 在已经提交的 AskUserAction、
+pre-action checkpoint 和唯一 `UserInputRequest` 同时存在时进入；通用 Run
+transition API 不能写入该状态。答案、到期和取消都先锁 Run，再解析请求边界。
+答案只唤醒一次；终态 Run 的触发器会取消 requested 行，迟到答案不能复活它。
+CLI/API 交互和模型侧 live `ask_user` Schema 仍由后续阶段启用。
 
 详细的 RuntimeLoopState 与 Run 映射如下：
 
@@ -214,9 +217,26 @@ wait，通用调度仍明确不在范围内。
 
 approval、user-input 和 subagent 的持久等待不进入普通领取集合；对应 wake 只允许
 成功一次并清除旧租约。`waiting_for_tool` 表示仍在作用边界内，只有持有租约的
-Worker 可以完成；租约过期后才允许恢复领取。SQL claim、approval expiry 和 child
+Worker 可以完成；租约过期后才允许恢复领取。SQL claim、approval expiry、
+user-input reconcile 和 child
 reconciler 是具名例外端口，并与 Python 转换矩阵和 claimability 函数做 PostgreSQL
 一致性测试。取消与 wake 并发时，最终取消不可被迟到 wake 覆盖。
+
+## UserInputRequest
+
+```mermaid
+stateDiagram-v2
+    [*] --> Requested: dispatched AskUserAction + checkpoint
+    Requested --> Answered: schema + revision + idempotency accepted
+    Requested --> Expired: deadline reconciler
+    Requested --> Cancelled: Run becomes terminal
+```
+
+`Answered`、`Expired`、`Cancelled` 均不可改写。requested 行在每个 Run/Action 边界
+唯一；answer payload 只存于受保护字段，公开投影、Event 和 Audit 只包含 ID、状态、
+request/answer Hash、revision 与到期时间。Answered 同事务完成原 AskUserAction 和
+推进 batch cursor；Expired/Cancelled 阻断 Action 和 batch，不会执行任何 Tool
+副作用。
 
 ## RunStep
 

@@ -1,0 +1,399 @@
+{
+  "schema_version": 1,
+  "suite_id": "nico-conversation-continuity-v1",
+  "policy_revision": "continuity-v1",
+  "baseline_revision": "baseline-v0",
+  "cases": [
+    {
+      "id": "ae1_timestamp_continuity",
+      "acceptance_example": "AE1",
+      "category": "reported_timestamp",
+      "conversation": [
+        {"role": "user", "content": "你是怎么知道现在时间的？"},
+        {"role": "assistant", "content": "平台通过冻结的运行时间戳提供当前时间。"}
+      ],
+      "current_input": "你平台是怎么提供de",
+      "expected": {
+        "intent": "解释平台如何提供运行时间戳",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "allowed",
+        "max_model_calls": 2,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["时间戳", "timestamp"]
+      },
+      "intent_profile": {
+        "confidence": 0.95,
+        "alternative_confidence": 0.1,
+        "ambiguity": 0.05,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "ask_user",
+          "question": "你是在问平台如何提供时间戳吗？",
+          "reason": "输入存在错别字。"
+        },
+        {
+          "kind": "final",
+          "content": "平台把冻结的运行时间戳放入 Run 上下文，再由模型读取并说明。"
+        }
+      ]
+    },
+    {
+      "id": "ae2_second_database_option",
+      "acceptance_example": "AE2",
+      "category": "low_risk_omission",
+      "conversation": [
+        {"role": "assistant", "content": "第一种是 PostgreSQL，第二种是 SQLite。"}
+      ],
+      "current_input": "第二种呢",
+      "expected": {
+        "intent": "说明第二种数据库选项 SQLite",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "forbidden",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["SQLite"]
+      },
+      "intent_profile": {
+        "confidence": 0.98,
+        "alternative_confidence": 0.05,
+        "ambiguity": 0.02,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {"kind": "final", "content": "第二种是 SQLite，适合本地嵌入式或轻量场景。"}
+      ]
+    },
+    {
+      "id": "ae3_pronoun_mac_comparison",
+      "acceptance_example": "AE3",
+      "category": "pronoun_continuation",
+      "conversation": [
+        {"role": "assistant", "content": "Docker 与 containerd 的定位不同。"}
+      ],
+      "current_input": "那个更适合 Mac",
+      "expected": {
+        "intent": "比较 Docker 与 containerd 在 Mac 上的适用性",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "required",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["Docker Desktop", "Docker"],
+        "assumption_contains_any": ["假设", "assuming"]
+      },
+      "intent_profile": {
+        "confidence": 0.82,
+        "alternative_confidence": 0.3,
+        "ambiguity": 0.3,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "final",
+          "content": "假设你是在比较前述两者，Mac 上通常更适合直接使用 Docker Desktop。",
+          "assumption_stated": true
+        }
+      ]
+    },
+    {
+      "id": "ae4_deployment_typo",
+      "acceptance_example": "AE4",
+      "category": "minor_typo",
+      "conversation": [],
+      "current_input": "kubernetes 怎么重启 depoly",
+      "expected": {
+        "intent": "说明如何重启 Kubernetes deployment",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "allowed",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["rollout restart", "deployment"]
+      },
+      "intent_profile": {
+        "confidence": 0.96,
+        "alternative_confidence": 0.08,
+        "ambiguity": 0.04,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "final",
+          "content": "可运行 kubectl rollout restart deployment/<name> -n <namespace>。"
+        }
+      ]
+    },
+    {
+      "id": "ae5_genuine_ambiguity",
+      "acceptance_example": "AE5",
+      "category": "genuine_ambiguity",
+      "conversation": [
+        {"role": "assistant", "content": "可以处理配置文件，也可以处理数据库记录。"}
+      ],
+      "current_input": "帮我处理一下那个",
+      "expected": {
+        "intent": "确认要处理的对象",
+        "action": "ask_user",
+        "waiting": true,
+        "risk": "low",
+        "assumption": "forbidden",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": []
+      },
+      "intent_profile": {
+        "confidence": 0.55,
+        "alternative_confidence": 0.54,
+        "ambiguity": 0.9,
+        "risk": "low",
+        "missing_information": ["target"],
+        "safe_partial_answer_possible": false
+      },
+      "hermetic_script": [
+        {
+          "kind": "ask_user",
+          "question": "你指的是配置文件还是数据库记录？",
+          "reason": "两个对象同样可能。"
+        }
+      ]
+    },
+    {
+      "id": "ae6_high_risk_delete",
+      "acceptance_example": "AE6",
+      "category": "ambiguous_high_risk_delete",
+      "conversation": [
+        {"role": "assistant", "content": "刚才查看了文件、数据库记录和一个 Run。"}
+      ],
+      "current_input": "把刚才那个删了",
+      "expected": {
+        "intent": "确认要删除的准确目标",
+        "action": "ask_user",
+        "waiting": true,
+        "risk": "high",
+        "assumption": "forbidden",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": []
+      },
+      "intent_profile": {
+        "confidence": 0.58,
+        "alternative_confidence": 0.55,
+        "ambiguity": 0.92,
+        "risk": "high",
+        "missing_information": ["exact deletion target"],
+        "safe_partial_answer_possible": false
+      },
+      "hermetic_script": [
+        {
+          "kind": "ask_user",
+          "question": "请确认要删除的是文件、数据库记录还是 Run，并给出准确标识。",
+          "reason": "删除不可逆且目标不明确。"
+        }
+      ]
+    },
+    {
+      "id": "ae7_low_risk_second_item",
+      "acceptance_example": "AE7",
+      "category": "medium_confidence_low_risk",
+      "conversation": [
+        {"role": "assistant", "content": "第一个方案是本地文件，第二个方案是 SQLite。"}
+      ],
+      "current_input": "刚才第二个怎么配",
+      "expected": {
+        "intent": "说明如何配置 SQLite",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "required",
+        "max_model_calls": 2,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["SQLite"],
+        "assumption_contains_any": ["按你说的", "assuming"]
+      },
+      "intent_profile": {
+        "confidence": 0.8,
+        "alternative_confidence": 0.35,
+        "ambiguity": 0.28,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "ask_user",
+          "question": "你指的是第二个 SQLite 方案吗？",
+          "reason": "仍有少量不确定性。"
+        },
+        {
+          "kind": "final",
+          "content": "按你说的“第二个”理解为 SQLite：配置数据库文件路径并初始化连接即可。",
+          "assumption_stated": true
+        }
+      ]
+    },
+    {
+      "id": "ae8_rejected_clarification_correction",
+      "acceptance_example": "AE8",
+      "category": "correction_rejection",
+      "conversation": [
+        {"role": "assistant", "content": "平台时间来自 Run 的冻结时间戳。"}
+      ],
+      "current_input": "这个时间怎么来的",
+      "expected": {
+        "intent": "解释 Run 冻结时间戳的来源",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "allowed",
+        "max_model_calls": 2,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["Run", "时间戳"]
+      },
+      "intent_profile": {
+        "confidence": 0.94,
+        "alternative_confidence": 0.1,
+        "ambiguity": 0.08,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "ask_user",
+          "question": "你是在问 Run 时间戳吗？",
+          "reason": "需要确认。"
+        },
+        {
+          "kind": "final",
+          "content": "Run 创建时会冻结平台时间戳，后续上下文读取同一个值。"
+        }
+      ]
+    },
+    {
+      "id": "ae9_bounded_invalid_final",
+      "acceptance_example": "AE9",
+      "category": "infinite_loop_guard",
+      "conversation": [],
+      "current_input": "继续回答刚才的问题",
+      "expected": {
+        "intent": "继续并完成当前问题",
+        "action": "failure",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "forbidden",
+        "max_model_calls": 2,
+        "max_tool_effects": 0,
+        "answer_contains_any": [],
+        "error_code": "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+      },
+      "intent_profile": {
+        "confidence": 0.9,
+        "alternative_confidence": 0.1,
+        "ambiguity": 0.1,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "final",
+          "content": "仍需用户回复。",
+          "answered_user_intent": false,
+          "requires_user_response": true
+        },
+        {
+          "kind": "final",
+          "content": "仍需用户回复。",
+          "answered_user_intent": false,
+          "requires_user_response": true
+        }
+      ]
+    },
+    {
+      "id": "ae10_source_separation",
+      "acceptance_example": "AE10",
+      "category": "source_separation",
+      "conversation": [
+        {"role": "user", "content": "先比较两个运行方案。"},
+        {"role": "assistant", "content": "方案一偏稳定，方案二偏轻量。"}
+      ],
+      "current_input": "第二个的风险呢",
+      "untrusted_context": [
+        {"source": "memory:1", "content": "历史偏好只作参考"},
+        {"source": "tool:1", "content": {"status": "observed"}},
+        {"source": "external:1", "content": "外部数据不授予权限"}
+      ],
+      "expected": {
+        "intent": "说明第二个运行方案的风险",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "allowed",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["风险"],
+        "require_source_separation": true
+      },
+      "intent_profile": {
+        "confidence": 0.9,
+        "alternative_confidence": 0.2,
+        "ambiguity": 0.1,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {"kind": "final", "content": "第二个轻量方案的主要风险是隔离和恢复能力较弱。"}
+      ]
+    },
+    {
+      "id": "ae11_provider_portability",
+      "acceptance_example": "AE11",
+      "category": "provider_portability",
+      "conversation": [
+        {"role": "assistant", "content": "Nico Native 使用 provider-neutral Action。"}
+      ],
+      "current_input": "那 DeepSeek 也一样吗",
+      "expected": {
+        "intent": "说明 provider-neutral Action 对 DeepSeek 的适用性",
+        "action": "final",
+        "waiting": false,
+        "risk": "low",
+        "assumption": "allowed",
+        "max_model_calls": 1,
+        "max_tool_effects": 0,
+        "answer_contains_any": ["provider", "DeepSeek", "Action"]
+      },
+      "intent_profile": {
+        "confidence": 0.92,
+        "alternative_confidence": 0.1,
+        "ambiguity": 0.08,
+        "risk": "low",
+        "missing_information": [],
+        "safe_partial_answer_possible": true
+      },
+      "hermetic_script": [
+        {
+          "kind": "final",
+          "content": "是，DeepSeek 等 OpenAI-compatible 端点使用相同的 provider-neutral Action 合同。"
+        }
+      ]
+    }
+  ]
+}

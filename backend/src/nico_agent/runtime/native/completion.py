@@ -1,4 +1,4 @@
-"""Deterministic completion checks that run before an optional model judge."""
+"""Task/Plan acceptance checks that run after the shared semantic Completion Gate."""
 
 from __future__ import annotations
 

@@ -3,8 +3,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
-from nico_agent.runtime.contracts import RuntimeSessionRequest
+from nico_agent.runtime.contracts import (
+    ContextSeed,
+    ConversationContextMessage,
+    RuntimeSessionRequest,
+)
 from nico_agent.runtime.native.context import build_native_context, build_phase_context
+from nico_agent.runtime.native.prompts import NATIVE_CONTINUITY_POLICY
 from nico_agent.runtime.preparation import (
     RuntimePreparationService,
     build_knowledge_policy_snapshot,
@@ -226,6 +231,108 @@ def test_frozen_published_knowledge_is_untrusted_and_rebuildable() -> None:
     assert context.content_hash == build_native_context(request, mode="direct").content_hash
 
 
+def test_non_conversation_task_still_receives_one_usable_user_message() -> None:
+    request = RuntimeSessionRequest(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        task_id=uuid4(),
+        agent_id=uuid4(),
+        agent_version_id=uuid4(),
+        task_title="Summarize",
+        task_input={"message": "ordinary task input"},
+        role="assistant",
+        mandate="Help accurately",
+        context_seed=ContextSeed(
+            untrusted_context=(
+                {
+                    "source": "task:input",
+                    "content": {"message": "ordinary task input"},
+                    "trust": "untrusted_data",
+                },
+            )
+        ),
+    )
+
+    context = build_native_context(request, mode="direct")
+
+    assert [message.role for message in context.messages] == ["system", "user"]
+    assert (
+        sum((message.content or "").count("ordinary task input") for message in context.messages)
+        == 2
+    )
+
+
+def test_current_run_history_follows_conversation_current_user() -> None:
+    current = "current follow-up"
+    request = RuntimeSessionRequest(
+        tenant_id=uuid4(),
+        run_id=uuid4(),
+        task_id=uuid4(),
+        agent_id=uuid4(),
+        agent_version_id=uuid4(),
+        task_title="Conversation",
+        task_input={
+            "conversation": {
+                "conversation_id": "conversation",
+                "turn_id": "current",
+                "sequence": 2,
+            },
+            "message": current,
+        },
+        role="assistant",
+        mandate="Help accurately",
+        context_seed=ContextSeed(
+            schema_version=3,
+            conversation_messages=(
+                ConversationContextMessage(
+                    role="user",
+                    content="prior question",
+                    source_ref="conversation-turn:prior",
+                    turn_id="prior",
+                    sequence=1,
+                    content_hash="a" * 64,
+                ),
+                ConversationContextMessage(
+                    role="assistant",
+                    content="prior answer",
+                    source_ref="conversation-turn:prior",
+                    turn_id="prior",
+                    sequence=1,
+                    content_hash="b" * 64,
+                ),
+            ),
+            effect_metadata={
+                "conversation_context": {
+                    "schema_version": 2,
+                    "conversation_turn_id": "current",
+                }
+            },
+        ),
+    )
+
+    context = build_native_context(
+        request,
+        mode="react",
+        history=(
+            {"role": "assistant", "content": "current-run reasoning"},
+            {
+                "role": "tool",
+                "content": "current-run observation",
+                "tool_call_id": "tool-1",
+            },
+        ),
+    )
+
+    assert [message.role for message in context.messages[-5:]] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert context.messages[-3].content == current
+
+
 def test_native_context_uses_frozen_run_time_as_a_fast_path_without_blocking_verification() -> None:
     request = RuntimeSessionRequest(
         tenant_id=uuid4(),
@@ -263,6 +370,8 @@ def test_native_context_uses_frozen_run_time_as_a_fast_path_without_blocking_ver
     assert "Use the fewest tool calls needed" in instruction
     assert "one successful relevant tool result is normally sufficient" in instruction
     assert "Search-to-Fetch" in instruction
+    assert system.count(NATIVE_CONTINUITY_POLICY) == 1
+    assert phase_system.count(NATIVE_CONTINUITY_POLICY) == 1
     assert context.content_hash == build_native_context(request, mode="react").content_hash
 
 

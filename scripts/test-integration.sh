@@ -58,4 +58,6 @@ log "proving the extension migration can roll back and reapply"
 "$ROOT_DIR/.venv/bin/alembic" -c "$ROOT_DIR/backend/alembic.ini" upgrade head
 log "running real dependency integration tests"
 "$ROOT_DIR/.venv/bin/pytest" "$ROOT_DIR/backend/tests/integration"
+log "running provider-neutral conversation continuity evaluation"
+"$ROOT_DIR/scripts/e2e-conversation-continuity.sh"
 log "integration suite passed"

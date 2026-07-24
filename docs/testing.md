@@ -12,6 +12,10 @@
 | Backend unit tests | `.venv/bin/pytest backend/tests/unit` | Domain state, Runtime, tools, tenant isolation contracts, Memory, and Skill lifecycle |
 | Frontend tests | `npm --prefix frontend test` | Health states plus Run Inspector deep link, ordering, loading/empty/error/partial/cancelled/redacted and hostile-text behavior |
 | Real dependencies | `scripts/test-integration.sh` | Alembic replay, PostgreSQL RLS, Worker claims, Runtime/Tool persistence, and growth invariants |
+| Conversation Clarification Gate | `scripts/verify-conversation-continuity-goal-i.sh` | Structured intent thresholds, necessary/unnecessary questions, one bounded correction, Action repair source linkage, capability gating, and UserInput regressions |
+| Semantic Completion Gate | `scripts/verify-conversation-continuity-goal-j.sh` | Shared Direct/ReAct/Plan final semantics, one bounded correction, strict envelope enforcement, crash reuse, pending UserInput blocking, durable verdict outcome and repair linkage |
+| Conversation continuity evaluation | `scripts/e2e-conversation-continuity.sh` | AE1–AE11 through one Native harness, baseline/final comparison, redacted per-case results, all required metric denominators, and explicit external credential status |
+| Conversation Continuity Goal K | `scripts/verify-conversation-continuity-goal-k.sh` | Evaluation unit/integration/E2E, repository regressions, migration chain, optional credentialed measurement, documentation, Secret scan, and evidence manifest |
 | Compose stack | `scripts/e2e.sh` | Images, dependency health, API/OpenAPI, Console, Worker, and bucket initialization |
 | Goal G native runtime | `scripts/e2e-goal-g.sh` | OpenAI-compatible fake model, default `nico_native`, streaming, ModelCall/ContextSnapshot/Event persistence, and zero-secret scan |
 | Goal G full gate | `NICO_EVIDENCE_DIR=artifacts/goals/goal-g/<UTC> scripts/verify-goal-g.sh` | Source, migrations, all prior E2E, native E2E, and evidence manifest |
@@ -95,6 +99,20 @@ The automated suite includes checks for:
 - Run Inspector fixed information order, deep links, keyboard submission,
   accessible labels, partial/cancelled states, recursive redaction and hostile
   HTML rendered as text.
+- Clarification decisions over structured candidates/risk/obligations, no
+  natural-language phrase classifier, one Tool-free correction, stable
+  exhaustion, source-linked repair persistence, durable UserInput suspension,
+  and absence of `ask_user` when its handler capability is unavailable.
+- Semantic Completion Gate parity across Direct/ReAct/Plan, rejection of
+  unanswered/contradictory/pending-input finals, one Tool-free correction,
+  strict envelope enforcement with and without structured-output support,
+  internal-only candidate deltas, source-linked durable repair, and crash reuse
+  without duplicate model billing.
+- Continuity evaluation coverage for all AE1–AE11 cases, redacted structured
+  results, direct-answer/false-clarification/wrong-intent/unsafe-action rates,
+  extra calls, Token/latency deltas, explicit denominators, timeout and
+  partial/missing usage retention, zero high-risk Tool effects before
+  confirmation, and honest skipped external-provider records.
 
 Goal G hermetic acceptance proves real HTTP/SSE inference against the included
 OpenAI-compatible fake model without a Hermes binary. It does not prove an

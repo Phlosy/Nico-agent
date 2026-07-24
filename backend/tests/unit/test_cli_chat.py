@@ -423,6 +423,7 @@ class FakeInteractiveChatClient(FakeQueueChatClient):
         self.approval_mode = "auto-all"
         self.submitted_messages: list[str] = []
         self.decisions: list[dict[str, Any]] = []
+        self.user_input_answers: list[dict[str, Any]] = []
 
     def get_runtime(self, run_id: str) -> dict[str, Any]:
         assert run_id == "run-1"
@@ -434,6 +435,9 @@ class FakeInteractiveChatClient(FakeQueueChatClient):
         }
 
     def list_tool_approvals(self, **_kwargs) -> list[dict[str, Any]]:
+        return []
+
+    def list_user_inputs(self, **_kwargs) -> list[dict[str, Any]]:
         return []
 
     def create_conversation_turn(
@@ -453,6 +457,10 @@ class FakeInteractiveChatClient(FakeQueueChatClient):
     def decide_tool_approval(self, approval_id: str, **kwargs) -> dict[str, Any]:
         self.decisions.append({"approval_id": approval_id, **kwargs})
         return {"id": approval_id, "status": kwargs["decision"], "revision": 2}
+
+    def answer_user_input(self, request_id: str, **kwargs) -> dict[str, Any]:
+        self.user_input_answers.append({"request_id": request_id, **kwargs})
+        return {"id": request_id, "status": "answered", "revision": 2}
 
 
 class BlockingWatchClient:
@@ -1873,6 +1881,81 @@ async def test_pending_approval_interrupt_waits_for_composer_start(tmp_path: Pat
     prompt.app.is_running = True
     await asyncio.wait_for(waiter, timeout=1)
     assert prompt.app.result == "\0nico-approval-interrupt"
+    await session.close()
+
+
+async def test_restart_discovers_agent_question_before_composer_and_answer_is_not_a_turn(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    question = {
+        "id": "question-1",
+        "run_id": "run-1",
+        "question": "Which target should I use?",
+        "reason": "Several targets remain equally plausible.",
+        "input_schema": {"type": "string", "enum": ["file", "database"]},
+        "status": "requested",
+        "revision": 1,
+        "expires_at": "2026-07-24T00:00:00Z",
+    }
+    monkeypatch.setattr(client, "list_user_inputs", lambda **_kwargs: [question])
+    prompt = FakePromptSession()
+    session = _interactive_session(
+        client,
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+
+    await session.initialize()
+
+    assert [item["id"] for item in session._user_inputs] == ["question-1"]
+    assert client.submitted_messages == []
+    assert await session.answer_user_input(question, "database") is True
+    assert client.submitted_messages == []
+    assert client.user_input_answers[0]["request_id"] == "question-1"
+    assert client.user_input_answers[0]["expected_revision"] == 1
+    assert client.user_input_answers[0]["answer"] == "database"
+    await session.close()
+
+
+async def test_agent_question_has_distinct_interrupt_and_owns_input_before_approval(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("nico_agent.cli.chat_session.run_in_terminal", _run_in_terminal_immediately)
+    client = FakeInteractiveChatClient()
+    question = {
+        "id": "question-owner",
+        "run_id": "run-1",
+        "question": "Choose one",
+        "reason": "Needed to continue.",
+        "input_schema": {"type": "string"},
+        "status": "requested",
+        "revision": 1,
+    }
+    monkeypatch.setattr(client, "list_user_inputs", lambda **_kwargs: [question])
+    monkeypatch.setattr(
+        client,
+        "list_tool_approvals",
+        lambda **_kwargs: [{"id": "approval-owner", "revision": 1}],
+    )
+    prompt = FakePromptSession(FakePromptApp(text="ordinary composer draft", cursor_position=8))
+    session = _interactive_session(
+        client,
+        BlockingWatchClient(),
+        tmp_path,
+        prompt_session=prompt,
+    )
+
+    await session._refresh_state(include_approvals=True)
+
+    assert prompt.app.result == "\0nico-user-input-interrupt"
+    assert session.saved_draft is not None
+    assert session.saved_draft.text == "ordinary composer draft"
+    assert session._next_interrupt_owner() == "user_input"
+    assert len(session._approvals) == 1
+    assert client.submitted_messages == []
     await session.close()
 
 

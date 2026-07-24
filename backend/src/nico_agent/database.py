@@ -128,6 +128,14 @@ class Database:
             value = await session.scalar(text("SELECT reconcile_expired_tool_approvals()"))
             return int(value or 0)
 
+    async def reconcile_user_input_requests(self) -> int:
+        """Resolve expired/answered user-input waits and repair missed wakes."""
+
+        async with self.sessions() as session, session.begin():
+            await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
+            value = await session.scalar(text("SELECT reconcile_user_input_requests()"))
+            return int(value or 0)
+
     async def claim_next_provider_probe(
         self, worker_id: str, lease_seconds: int
     ) -> ProviderProbeClaim | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -75,7 +76,33 @@ class KnowledgeAwareModelProvider:
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
         yield ModelStreamEvent(
             type=ModelStreamEventType.TEXT_DELTA,
-            text_delta="Goal K used frozen published knowledge.",
+            text_delta=json.dumps(
+                {
+                    "type": "final",
+                    "content": "Goal K used frozen published knowledge.",
+                    "intent": {
+                        "interpreted_intent": "Use the approved project knowledge",
+                        "confidence": 0.95,
+                        "candidates": [
+                            {
+                                "candidate_id": "knowledge",
+                                "intent": "Use the approved project knowledge",
+                                "confidence": 0.95,
+                            }
+                        ],
+                        "ambiguity": 0.05,
+                        "risk": "low",
+                        "risk_reasons": [],
+                        "missing_information": [],
+                        "safe_partial_answer_possible": True,
+                    },
+                    "completion": {
+                        "answered_user_intent": True,
+                        "requires_user_response": False,
+                    },
+                },
+                separators=(",", ":"),
+            ),
         )
         yield ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,

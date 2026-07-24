@@ -20,6 +20,7 @@ class ReactCheckpoint(BaseModel):
     loop_state: Literal[
         "reasoning",
         "waiting_for_tool",
+        "waiting_for_user_input",
         "waiting_for_subagent",
         "observing",
         "completed",
@@ -30,6 +31,7 @@ class ReactCheckpoint(BaseModel):
     context_version: int = Field(ge=0)
     context_hash: str | None = Field(default=None, min_length=64, max_length=64)
     last_model_call_key: str | None = Field(default=None, max_length=200)
+    last_action_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
     history: tuple[dict[str, Any], ...] = ()
     pending_actions: tuple[dict[str, Any], ...] = ()
     completed_action_keys: tuple[str, ...] = ()
@@ -37,9 +39,17 @@ class ReactCheckpoint(BaseModel):
     coordination_calls_consumed: int = Field(default=0, ge=0)
     waiting_delegations: tuple[dict[str, Any], ...] = ()
     consumed_message_ids: tuple[str, ...] = ()
+    pending_user_input: dict[str, Any] | None = None
+    consumed_user_input_ids: tuple[str, ...] = ()
     observed_web_urls: tuple[str, ...] = Field(default=(), max_length=1024)
     citation_repair_attempted: bool = False
     citation_provisional_output: dict[str, Any] | None = None
+    clarification_correction_attempted: bool = False
+    clarification_source_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
+    clarification_observation: dict[str, Any] | None = None
+    semantic_final_correction_attempted: bool = False
+    semantic_final_source_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
+    semantic_final_observation: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
     checkpoint_hash: str = Field(min_length=64, max_length=64)
 
@@ -53,18 +63,28 @@ class PlanCheckpoint(BaseModel):
     execution_mode: Literal["plan_and_execute"] = "plan_and_execute"
     manifest_hash: str = Field(min_length=64, max_length=64)
     loop_state: Literal[
-        "planning", "executing", "reflecting", "finalizing", "completed", "failed", "cancelled"
+        "planning",
+        "executing",
+        "waiting_for_user_input",
+        "reflecting",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
     ]
     plan_revision: int = Field(default=0, ge=0)
     plan_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
     current_step_key: str | None = Field(default=None, max_length=64)
     completed_step_keys: tuple[str, ...] = ()
     latest_output: dict[str, Any] | None = None
+    last_action_batch_key: str | None = Field(default=None, min_length=64, max_length=64)
     recovery_instruction: str | None = Field(default=None, max_length=8_000)
     recovery_decision: Literal["retry", "replan", "fail"] | None = None
     step_state: dict[str, Any] | None = None
     context_version: int = Field(default=0, ge=0)
     reflection_count: int = Field(default=0, ge=0)
+    pending_user_input: dict[str, Any] | None = None
+    consumed_user_input_ids: tuple[str, ...] = ()
     observed_web_urls: tuple[str, ...] = Field(default=(), max_length=1024)
     citation_repair_attempted: bool = False
     citation_provisional_output: dict[str, Any] | None = None
@@ -98,7 +118,12 @@ class SetupProofCheckpoint(BaseModel):
 
 
 def direct_checkpoint(
-    *, context_hash: str, call_key: str, completed: bool, usage: dict[str, Any]
+    *,
+    context_hash: str,
+    call_key: str,
+    completed: bool,
+    usage: dict[str, Any],
+    action_batch_key: str | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -107,6 +132,7 @@ def direct_checkpoint(
         "iteration": 1,
         "context_hash": context_hash,
         "last_model_call_key": call_key,
+        "last_action_batch_key": action_batch_key,
         "usage": usage,
     }
 
@@ -128,6 +154,7 @@ def make_react_checkpoint(
     context_version: int,
     context_hash: str | None = None,
     last_model_call_key: str | None = None,
+    last_action_batch_key: str | None = None,
     history: tuple[dict[str, Any], ...] = (),
     pending_actions: tuple[dict[str, Any], ...] = (),
     completed_action_keys: tuple[str, ...] = (),
@@ -135,9 +162,17 @@ def make_react_checkpoint(
     coordination_calls_consumed: int = 0,
     waiting_delegations: tuple[dict[str, Any], ...] = (),
     consumed_message_ids: tuple[str, ...] = (),
+    pending_user_input: dict[str, Any] | None = None,
+    consumed_user_input_ids: tuple[str, ...] = (),
     observed_web_urls: tuple[str, ...] = (),
     citation_repair_attempted: bool = False,
     citation_provisional_output: dict[str, Any] | None = None,
+    clarification_correction_attempted: bool = False,
+    clarification_source_batch_key: str | None = None,
+    clarification_observation: dict[str, Any] | None = None,
+    semantic_final_correction_attempted: bool = False,
+    semantic_final_source_batch_key: str | None = None,
+    semantic_final_observation: dict[str, Any] | None = None,
     usage: dict[str, Any] | None = None,
 ) -> ReactCheckpoint:
     payload = {
@@ -151,6 +186,7 @@ def make_react_checkpoint(
         "context_version": context_version,
         "context_hash": context_hash,
         "last_model_call_key": last_model_call_key,
+        "last_action_batch_key": last_action_batch_key,
         "history": history,
         "pending_actions": pending_actions,
         "completed_action_keys": completed_action_keys,
@@ -158,9 +194,17 @@ def make_react_checkpoint(
         "coordination_calls_consumed": coordination_calls_consumed,
         "waiting_delegations": waiting_delegations,
         "consumed_message_ids": consumed_message_ids,
+        "pending_user_input": pending_user_input,
+        "consumed_user_input_ids": consumed_user_input_ids,
         "observed_web_urls": observed_web_urls,
         "citation_repair_attempted": citation_repair_attempted,
         "citation_provisional_output": citation_provisional_output,
+        "clarification_correction_attempted": clarification_correction_attempted,
+        "clarification_source_batch_key": clarification_source_batch_key,
+        "clarification_observation": clarification_observation,
+        "semantic_final_correction_attempted": semantic_final_correction_attempted,
+        "semantic_final_source_batch_key": semantic_final_source_batch_key,
+        "semantic_final_observation": semantic_final_observation,
         "usage": usage or {},
     }
     payload["checkpoint_hash"] = _hash(payload)
@@ -196,11 +240,14 @@ def make_plan_checkpoint(
     current_step_key: str | None = None,
     completed_step_keys: tuple[str, ...] = (),
     latest_output: dict[str, Any] | None = None,
+    last_action_batch_key: str | None = None,
     recovery_instruction: str | None = None,
     recovery_decision: str | None = None,
     step_state: dict[str, Any] | None = None,
     context_version: int = 0,
     reflection_count: int = 0,
+    pending_user_input: dict[str, Any] | None = None,
+    consumed_user_input_ids: tuple[str, ...] = (),
     observed_web_urls: tuple[str, ...] = (),
     citation_repair_attempted: bool = False,
     citation_provisional_output: dict[str, Any] | None = None,
@@ -218,11 +265,14 @@ def make_plan_checkpoint(
         "current_step_key": current_step_key,
         "completed_step_keys": completed_step_keys,
         "latest_output": latest_output,
+        "last_action_batch_key": last_action_batch_key,
         "recovery_instruction": recovery_instruction,
         "recovery_decision": recovery_decision,
         "step_state": step_state,
         "context_version": context_version,
         "reflection_count": reflection_count,
+        "pending_user_input": pending_user_input,
+        "consumed_user_input_ids": consumed_user_input_ids,
         "observed_web_urls": observed_web_urls,
         "citation_repair_attempted": citation_repair_attempted,
         "citation_provisional_output": citation_provisional_output,

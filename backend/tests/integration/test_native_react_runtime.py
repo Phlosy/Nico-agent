@@ -56,6 +56,36 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _final_action(content: str) -> str:
+    return json.dumps(
+        {
+            "type": "final",
+            "content": content,
+            "intent": {
+                "interpreted_intent": "Report the observed tool result",
+                "confidence": 0.95,
+                "candidates": [
+                    {
+                        "candidate_id": "report",
+                        "intent": "Report the observed tool result",
+                        "confidence": 0.95,
+                    }
+                ],
+                "ambiguity": 0.05,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+            "completion": {
+                "answered_user_intent": True,
+                "requires_user_response": False,
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
 class SequencedToolModelProvider:
     name = "openai_compatible"
 
@@ -81,7 +111,10 @@ class SequencedToolModelProvider:
                 yield event
             return
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
-        yield ModelStreamEvent(type=ModelStreamEventType.TEXT_DELTA, text_delta="react complete")
+        yield ModelStreamEvent(
+            type=ModelStreamEventType.TEXT_DELTA,
+            text_delta=_final_action("react complete"),
+        )
         yield ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,
             finish_reason="stop",
@@ -123,7 +156,7 @@ class WebSearchModelProvider:
             yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
             yield ModelStreamEvent(
                 type=ModelStreamEventType.TEXT_DELTA,
-                text_delta="Found current documentation: https://docs.example/nico",
+                text_delta=_final_action("Found current documentation: https://docs.example/nico"),
             )
             yield ModelStreamEvent(
                 type=ModelStreamEventType.RESPONSE_COMPLETED,
@@ -149,7 +182,7 @@ class WebSearchModelProvider:
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
         yield ModelStreamEvent(
             type=ModelStreamEventType.TEXT_DELTA,
-            text_delta="Found current documentation.",
+            text_delta=_final_action("Found current documentation."),
         )
         yield ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -31,8 +32,10 @@ from nico_agent.runtime.contracts import (
     RuntimeToolSpec,
 )
 from nico_agent.runtime.native.checkpoint import make_react_checkpoint
+from nico_agent.runtime.native.prompts import NATIVE_CONTINUITY_POLICY
 from nico_agent.runtime.native.provider import NicoNativeRuntimeProvider
 from nico_agent.tools.errors import ToolApprovalRequired
+from nico_agent.user_inputs.contracts import RuntimeUserInputRequest
 
 
 class SequencedModelProvider:
@@ -83,6 +86,21 @@ class RecordingToolHandler:
             status="succeeded",
             output={"path": "notes/result.txt", "bytes_written": 5},
             cached=self.cached,
+        )
+
+
+class RecordingUserInputHandler:
+    def __init__(self) -> None:
+        self.intents = []
+
+    async def request_user_input(self, intent):
+        self.intents.append(intent)
+        return RuntimeUserInputRequest(
+            id=uuid4(),
+            status="requested",
+            revision=1,
+            wake_key="a" * 64,
+            expires_at="2099-01-01T00:00:00Z",
         )
 
 
@@ -280,9 +298,14 @@ def _tool_response() -> list[ModelStreamEvent]:
 
 
 def _final_response() -> list[ModelStreamEvent]:
+    envelope = _action_envelope(
+        "final",
+        content="Saved result.",
+        completion={"answered_user_intent": True, "requires_user_response": False},
+    )
     return [
         ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED),
-        ModelStreamEvent(type=ModelStreamEventType.TEXT_DELTA, text_delta="Saved result."),
+        ModelStreamEvent(type=ModelStreamEventType.TEXT_DELTA, text_delta=envelope),
         ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,
             finish_reason="stop",
@@ -308,6 +331,42 @@ def _text_response(text: str, request_id: str) -> list[ModelStreamEvent]:
             provider_request_id=request_id,
         ),
     ]
+
+
+def _final_text_response(content: str, request_id: str) -> list[ModelStreamEvent]:
+    return _text_response(
+        _action_envelope(
+            "final",
+            content=content,
+            completion={"answered_user_intent": True, "requires_user_response": False},
+        ),
+        request_id,
+    )
+
+
+def _action_envelope(action_type: str, **fields) -> str:
+    return json.dumps(
+        {
+            "type": action_type,
+            **fields,
+            "intent": {
+                "interpreted_intent": "Provide the requested result",
+                "confidence": 0.95,
+                "candidates": [
+                    {
+                        "candidate_id": "answer",
+                        "intent": "Provide the requested result",
+                        "confidence": 0.95,
+                    }
+                ],
+                "ambiguity": 0.05,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+        }
+    )
 
 
 def _named_tool_response(*, call_id: str, name: str, arguments: str) -> list[ModelStreamEvent]:
@@ -412,6 +471,7 @@ async def test_react_executes_exact_tool_and_continues_with_observation() -> Non
     assert handler.intents[0].idempotency_key.endswith(":1:provider-call-1")
     assert handler.intents[0].checkpoint["loop_state"] == "waiting_for_tool"
     assert len(model.requests) == 2
+    assert (model.requests[0].messages[0].content or "").count(NATIVE_CONTINUITY_POLICY) == 1
     assert model.requests[1].messages[-2].role == "assistant"
     assert model.requests[1].messages[-2].tool_calls[0]["id"] == "provider-call-1"
     assert model.requests[1].messages[-1].role == "tool"
@@ -421,6 +481,182 @@ async def test_react_executes_exact_tool_and_continues_with_observation() -> Non
     assert event_types.count(RuntimeEventType.MODEL_CALL_COMPLETED) == 2
     assert RuntimeEventType.TOOL_CALL_STARTED in event_types
     assert RuntimeEventType.TOOL_CALL_COMPLETED in event_types
+
+
+@pytest.mark.asyncio
+async def test_react_rejects_unnecessary_question_and_runs_one_tool_free_correction() -> None:
+    ask = _action_envelope(
+        "ask_user",
+        question="Did you mean the platform timestamp?",
+        reason="The input contains a typo.",
+    )
+    final = _action_envelope(
+        "final",
+        content="The platform provides the timestamp in the Run context.",
+        completion={"answered_user_intent": True, "requires_user_response": False},
+    )
+    model = SequencedModelProvider(
+        [_text_response(ask, "ask"), _text_response(final, "correction")]
+    )
+    provider = _native(model)
+    user_input = RecordingUserInputHandler()
+    request = _request(task_input={"message": "你平台是怎么提供de"})
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(
+            tool_handler=RecordingToolHandler(),
+            user_input_handler=user_input,
+        ),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output == {"content": "The platform provides the timestamp in the Run context."}
+    assert user_input.intents == []
+    assert len(model.requests) == 2
+    assert model.requests[1].tools == ()
+    assert "clarification_policy_observation" in model.requests[1].messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_react_allows_genuine_ambiguity_and_suspends_for_user_input() -> None:
+    ask = json.loads(
+        _action_envelope(
+            "ask_user",
+            question="Which target: file or database?",
+            reason="Both targets are plausible.",
+        )
+    )
+    ask["intent"].update({"confidence": 0.55, "ambiguity": 0.9})
+    ask["intent"]["candidates"] = [
+        {"candidate_id": "file", "intent": "Use the file", "confidence": 0.55},
+        {
+            "candidate_id": "database",
+            "intent": "Use the database",
+            "confidence": 0.54,
+        },
+    ]
+    model = SequencedModelProvider([_text_response(json.dumps(ask), "ambiguous")])
+    provider = _native(model)
+    user_input = RecordingUserInputHandler()
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(
+            tool_handler=RecordingToolHandler(),
+            user_input_handler=user_input,
+        ),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.SUSPENDED
+    assert outcome.wake_condition["type"] == "user_input"
+    assert outcome.checkpoint["loop_state"] == "waiting_for_user_input"
+    assert len(user_input.intents) == 1
+
+
+@pytest.mark.asyncio
+async def test_react_corrects_pseudo_final_once_before_completion() -> None:
+    invalid = _action_envelope(
+        "final",
+        content="I still need a response.",
+        completion={"answered_user_intent": False, "requires_user_response": True},
+    )
+    valid = _action_envelope(
+        "final",
+        content="Corrected ReAct answer.",
+        completion={"answered_user_intent": True, "requires_user_response": False},
+    )
+    model = SequencedModelProvider(
+        [_text_response(invalid, "invalid"), _text_response(valid, "corrected")]
+    )
+    provider = _native(model)
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=RecordingToolHandler()),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output == {"content": "Corrected ReAct answer."}
+    assert model.requests[1].tools == ()
+    assert "semantic_completion_observation" in model.requests[1].messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_react_repeated_invalid_final_exhausts_semantic_correction() -> None:
+    invalid = _action_envelope(
+        "final",
+        content="I still need a response.",
+        completion={"answered_user_intent": False, "requires_user_response": True},
+    )
+    model = SequencedModelProvider(
+        [_text_response(invalid, "invalid"), _text_response(invalid, "invalid-again")]
+    )
+    provider = _native(model)
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=RecordingToolHandler()),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.FAILED
+    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+    assert len(model.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_react_dispatches_structured_final_content_in_shadow_mode() -> None:
+    envelope = json.dumps(
+        {
+            "type": "final",
+            "content": "shadow only",
+            "intent": {
+                "interpreted_intent": "Provide the requested answer",
+                "confidence": 0.95,
+                "candidates": [
+                    {
+                        "candidate_id": "answer",
+                        "intent": "Provide the requested answer",
+                        "confidence": 0.95,
+                    }
+                ],
+                "ambiguity": 0.05,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+            "completion": {
+                "answered_user_intent": True,
+                "requires_user_response": False,
+            },
+        }
+    )
+    model = SequencedModelProvider([_text_response(envelope, "shadow-action")])
+    provider = _native(model)
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=RecordingToolHandler()),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output == {"content": "shadow only"}
+    assert len(model.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -441,7 +677,7 @@ async def test_react_composes_search_fetch_and_cites_observed_url() -> None:
                     f'"search_tool_call_id":"{handler.search_tool_call_id}"}}'
                 ),
             ),
-            _text_response(
+            _final_text_response(
                 "Current documentation: https://docs.example/nico",
                 "web-final",
             ),
@@ -585,8 +821,8 @@ async def test_react_repairs_missing_web_citation_at_most_once(
                 name="web.search",
                 arguments='{"query":"current Nico documentation"}',
             ),
-            _text_response("Initial answer without citation.", "web-initial"),
-            _text_response(repair_text, "web-repair"),
+            _final_text_response("Initial answer without citation.", "web-initial"),
+            _final_text_response(repair_text, "web-repair"),
         ]
     )
     provider = _native(model)
@@ -627,7 +863,7 @@ async def test_react_missing_citation_respects_iteration_budget() -> None:
                 name="web.search",
                 arguments='{"query":"current Nico documentation"}',
             ),
-            _text_response("Initial answer without citation.", "web-initial"),
+            _final_text_response("Initial answer without citation.", "web-initial"),
         ]
     )
     provider = _native(model)
@@ -668,7 +904,7 @@ async def test_react_resumes_pending_citation_repair_without_tools() -> None:
         }
     )
     model = SequencedModelProvider(
-        [_text_response("Source: https://docs.example/nico", "web-repair")]
+        [_final_text_response("Source: https://docs.example/nico", "web-repair")]
     )
     provider = _native(model)
     session = await provider.create_session(request)
@@ -699,7 +935,7 @@ async def test_react_pending_citation_repair_honors_cancel() -> None:
     )
     request = base_request.model_copy(update={"checkpoint": checkpoint.model_dump(mode="json")})
     model = SequencedModelProvider(
-        [_text_response("Source: https://docs.example/nico", "web-repair")]
+        [_final_text_response("Source: https://docs.example/nico", "web-repair")]
     )
     provider = _native(model)
     session = await provider.create_session(request)

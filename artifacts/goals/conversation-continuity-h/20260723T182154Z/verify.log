@@ -1,0 +1,271 @@
+documentation checks passed: 93 Markdown files, 20 publication-surface files
+All checks passed!
+12 files already formatted
+........................................................................ [ 66%]
+....................................                                     [100%]
+108 passed in 0.48s
+[nico] running local development and version workflow contracts
+[nico-dev-test] local development and version contracts passed
+[nico] preparing backend environment
+[nico] running backend lint, format check and unit tests
+All checks passed!
+365 files already formatted
+============================= test session starts ==============================
+platform linux -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/node7/xpk/Nico-agent/backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 751 items
+
+backend/tests/unit/test_action_dispatcher.py ......                      [  0%]
+backend/tests/unit/test_agent_actions.py .....................           [  3%]
+backend/tests/unit/test_agent_capability_catalog.py .....                [  4%]
+backend/tests/unit/test_agent_capability_policy.py ....                  [  4%]
+backend/tests/unit/test_agent_version_lifecycle.py ..                    [  5%]
+backend/tests/unit/test_api.py ............                              [  6%]
+backend/tests/unit/test_brave_search_provider.py ......                  [  7%]
+backend/tests/unit/test_cli_app.py ..................                    [  9%]
+backend/tests/unit/test_cli_approvals.py ....                            [ 10%]
+backend/tests/unit/test_cli_capabilities.py .....                        [ 11%]
+backend/tests/unit/test_cli_chat.py .................................... [ 15%]
+...................                                                      [ 18%]
+backend/tests/unit/test_cli_client.py ...................                [ 20%]
+backend/tests/unit/test_cli_config.py ......                             [ 21%]
+backend/tests/unit/test_cli_execution.py ..............                  [ 23%]
+backend/tests/unit/test_cli_logo.py ..                                   [ 23%]
+backend/tests/unit/test_cli_output.py ...                                [ 24%]
+backend/tests/unit/test_cli_project.py ........                          [ 25%]
+backend/tests/unit/test_cli_provider.py ............                     [ 26%]
+backend/tests/unit/test_cli_renderers.py ............................    [ 30%]
+backend/tests/unit/test_cli_service_bridge.py ......                     [ 31%]
+backend/tests/unit/test_cli_setup.py ......                              [ 32%]
+backend/tests/unit/test_cli_slash.py ..                                  [ 32%]
+backend/tests/unit/test_cli_sse.py ...                                   [ 32%]
+backend/tests/unit/test_cli_user_input.py ......                         [ 33%]
+backend/tests/unit/test_cli_web.py ...........                           [ 35%]
+backend/tests/unit/test_config.py .....                                  [ 35%]
+backend/tests/unit/test_conversation_context.py ....                     [ 36%]
+backend/tests/unit/test_conversation_contracts.py .....                  [ 37%]
+backend/tests/unit/test_conversation_model_messages.py ....              [ 37%]
+backend/tests/unit/test_coordination_policy.py ......                    [ 38%]
+backend/tests/unit/test_database_read_tool.py .....................      [ 41%]
+backend/tests/unit/test_doh_resolver.py ....                             [ 41%]
+backend/tests/unit/test_domain_states.py ............................... [ 45%]
+......                                                                   [ 46%]
+backend/tests/unit/test_fake_web.py ....                                 [ 47%]
+backend/tests/unit/test_growth_reflection.py .....                       [ 47%]
+backend/tests/unit/test_growth_validation.py ....                        [ 48%]
+backend/tests/unit/test_guided_setup_service.py .........                [ 49%]
+backend/tests/unit/test_health.py ....                                   [ 50%]
+backend/tests/unit/test_hermes_runtime.py ..........                     [ 51%]
+backend/tests/unit/test_http_read_tool.py ........................       [ 54%]
+backend/tests/unit/test_local_secret_transaction.py ...............      [ 56%]
+backend/tests/unit/test_logging.py .                                     [ 56%]
+backend/tests/unit/test_mcp_gateway.py .....                             [ 57%]
+backend/tests/unit/test_memory_primitives.py ........                    [ 58%]
+backend/tests/unit/test_model_gateway.py ..........                      [ 59%]
+backend/tests/unit/test_model_provider_adapters.py .......               [ 60%]
+backend/tests/unit/test_native_aggregation.py ..                         [ 60%]
+backend/tests/unit/test_native_continuity_prompt.py ....                 [ 61%]
+backend/tests/unit/test_native_direct_runtime.py ..........              [ 62%]
+backend/tests/unit/test_native_plan_loop.py ............                 [ 64%]
+backend/tests/unit/test_native_planning.py .......                       [ 65%]
+backend/tests/unit/test_native_react_loop.py ....................        [ 68%]
+backend/tests/unit/test_native_web_citations.py ...                      [ 68%]
+backend/tests/unit/test_package_version.py ....                          [ 68%]
+backend/tests/unit/test_project_contracts.py ....                        [ 69%]
+backend/tests/unit/test_project_supervision.py ..                        [ 69%]
+backend/tests/unit/test_project_timeline.py ..                           [ 70%]
+backend/tests/unit/test_provider_catalog.py .............                [ 71%]
+backend/tests/unit/test_provider_probe_timeout.py ...                    [ 72%]
+backend/tests/unit/test_provider_probe_verification.py ..                [ 72%]
+backend/tests/unit/test_python_sandbox.py .......                        [ 73%]
+backend/tests/unit/test_runtime_contract.py .........                    [ 74%]
+backend/tests/unit/test_runtime_contract_v2.py .........                 [ 75%]
+backend/tests/unit/test_runtime_lifecycle.py ........................... [ 79%]
+....                                                                     [ 79%]
+backend/tests/unit/test_runtime_preparation.py .......                   [ 80%]
+backend/tests/unit/test_safe_http.py ...............                     [ 82%]
+backend/tests/unit/test_searxng_search_provider.py ....                  [ 83%]
+backend/tests/unit/test_skill_release.py ...                             [ 83%]
+backend/tests/unit/test_tool_approvals.py ..                             [ 84%]
+backend/tests/unit/test_tool_contract.py ..............                  [ 85%]
+backend/tests/unit/test_tool_policy.py ........                          [ 86%]
+backend/tests/unit/test_user_input_requests.py ........                  [ 88%]
+backend/tests/unit/test_web_cache.py ...                                 [ 88%]
+backend/tests/unit/test_web_extraction.py ............                   [ 90%]
+backend/tests/unit/test_web_fetch_tool.py ..............                 [ 91%]
+backend/tests/unit/test_web_normalization.py ..                          [ 92%]
+backend/tests/unit/test_web_onboarding_catalog.py ....                   [ 92%]
+backend/tests/unit/test_web_performance.py ..                            [ 92%]
+backend/tests/unit/test_web_provider_probe_worker.py .                   [ 93%]
+backend/tests/unit/test_web_provider_registry.py ...........             [ 94%]
+backend/tests/unit/test_web_rate_limit.py ..                             [ 94%]
+backend/tests/unit/test_web_search_tool.py .....                         [ 95%]
+backend/tests/unit/test_web_source_authorization.py ..............       [ 97%]
+backend/tests/unit/test_worker.py ......                                 [ 98%]
+backend/tests/unit/test_workspace_tools.py ..............                [100%]
+
+============================= 751 passed in 16.70s =============================
+[nico] preparing frontend environment
+
+added 118 packages, and audited 119 packages in 2s
+
+29 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[nico] running frontend component tests and production build
+
+> nico-agent-web@0.1.0 test
+> vitest run
+
+
+ RUN  v4.1.10 /home/node7/xpk/Nico-agent/frontend
+
+
+ Test Files  3 passed (3)
+      Tests  11 passed (11)
+   Start at  18:22:57
+   Duration  1.67s (transform 242ms, setup 366ms, import 617ms, tests 781ms, environment 2.09s)
+
+
+> nico-agent-web@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v8.1.5 building client environment for production...
+[2Ktransforming...✓ 65 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.65 kB │ gzip:  0.42 kB
+dist/assets/index-Dt-WS9Ne.css   13.11 kB │ gzip:  3.62 kB
+dist/assets/index-oN6IIbE2.js   239.23 kB │ gzip: 75.17 kB
+
+✓ built in 267ms
+[nico] local test suite passed
+[nico] starting real PostgreSQL, Redis and MinIO dependencies
+ Container nico-agent-platform-minio-1 Running 
+ Container nico-agent-platform-redis-1 Running 
+ Container nico-agent-platform-postgres-1 Running 
+ Container nico-agent-platform-minio-1 Waiting 
+ Container nico-agent-platform-minio-1 Healthy 
+ Container nico-agent-platform-minio-init-1 Starting 
+ Container nico-agent-platform-minio-init-1 Started 
+[nico] MinIO is ready
+[nico] applying Alembic migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 20260716_0001, Enable platform PostgreSQL extensions.
+INFO  [alembic.runtime.migration] Running upgrade 20260716_0001 -> 20260717_0002, Create the tenant-scoped core control-plane schema.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0002 -> 20260717_0003, Add RuntimeSession persistence and the least-privilege Run claimer.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0003 -> 20260717_0004, Add versioned tools and immutable ToolCall execution records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0004 -> 20260717_0005, Freeze per-Run tool policy and bind ToolCall execution to a Run lease.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0005 -> 20260717_0006, Add tenant-scoped controlled Memory and Skill growth records.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0006 -> 20260717_0007, Add immutable versioned pgvector chunks for active Memory.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0007 -> 20260717_0008, Add concurrency-safe idempotency keys for growth evaluations and reviews.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0008 -> 20260717_0009, Add database guards for reviewed Skill release and scoped canaries.
+INFO  [alembic.runtime.migration] Running upgrade 20260717_0009 -> 20260718_0010, Add the native model runtime persistence baseline.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0010 -> 20260718_0011, Add recoverable ReAct step and checkpoint metadata.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0011 -> 20260718_0012, Add versioned Plans, PlanSteps, and runtime evaluations.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0012 -> 20260718_0013, Add tenant-scoped dynamic delegation, messages, closure, and budget ledgers.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0013 -> 20260718_0014, Add content-addressed artifacts and explicit parent/child sharing links.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0014 -> 20260718_0015, Freeze published Memory/Skill context and track its runtime effect.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0015 -> 20260718_0016, Record provider compatibility and legacy resolver telemetry.
+INFO  [alembic.runtime.migration] Running upgrade 20260718_0016 -> 20260719_0017, Add durable conversations, turns, and conversation context references.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0017 -> 20260719_0018, Add staged Conversation attachments for bounded context materialization.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0018 -> 20260719_0019, Add durable ToolApprovalRequest facts and decision guards.
+INFO  [alembic.runtime.migration] Running upgrade 20260719_0019 -> 20260720_0020, Add Provider onboarding provenance and durable probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260720_0020 -> 20260720_0021, Expose a token-free maintenance correlation check for Provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 20260720_0021 -> 20260721_0022, Add project membership, stable sessions, supervision, and interventions.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0022 -> 20260721_0023, Index Projects that are due for managed supervision.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0023 -> 20260721_0024, Index collaboration timeline and supervision projections.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0024 -> 20260722_0025, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0025 -> 20260722_0026, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0026 -> 20260723_0027, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0027 -> 20260723_0028, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0028 -> 20260723_0029, Persist the Agent response-metrics display preference.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0029 -> 20260723_0030, Persist provider-neutral AgentAction batches and repair relations.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0030 -> 20260723_0031, Add durable Runtime user-input requests and wake reconciliation.
+[nico] proving the extension migration can roll back and reapply
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0031 -> 20260723_0030, Add durable Runtime user-input requests and wake reconciliation.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0030 -> 20260723_0029, Persist provider-neutral AgentAction batches and repair relations.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0029 -> 20260723_0028, Persist the Agent response-metrics display preference.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0028 -> 20260723_0027, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running downgrade 20260723_0027 -> 20260722_0026, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running downgrade 20260722_0026 -> 20260722_0025, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running downgrade 20260722_0025 -> 20260721_0024, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 20260721_0024 -> 20260722_0025, Allow durable Web Provider verification probes.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0025 -> 20260722_0026, Add durable Conversation queue and approval policy state.
+INFO  [alembic.runtime.migration] Running upgrade 20260722_0026 -> 20260723_0027, Add the guarded Runtime Run lifecycle authority.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0027 -> 20260723_0028, Persist Agent-scoped chat defaults.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0028 -> 20260723_0029, Persist the Agent response-metrics display preference.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0029 -> 20260723_0030, Persist provider-neutral AgentAction batches and repair relations.
+INFO  [alembic.runtime.migration] Running upgrade 20260723_0030 -> 20260723_0031, Add durable Runtime user-input requests and wake reconciliation.
+[nico] running real dependency integration tests
+============================= test session starts ==============================
+platform linux -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/node7/xpk/Nico-agent/backend
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 171 items
+
+backend/tests/integration/test_agent_action_dispatch.py .                [  0%]
+backend/tests/integration/test_agent_action_persistence.py ...           [  2%]
+backend/tests/integration/test_agent_capability_activation.py ...        [  4%]
+backend/tests/integration/test_control_plane_api.py ......               [  7%]
+backend/tests/integration/test_conversation_api.py ..............        [ 15%]
+backend/tests/integration/test_conversation_model_request_audit.py .     [ 16%]
+backend/tests/integration/test_coordination_service.py ........          [ 21%]
+backend/tests/integration/test_database_read_tool.py .                   [ 21%]
+backend/tests/integration/test_growth_api.py .                           [ 22%]
+backend/tests/integration/test_growth_candidate_generation.py ......     [ 25%]
+backend/tests/integration/test_growth_persistence.py .......             [ 29%]
+backend/tests/integration/test_growth_review_lifecycle.py .........      [ 35%]
+backend/tests/integration/test_guided_setup_api.py .                     [ 35%]
+backend/tests/integration/test_guided_setup_proof.py .                   [ 36%]
+backend/tests/integration/test_hermes_mcp_boundary.py .                  [ 36%]
+backend/tests/integration/test_infrastructure.py ........                [ 41%]
+backend/tests/integration/test_model_runtime_api.py .                    [ 42%]
+backend/tests/integration/test_multi_agent_runtime.py .                  [ 42%]
+backend/tests/integration/test_native_plan_runtime.py ..                 [ 43%]
+backend/tests/integration/test_native_react_runtime.py ...               [ 45%]
+backend/tests/integration/test_native_runtime_persistence.py ..          [ 46%]
+backend/tests/integration/test_project_collaboration_api.py .......      [ 50%]
+backend/tests/integration/test_project_collaboration_e2e.py .            [ 51%]
+backend/tests/integration/test_project_collaboration_persistence.py ...  [ 53%]
+backend/tests/integration/test_project_interventions.py ..               [ 54%]
+backend/tests/integration/test_project_session_api.py .                  [ 54%]
+backend/tests/integration/test_project_supervision_worker.py ...         [ 56%]
+backend/tests/integration/test_provider_activation.py ....               [ 59%]
+backend/tests/integration/test_provider_maintenance.py ..                [ 60%]
+backend/tests/integration/test_provider_onboarding.py ..                 [ 61%]
+backend/tests/integration/test_provider_probe_worker.py ...              [ 63%]
+backend/tests/integration/test_python_sandbox.py .                       [ 63%]
+backend/tests/integration/test_runtime_knowledge_integration.py .        [ 64%]
+backend/tests/integration/test_runtime_leasing.py .......                [ 68%]
+backend/tests/integration/test_runtime_lifecycle.py .......              [ 72%]
+backend/tests/integration/test_runtime_worker.py .....                   [ 75%]
+backend/tests/integration/test_skill_release_lifecycle.py ....           [ 77%]
+backend/tests/integration/test_tool_gateway.py ..............            [ 85%]
+backend/tests/integration/test_tool_persistence.py ...                   [ 87%]
+backend/tests/integration/test_user_input_api.py ..                      [ 88%]
+backend/tests/integration/test_user_input_runtime.py .......             [ 92%]
+backend/tests/integration/test_web_agent_e2e.py .                        [ 93%]
+backend/tests/integration/test_web_cache_rate_limit.py .                 [ 94%]
+backend/tests/integration/test_web_fetch_gateway.py .                    [ 94%]
+backend/tests/integration/test_web_onboarding.py ......                  [ 98%]
+backend/tests/integration/test_web_onboarding_api.py ..                  [ 99%]
+backend/tests/integration/test_web_search_gateway.py .                   [100%]
+
+======================== 171 passed in 63.28s (0:01:03) ========================
+[nico] integration suite passed
+
+Session terminated, killing shell... ...killed.
+[nico] PASS UserInput PTY restart, answer ownership, resume, and single-final proof
+[nico] PASS Conversation Continuity Goal H UserInput API and CLI gates

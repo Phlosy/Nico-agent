@@ -92,6 +92,7 @@ class ModelResponse(BaseModel):
 
     text: str = ""
     tool_calls: tuple[ModelToolCall, ...] = ()
+    structured_output: bool = False
     finish_reason: str | None = None
     usage: ModelUsage = Field(default_factory=ModelUsage)
     provider_request_id: str | None = None

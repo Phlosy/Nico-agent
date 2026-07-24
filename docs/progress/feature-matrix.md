@@ -1,6 +1,6 @@
 # 功能矩阵
 
-最后更新：2026-07-22 UTC。`未实现` 表示尚未进入对应 Goal；`不适用` 表示该阶段不以测试占位冒充行为实现。
+最后更新：2026-07-23 UTC。`未实现` 表示尚未进入对应 Goal；`不适用` 表示该阶段不以测试占位冒充行为实现。
 
 | 功能 | 设计完成 | 代码完成 | 单测完成 | 集成测试 | E2E | 文档 | 最终状态 |
 | -- | ---- | ---- | ---- | ---- | --- | -- | ---- |
@@ -17,6 +17,7 @@
 | Nico Native Direct Runtime | 已设计 | 默认 `nico_native` 单轮上下文构建、模型流合并、usage/cost、checkpoint、取消与稳定终态已实现；不依赖 Hermes | 成功、模型失败、取消、空 endpoint、Tool action 拒绝与模式拒绝已覆盖 | Worker/数据库/API/SSE 路径已通过 | 无 Hermes 的 fake-model Compose E2E 已通过 | Runtime、配置、API 与架构文档已完成 | Goal G 已实现；真实模型端点验收待凭据 |
 | Nico Native ReAct 与恢复 | 已设计 | 多轮模型/Tool Gateway/观察闭环、精确工具版本、预算、pre-action/post-observation checkpoint、重放关系和 attempt 隔离已实现 | 正常闭环、预算、缺 handler、非法 Tool JSON、损坏 checkpoint、稳定幂等键与旧 attempt 隔离已覆盖 | 真实 PostgreSQL 下 Context/Model/Step/Tool 轮次绑定、迁移与恢复通过 | 真实 Worker SIGKILL、过期租约接管、file.write 零重复、Python 沙箱和最终回答通过 | Runtime、测试、状态矩阵与 Handoff 已完成 | Goal H 已实现；credentialed real-model E2E 待操作者凭据 |
 | Nico Native Plan、Reflection 与 Completion | 已设计 | 结构化有界 DAG、不可覆盖 Plan revisions、Step validation、精确版本 Tool Gateway、受约束 Reflection/Replan、确定性 Task acceptance、可选独立计费 judge、schema v3 checkpoint 已实现 | DAG/cycle/重复依赖/预算/结构错误、三步执行、失败重规划、Completion 修正、judge 计费、预动作工具恢复与恢复不重计费已覆盖 | PostgreSQL Plan/Step/Evaluation/ModelCall/RunStep/ToolCall 投影、工具父子轨迹、RLS、不可变触发器和只读 API 通过 | fake-model Compose 完成 revision 1 失败、revision 2 修正和独立 judge | Runtime/API/状态机/测试与 Handoff 已完成 | Goal I 已实现；credentialed real-model planning E2E 待操作者凭据 |
+| Conversation continuity、Clarification 与语义 Completion | 已设计 | role-preserving Context、单点 current input、统一 continuity policy、provider-neutral Action、durable UserInput、版本化 Clarification/Completion Gate、严格 Native final envelope 与有界 correction 已实现 | AE1–AE11、Direct/ReAct/Plan、必要/非必要追问、伪终态、无限循环、崩溃复用、指标分母和缺失 usage 已覆盖 | Action/UserInput/repair/RLS/恢复与完整 Native 回归通过；真实依赖套件内运行同一 evaluation harness | hermetic baseline-v0 与 continuity-v1 同集比较通过；外部端点无凭据时明确记录 11 项 skipped/unverified | Runtime、Testing、进度与 Goal handoff 已更新 | CC-K 已实现；hermetic 11/11，通过但 credentialed 模型质量待配置 |
 | 动态多 Agent 协作 | 已设计 | Delegation、Run ancestry、Message、预算预留/核销、权限收缩、并行 Child、Parent 挂起/唤醒、reconciler、retry request 与树取消已实现；不固化 Team/Workflow | 策略交集、Secret ref、并行委托/恢复与聚合已覆盖 | 并发预算不超卖、深度/数量/循环/重复、RLS、终态不可改写、取消、通知修复与真实 Parent/Child Worker 通过 | 两 Child 调用中 SIGKILL Worker，新 Worker 接管并唤醒 Parent 聚合通过 | Runtime/API/架构/领域文档已更新 | Goal J 已实现；credentialed real-model E2E 待操作者凭据 |
 | 私有共享 Artifact | 已设计 | PostgreSQL 权威元数据、MinIO 临时上传→SHA-256 对象、Runtime handler、Run API、Child→direct-Parent link 与受控下载已实现 | Artifact intent、原生 store 工具与聚合引用已覆盖 | 幂等、Hash/size 篡改、Sibling 拒绝、FORCE RLS、终态不可变、大小上限与 API 下载通过 | 两 Child 产物随 result message 共享；匿名访问与临时孤儿检查通过 | 配置/API/架构/领域文档已更新 | Goal J 最小生命周期已实现；完整工作台待后续 |
 | Model Gateway 与 OpenAI-compatible Provider | 已设计 | 独立 Provider registry、Secret ref、流式文本/Tool delta/usage、能力门控、超时/重试、Redis 限流、DNS/IP 固定及响应大小限制已实现 | 流、分片 Tool、429、断流、hard/soft 限流、SSRF、Secret 脱敏与协议异常已覆盖 | 双 Worker Redis 原子限流、Endpoint API 与持久化已通过 | fake-model profile 与 Runtime Provider capability matrix 已通过 | 配置、安全、Runtime 与 API 文档已完成 | Goal L 合同 parity 已实现；真实外部端点质量待凭据验收 |

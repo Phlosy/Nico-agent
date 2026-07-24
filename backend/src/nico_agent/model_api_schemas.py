@@ -83,6 +83,60 @@ class ModelCallRead(FromAttributesModel):
     ended_at: datetime | None
 
 
+class AgentActionRead(FromAttributesModel):
+    id: UUID
+    ordinal: int
+    action_id: str
+    kind: Literal["final", "tool_call", "ask_user"]
+    provider_call_id: str | None
+    tool_name: str | None
+    intent: dict[str, Any]
+    completion: dict[str, Any]
+    content_hash: str | None
+    arguments_hash: str | None
+    question_hash: str | None
+    reason_hash: str | None
+    compatibility_mode: bool
+    status: str
+    outcome_ref: str | None
+    observation_ref: str | None
+    created_at: datetime
+
+
+class AgentActionRepairRead(FromAttributesModel):
+    id: UUID
+    source_model_call_id: UUID
+    source_batch_id: UUID | None
+    result_batch_id: UUID
+    kind: str
+    repair_ordinal: int
+    reason_code: str
+    observation_ref: str | None
+    created_at: datetime
+
+
+class AgentActionBatchRead(FromAttributesModel):
+    id: UUID
+    run_id: UUID
+    runtime_session_id: UUID
+    context_snapshot_id: UUID
+    model_call_id: UUID
+    run_step_id: UUID
+    replay_of_batch_id: UUID | None
+    schema_version: int
+    parse_revision: int
+    batch_key: str
+    source_format: str
+    response_hash: str
+    action_count: int
+    dispatch_cursor: int
+    status: str
+    actions: list[AgentActionRead]
+    repairs: list[AgentActionRepairRead]
+    created_at: datetime
+    updated_at: datetime
+
+
 class ContextSnapshotRead(FromAttributesModel):
     id: UUID
     run_id: UUID

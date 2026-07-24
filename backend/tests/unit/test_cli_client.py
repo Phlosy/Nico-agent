@@ -202,6 +202,33 @@ def test_tool_approval_decision_is_versioned_and_idempotent() -> None:
     )
 
 
+def test_user_input_answer_is_versioned_idempotent_and_not_a_conversation_turn() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={"id": "question-1", "status": "answered", "revision": 2},
+        )
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        value = client.answer_user_input(
+            "question-1",
+            expected_revision=1,
+            answer={"target": "database", "confirmed": True},
+            idempotency_key="user-input-answer-1",
+        )
+
+    assert value["status"] == "answered"
+    assert seen[0].url.path == "/api/v1/user-input-requests/question-1/answer"
+    assert seen[0].headers["idempotency-key"] == "user-input-answer-1"
+    assert seen[0].read() == (
+        b'{"expected_revision":1,"answer":{"target":"database","confirmed":true}}'
+    )
+    assert "/conversations/" not in seen[0].url.path
+
+
 def test_sse_stream_sends_cursor_and_deduplicates_sequences() -> None:
     seen: dict[str, str] = {}
     body = (

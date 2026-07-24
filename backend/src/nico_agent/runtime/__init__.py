@@ -1,9 +1,20 @@
 """Provider-neutral runtime contracts and built-in adapters."""
 
+from nico_agent.runtime.completion_gate import (
+    CompletionGateFacts,
+    CompletionGatePolicy,
+    CompletionGateVerdict,
+    evaluate_final_action,
+)
 from nico_agent.runtime.contracts import (
+    AgentAction,
+    AgentActionBatch,
+    AgentActionKind,
     AgentRuntimeProvider,
     AgentRuntimeProviderV2,
+    AskUserAction,
     ContextSeed,
+    FinalAction,
     RuntimeCapability,
     RuntimeEvent,
     RuntimeEventType,
@@ -21,6 +32,7 @@ from nico_agent.runtime.contracts import (
     RuntimeToolSession,
     RuntimeToolSpec,
     RuntimeTrajectory,
+    ToolCallAction,
 )
 from nico_agent.runtime.hermes import HermesRuntimeProvider
 from nico_agent.runtime.mock import MockRuntimeProvider
@@ -28,9 +40,17 @@ from nico_agent.runtime.native import NicoNativeRuntimeProvider
 from nico_agent.runtime.registry import RuntimeProviderRegistry
 
 __all__ = [
+    "AgentAction",
+    "AgentActionBatch",
+    "AgentActionKind",
     "AgentRuntimeProvider",
     "AgentRuntimeProviderV2",
+    "AskUserAction",
     "ContextSeed",
+    "CompletionGateFacts",
+    "CompletionGatePolicy",
+    "CompletionGateVerdict",
+    "FinalAction",
     "MockRuntimeProvider",
     "HermesRuntimeProvider",
     "NicoNativeRuntimeProvider",
@@ -52,4 +72,6 @@ __all__ = [
     "RuntimeToolOutcome",
     "RuntimeToolSession",
     "RuntimeToolSpec",
+    "ToolCallAction",
+    "evaluate_final_action",
 ]

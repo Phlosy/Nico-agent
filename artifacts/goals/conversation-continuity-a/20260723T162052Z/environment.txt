@@ -1,0 +1,15 @@
+2026-07-23T16:26:31Z
+4547eccf8d7345e95fdb5925b4930b1c144abe2f
+dev
+ M docs/plans/2026-07-23-001-refactor-agent-runtime-execution-hardening-plan.md
+ M docs/progress/goal-status.md
+?? artifacts/goals/conversation-continuity-a/
+?? backend/tests/integration/test_conversation_model_request_audit.py
+?? backend/tests/unit/test_conversation_model_messages.py
+?? docs/audits/
+?? docs/brainstorms/2026-07-23-conversation-continuity-clarification-requirements.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-a-handoff.md
+?? docs/plans/2026-07-23-002-fix-conversation-continuity-clarification-plan.md
+?? scripts/verify-conversation-continuity-goal-a.sh
+Python 3.12.7
+Docker version 29.3.0, build 5927d80

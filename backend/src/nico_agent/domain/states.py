@@ -182,6 +182,36 @@ class ModelCallStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class AgentActionBatchStatus(StrEnum):
+    PENDING = "pending"
+    DISPATCHING = "dispatching"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AgentActionStatus(StrEnum):
+    PENDING = "pending"
+    DISPATCHED = "dispatched"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+class UserInputRequestStatus(StrEnum):
+    REQUESTED = "requested"
+    ANSWERED = "answered"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
+
+class AgentActionRepairKind(StrEnum):
+    POST_MODEL_CALL_COMMIT = "post_model_call_commit"
+    PARSE_CORRECTION = "parse_correction"
+    CLARIFICATION_CORRECTION = "clarification_correction"
+    SEMANTIC_FINAL_CORRECTION = "semantic_final_correction"
+    REPLAY = "replay"
+
+
 class ToolDefinitionStatus(StrEnum):
     DRAFT = "draft"
     ENABLED = "enabled"
@@ -372,6 +402,7 @@ RUN_TRANSITIONS = {
     RunStatus.RUNNING: {
         RunStatus.WAITING_FOR_TOOL,
         RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.WAITING_FOR_USER_INPUT,
         RunStatus.WAITING_FOR_SUBAGENT,
         RunStatus.PAUSED,
         RunStatus.COMPLETED,
@@ -385,9 +416,11 @@ RUN_TRANSITIONS = {
         RunStatus.FAILED,
         RunStatus.CANCELLED,
     },
-    # Reserved for the U3 durable request/answer/wake protocol. Keeping the
-    # enum/schema value additive must not make it executable in U1.
-    RunStatus.WAITING_FOR_USER_INPUT: set(),
+    RunStatus.WAITING_FOR_USER_INPUT: {
+        RunStatus.RUNNING,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    },
     RunStatus.WAITING_FOR_SUBAGENT: {
         RunStatus.RUNNING,
         RunStatus.FAILED,

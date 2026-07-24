@@ -653,6 +653,41 @@ class NicoApiClient:
             extra_headers={"Idempotency-Key": idempotency_key},
         )
 
+    def list_user_inputs(
+        self,
+        *,
+        run_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if run_id is not None:
+            params["run_id"] = run_id
+        if status is not None:
+            params["status"] = status
+        return self.request("GET", "/api/v1/user-input-requests", params=params)
+
+    def get_user_input(self, request_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/user-input-requests/{request_id}")
+
+    def answer_user_input(
+        self,
+        request_id: str,
+        *,
+        expected_revision: int,
+        answer: Any,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST",
+            f"/api/v1/user-input-requests/{request_id}/answer",
+            json_body={
+                "expected_revision": expected_revision,
+                "answer": answer,
+            },
+            extra_headers={"Idempotency-Key": idempotency_key},
+        )
+
     def create_conversation(
         self,
         *,

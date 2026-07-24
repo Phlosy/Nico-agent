@@ -299,6 +299,34 @@ CLI 断开不会取消审批，也不会隐式批准。再次运行 `nico chat -
 
 请求超过 `NICO_TOOL_APPROVAL_TTL_SECONDS` 后由 Worker 的数据库协调器原子标记为 `expired` 并唤醒 Run。Run 取消时请求转为 `cancelled`。requested 之后只能产生一次 approved、rejected、expired 或 cancelled 终态，所有请求与决定均有 Event 和 AuditRecord。
 
+## Agent 问题与回答
+
+Agent question 是 Runtime 为当前 Action 请求必需信息的独立中断，不是 Nico 的最终
+回答、普通聊天消息或工具审批。CLI 显示有边界的 question、reason、答案类型与过期
+时间，并使用独立提示：
+
+```text
+╭─ Agent question ─────────────────────────────╮
+│ Question  Which exact target should I use?   │
+│ Why       Several targets remain plausible.  │
+│ Answer    one of: file, database              │
+╰───────────────────────────────────────────────╯
+answer ›
+```
+
+字符串/choice 问题直接输入文本；object、array、boolean 和其他结构化问题输入有效
+JSON。回答通过独立 UserInput API 提交 expected revision 与 `Idempotency-Key`，
+不会进入 Conversation queue，也不会创建下一条 Turn。服务端按该请求冻结的 JSON
+Schema 验证，成功后唤醒同一个 Run；重复的同键同值回答返回原结果，旧 revision、
+不同重放、过期、取消或格式错误都会保持稳定失败且不回显答案正文。
+
+待回答问题的输入 owner 高于 Tool approval 和普通 composer；同一时刻只显示并消费
+一个 prompt。CLI 会保存正在编辑的普通草稿和光标，问题处理后原样恢复；排队 Turn
+仍只在 composer 预览中展示，不能被误当成问题答案。退出 CLI 或 Worker 停止都不会
+删除问题。重新运行 `nico chat --resume <conversation-id>` 时，会在接受普通输入前
+从服务端恢复同一 pending question。当前 live model Schema 尚未声明 `ask_user`；
+在 Clarification Gate 启用前，只有显式 Runtime Action fixture 能建立此请求。
+
 ## Web 搜索配置
 
 Web 能力默认不对 Agent 授权。本地安装已启用 Provider 写入并启动 SearXNG，首选

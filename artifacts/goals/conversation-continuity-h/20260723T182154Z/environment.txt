@@ -1,0 +1,96 @@
+2026-07-23T18:22:19Z
+4547eccf8d7345e95fdb5925b4930b1c144abe2f
+dev
+ M backend/src/nico_agent/api.py
+ M backend/src/nico_agent/cli/chat_session.py
+ M backend/src/nico_agent/cli/client.py
+ M backend/src/nico_agent/cli/renderers.py
+ M backend/src/nico_agent/control_plane.py
+ M backend/src/nico_agent/conversations/context.py
+ M backend/src/nico_agent/conversations/contracts.py
+ M backend/src/nico_agent/database.py
+ M backend/src/nico_agent/domain/models.py
+ M backend/src/nico_agent/domain/states.py
+ M backend/src/nico_agent/model_api.py
+ M backend/src/nico_agent/model_api_schemas.py
+ M backend/src/nico_agent/models/contracts.py
+ M backend/src/nico_agent/models/gateway.py
+ M backend/src/nico_agent/runtime/__init__.py
+ M backend/src/nico_agent/runtime/contracts.py
+ M backend/src/nico_agent/runtime/executor.py
+ M backend/src/nico_agent/runtime/lifecycle.py
+ M backend/src/nico_agent/runtime/native/checkpoint.py
+ M backend/src/nico_agent/runtime/native/context.py
+ M backend/src/nico_agent/runtime/native/loop.py
+ M backend/src/nico_agent/runtime/native/provider.py
+ M backend/src/nico_agent/runtime/service.py
+ M backend/src/nico_agent/runtime/tools.py
+ M backend/tests/integration/test_infrastructure.py
+ M backend/tests/integration/test_native_runtime_persistence.py
+ M backend/tests/integration/test_runtime_lifecycle.py
+ M backend/tests/unit/test_cli_chat.py
+ M backend/tests/unit/test_cli_client.py
+ M backend/tests/unit/test_conversation_context.py
+ M backend/tests/unit/test_model_provider_adapters.py
+ M backend/tests/unit/test_native_direct_runtime.py
+ M backend/tests/unit/test_native_plan_loop.py
+ M backend/tests/unit/test_native_react_loop.py
+ M backend/tests/unit/test_runtime_lifecycle.py
+ M backend/tests/unit/test_runtime_preparation.py
+ M docs/cli.md
+ M docs/domain-model.md
+ M docs/plans/2026-07-23-001-refactor-agent-runtime-execution-hardening-plan.md
+ M docs/progress/goal-status.md
+ M docs/runtime.md
+ M docs/state-machines.md
+?? artifacts/goals/conversation-continuity-a/
+?? artifacts/goals/conversation-continuity-b/
+?? artifacts/goals/conversation-continuity-c/
+?? artifacts/goals/conversation-continuity-d/
+?? artifacts/goals/conversation-continuity-e/
+?? artifacts/goals/conversation-continuity-f/
+?? artifacts/goals/conversation-continuity-g/
+?? artifacts/goals/conversation-continuity-h/
+?? backend/migrations/versions/20260723_0030_agent_actions.py
+?? backend/migrations/versions/20260723_0031_user_input_requests.py
+?? backend/src/nico_agent/cli/user_inputs.py
+?? backend/src/nico_agent/domain/context.py
+?? backend/src/nico_agent/runtime/actions.py
+?? backend/src/nico_agent/runtime/native/action_dispatcher.py
+?? backend/src/nico_agent/runtime/native/action_parser.py
+?? backend/src/nico_agent/runtime/native/prompts.py
+?? backend/src/nico_agent/testing/user_input_e2e_server.py
+?? backend/src/nico_agent/user_inputs/
+?? backend/tests/integration/test_agent_action_dispatch.py
+?? backend/tests/integration/test_agent_action_persistence.py
+?? backend/tests/integration/test_conversation_model_request_audit.py
+?? backend/tests/integration/test_user_input_api.py
+?? backend/tests/integration/test_user_input_runtime.py
+?? backend/tests/unit/test_action_dispatcher.py
+?? backend/tests/unit/test_agent_actions.py
+?? backend/tests/unit/test_cli_user_input.py
+?? backend/tests/unit/test_conversation_model_messages.py
+?? backend/tests/unit/test_native_continuity_prompt.py
+?? backend/tests/unit/test_user_input_requests.py
+?? docs/audits/
+?? docs/brainstorms/2026-07-23-conversation-continuity-clarification-requirements.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-a-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-b-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-c-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-d-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-e-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-f-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-g-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-h-handoff.md
+?? docs/plans/2026-07-23-002-fix-conversation-continuity-clarification-plan.md
+?? scripts/e2e-runtime-user-input.sh
+?? scripts/verify-conversation-continuity-goal-a.sh
+?? scripts/verify-conversation-continuity-goal-b.sh
+?? scripts/verify-conversation-continuity-goal-c.sh
+?? scripts/verify-conversation-continuity-goal-d.sh
+?? scripts/verify-conversation-continuity-goal-e.sh
+?? scripts/verify-conversation-continuity-goal-f.sh
+?? scripts/verify-conversation-continuity-goal-g.sh
+?? scripts/verify-conversation-continuity-goal-h.sh
+Python 3.12.7
+Docker version 29.3.0, build 5927d80

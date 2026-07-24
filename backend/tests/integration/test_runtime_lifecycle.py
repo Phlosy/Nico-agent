@@ -381,9 +381,17 @@ async def test_claimer_cannot_execute_raw_transition_but_can_execute_reconcilers
                     "'public.reconcile_expired_tool_approvals()', 'EXECUTE')"
                 )
             )
+            user_input_execute = await session.scalar(
+                text(
+                    "SELECT has_function_privilege("
+                    "'nico_worker_claimer', "
+                    "'public.reconcile_user_input_requests()', 'EXECUTE')"
+                )
+            )
             assert raw_execute is False
             assert coordination_execute is True
             assert approval_execute is True
+            assert user_input_execute is True
 
         async with database.sessions() as session, session.begin():
             await session.execute(text("SET LOCAL ROLE nico_worker_claimer"))
@@ -405,6 +413,7 @@ async def test_claimer_cannot_execute_raw_transition_but_can_execute_reconcilers
 
         assert await database.reconcile_coordination_waiters() >= 0
         assert await database.reconcile_expired_tool_approvals() >= 0
+        assert await database.reconcile_user_input_requests() >= 0
     finally:
         await engine.dispose()
 
@@ -654,7 +663,7 @@ async def test_0027_expansion_defaults_preserve_representative_0026_run_shape() 
                 "lifecycle_metadata": {},
                 "lifecycle_revision": 0,
             }
-            assert head == "20260723_0029"
+            assert head == "20260723_0031"
             await session.execute(
                 text(
                     "UPDATE runs SET status = 'completed', ended_at = clock_timestamp() "

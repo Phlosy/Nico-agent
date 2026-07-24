@@ -16,6 +16,26 @@ from nico_agent.coordination.contracts import (
     RuntimeCoordinationIntent,
     RuntimeCoordinationOutcome,
 )
+from nico_agent.domain.context import ConversationContextMessage
+from nico_agent.runtime.actions import (
+    AgentAction as AgentAction,
+)
+from nico_agent.runtime.actions import (
+    AgentActionBatch as AgentActionBatch,
+)
+from nico_agent.runtime.actions import (
+    AgentActionKind as AgentActionKind,
+)
+from nico_agent.runtime.actions import (
+    AskUserAction as AskUserAction,
+)
+from nico_agent.runtime.actions import (
+    FinalAction as FinalAction,
+)
+from nico_agent.runtime.actions import (
+    ToolCallAction as ToolCallAction,
+)
+from nico_agent.user_inputs.contracts import RuntimeUserInputIntent, RuntimeUserInputRequest
 
 
 class RuntimeCapability(StrEnum):
@@ -32,6 +52,7 @@ class RuntimeCapability(StrEnum):
     COORDINATION = "coordination"
     ARTIFACTS = "artifacts"
     INTERVENTIONS = "interventions"
+    USER_INPUT = "user_input"
 
 
 class RuntimeSessionStatus(StrEnum):
@@ -67,6 +88,7 @@ class RuntimeEventType(StrEnum):
     MODEL_OUTPUT_DELTA = "model.output.delta"
     MODEL_CALL_COMPLETED = "model.call.completed"
     MODEL_CALL_FAILED = "model.call.failed"
+    ACTION_BATCH_CREATED = "action.batch.created"
     PLAN_CREATED = "plan.created"
     PLAN_STATUS_CHANGED = "plan.status.changed"
     PLAN_STEP_STARTED = "plan.step.started"
@@ -130,6 +152,7 @@ class ContextSeed(BaseModel):
     source_refs: tuple[str, ...] = ()
     trusted_context: tuple[dict[str, Any], ...] = ()
     untrusted_context: tuple[dict[str, Any], ...] = ()
+    conversation_messages: tuple[ConversationContextMessage, ...] = ()
     memory_refs: tuple[dict[str, Any], ...] = ()
     skill_refs: tuple[dict[str, Any], ...] = ()
     effect_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -225,6 +248,80 @@ class RuntimeToolSession(BaseModel):
     server_name: str = Field(default="nico", pattern=r"^[a-z][a-z0-9_-]{0,62}$")
 
 
+class RuntimeActionOutcome(BaseModel):
+    """Bounded authoritative result used to advance one persisted Action cursor."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["succeeded", "failed", "blocked", "unknown"]
+    outcome_ref: str | None = Field(default=None, min_length=1, max_length=500)
+    observation_ref: str | None = Field(default=None, min_length=1, max_length=500)
+    value: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeActionState(BaseModel):
+    """Persisted dispatch state plus a recovered domain projection when available."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ordinal: int = Field(ge=0)
+    action_id: str = Field(min_length=64, max_length=64)
+    status: Literal["pending", "dispatched", "succeeded", "failed", "blocked"]
+    outcome_ref: str | None = Field(default=None, max_length=500)
+    observation_ref: str | None = Field(default=None, max_length=500)
+    outcome: RuntimeActionOutcome | None = None
+
+
+class RuntimeActionBatchState(BaseModel):
+    """Committed batch state returned by the runtime persistence authority."""
+
+    model_config = ConfigDict(frozen=True)
+
+    batch_key: str = Field(min_length=64, max_length=64)
+    action_count: int = Field(ge=1, le=32)
+    dispatch_cursor: int = Field(ge=0)
+    status: Literal["pending", "dispatching", "completed", "failed"]
+    actions: tuple[RuntimeActionState, ...] = Field(min_length=1, max_length=32)
+
+
+@runtime_checkable
+class RuntimeActionHandler(Protocol):
+    async def wait_for_batch(self, batch_key: str) -> RuntimeActionBatchState: ...
+
+    async def begin_action(
+        self,
+        batch_key: str,
+        *,
+        ordinal: int,
+        action_id: str,
+    ) -> RuntimeActionBatchState: ...
+
+    async def complete_action(
+        self,
+        batch_key: str,
+        *,
+        ordinal: int,
+        action_id: str,
+        outcome: RuntimeActionOutcome,
+    ) -> RuntimeActionBatchState: ...
+
+    async def release_action(
+        self,
+        batch_key: str,
+        *,
+        ordinal: int,
+        action_id: str,
+    ) -> RuntimeActionBatchState: ...
+
+
+@runtime_checkable
+class RuntimeUserInputHandler(Protocol):
+    async def request_user_input(
+        self,
+        intent: RuntimeUserInputIntent,
+    ) -> RuntimeUserInputRequest: ...
+
+
 @runtime_checkable
 class RuntimeToolHandler(Protocol):
     async def list_tools(self) -> tuple[RuntimeToolSpec, ...]: ...
@@ -264,6 +361,8 @@ class RuntimeServices:
     coordination_handler: RuntimeCoordinationHandler | None = None
     artifact_handler: RuntimeArtifactHandler | None = None
     intervention_handler: RuntimeInterventionHandler | None = None
+    action_handler: RuntimeActionHandler | None = None
+    user_input_handler: RuntimeUserInputHandler | None = None
 
 
 class RuntimeSessionHandle(BaseModel):

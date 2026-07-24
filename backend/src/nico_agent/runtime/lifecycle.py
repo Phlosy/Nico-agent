@@ -31,6 +31,7 @@ LIFECYCLE_SQL_PORTS = (
     "claim_next_run",
     "reconcile_expired_tool_approvals",
     "reconcile_coordination_waiters",
+    "reconcile_user_input_requests",
 )
 
 # Executable inventory used by focused tests to keep new state writers visible.
@@ -48,6 +49,8 @@ LIFECYCLE_WRITER_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "tools.begin_call",
         "tools.finish_call",
         "tool_approvals.decide",
+        "user_inputs.request",
+        "user_inputs.answer",
         "coordination.cancel_tree",
     ),
     "runtime_session": (
@@ -59,6 +62,8 @@ LIFECYCLE_WRITER_ALLOWLIST: dict[str, tuple[str, ...]] = {
         "runtime.native_projection",
         "tools.persist_pre_action_checkpoint",
         "tool_approvals.decide",
+        "user_inputs.request",
+        "user_inputs.answer",
         "coordination.cancel_tree",
     ),
     "run_step": (
@@ -238,8 +243,12 @@ class RunLifecycleAuthority:
 
         should_clear_lease = clear_lease
         if should_clear_lease is None:
-            preserve_approval_handshake_lease = (
-                source is RunStatus.WAITING_FOR_APPROVAL
+            preserve_wait_handshake_lease = (
+                source
+                in {
+                    RunStatus.WAITING_FOR_APPROVAL,
+                    RunStatus.WAITING_FOR_USER_INPUT,
+                }
                 and target is RunStatus.RUNNING
                 and run.lease_owner is not None
                 and run.lease_token is not None
@@ -251,7 +260,7 @@ class RunLifecycleAuthority:
                 or target in _DURABLE_WAITS
                 or target is RunStatus.PAUSED
                 or source in _DURABLE_WAITS
-            ) and not preserve_approval_handshake_lease
+            ) and not preserve_wait_handshake_lease
         if should_clear_lease:
             cls.clear_lease(run)
 

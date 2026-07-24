@@ -16,6 +16,7 @@ deepened: 2026-07-23
 
 - **Objective:** Incrementally harden the existing Nico Agent Runtime into a durable action-driven state machine without replacing the working Native Runtime, Tool Gateway, approval, planning, delegation, or conversation paths.
 - **Authority order:** The origin requirements define intended behavior; current code and accepted ADRs define the implementation baseline; this plan resolves the delta and sequencing.
+- **Focused companion:** `docs/plans/2026-07-23-002-fix-conversation-continuity-clarification-plan.md` splits Conversation role fidelity, incomplete-input policy, clarification, and semantic-final behavior into smaller Goal boundaries. Its explicit parent-unit mapping governs that focused execution without replacing this plan's general Runtime architecture.
 - **Execution profile:** One Goal invocation owns exactly one U-ID. It starts from the first incomplete dependency-ready unit, verifies that unit, records evidence and a handoff, then stops without entering the next unit.
 - **Progress authority:** Git history, `docs/progress/goal-status.md`, evidence under `artifacts/goals/runtime-hardening-<phase-code>/`, and the latest phase handoff determine progress. This plan is not mutated to track completion.
 - **Compatibility rule:** Existing Direct, ReAct, Plan-and-Execute, Web, Artifact, Delegation, Memory/Skill, CLI queue, and durable Tool approval behavior must remain usable throughout the migration.

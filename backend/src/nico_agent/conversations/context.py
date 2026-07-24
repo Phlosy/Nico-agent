@@ -9,7 +9,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nico_agent.conversations.contracts import ConversationContextMessage
 from nico_agent.domain.models import Conversation, ConversationTurn, Run
+
+_TRUNCATION_SUFFIX = "…[TRUNCATED]"
 
 
 async def select_conversation_context(
@@ -51,6 +54,7 @@ async def select_conversation_context(
         )
     )
     selected, omitted = _select_recent_turns(previous, history_budget)
+    conversation_messages = _project_conversation_messages(selected, history_budget)
 
     raw_artifact_refs: list[dict[str, Any]] = []
     for turn in (*selected, current):
@@ -104,15 +108,7 @@ async def select_conversation_context(
             }
         )
         source_refs.append(f"conversation-summary:{conversation.id}:{summary_hash}")
-    if selected:
-        contexts.append(
-            {
-                "source": f"conversation:{conversation.id}:turns",
-                "kind": "recent_conversation_turns",
-                "trust": "untrusted_data",
-                "content": [_turn_payload(turn) for turn in selected],
-            }
-        )
+    if conversation_messages:
         source_refs.extend(f"conversation-turn:{turn.id}" for turn in selected)
     if artifact_refs:
         contexts.append(
@@ -131,10 +127,13 @@ async def select_conversation_context(
         )
     selected_ids = [str(turn.id) for turn in selected] + [str(current.id)]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "conversation_id": str(conversation.id),
         "conversation_turn_id": str(current.id),
         "selected_turn_ids": selected_ids,
+        "conversation_messages": [
+            message.model_dump(mode="json") for message in conversation_messages
+        ],
         "conversation_summary_hash": summary_hash,
         "artifact_refs": artifact_refs,
         "token_budget": run.token_budget,
@@ -153,16 +152,6 @@ async def select_conversation_context(
     }
 
 
-def _turn_payload(turn: ConversationTurn) -> dict[str, Any]:
-    return {
-        "turn_id": str(turn.id),
-        "sequence": turn.sequence,
-        "user": turn.user_input,
-        "assistant": turn.assistant_output,
-        "artifact_refs": turn.artifact_refs,
-    }
-
-
 def _select_recent_turns(
     newest_first: list[ConversationTurn], history_budget: int
 ) -> tuple[list[ConversationTurn], int]:
@@ -172,22 +161,166 @@ def _select_recent_turns(
     consumed = 0
     omitted = 0
     for index, turn in enumerate(newest_first):
-        payload = _turn_payload(turn)
-        size = len(json.dumps(payload, ensure_ascii=False, default=str))
+        raw = _raw_message_payloads([turn])
+        size = len(
+            json.dumps(
+                [_conversation_context_message_payload(item, item["content"]) for item in raw],
+                ensure_ascii=False,
+                default=str,
+            )
+        )
         if selected_newest and consumed + size > history_budget:
             omitted += len(newest_first) - index
             break
-        if not selected_newest and size > history_budget:
-            payload["user"] = turn.user_input[: history_budget // 2]
-            payload["assistant"] = _truncate_value(turn.assistant_output, history_budget // 2)
-            size = len(json.dumps(payload, ensure_ascii=False, default=str))
-        consumed += size
+        consumed += min(size, history_budget)
         selected_newest.append(turn)
     return list(reversed(selected_newest)), omitted
 
 
-def _truncate_value(value: Any, max_chars: int) -> Any:
-    rendered = json.dumps(value, ensure_ascii=False, default=str)
-    if len(rendered) <= max_chars:
+def _project_conversation_messages(
+    turns: list[ConversationTurn],
+    history_budget: int,
+) -> list[ConversationContextMessage]:
+    """Normalize persisted Turns into a deterministic, bounded role projection."""
+
+    raw = _raw_message_payloads(turns)
+    if not raw:
+        return []
+    unbounded = [_conversation_context_message_payload(item, item["content"]) for item in raw]
+    rendered_size = len(
+        json.dumps(
+            unbounded,
+            ensure_ascii=False,
+            default=str,
+        )
+    )
+    if rendered_size <= history_budget:
+        return [ConversationContextMessage.model_validate(item) for item in unbounded]
+    else:
+        empty = [_conversation_context_message_payload(item, "", truncated=True) for item in raw]
+        overhead = len(json.dumps(empty, ensure_ascii=False, default=str))
+        available = max(1, history_budget - overhead - len(raw))
+        allocations = _allocate_content_chars(
+            [len(str(item["content"])) for item in raw],
+            available,
+        )
+        bounded_contents = [
+            _truncate_text(str(item["content"]), allocation)
+            for item, allocation in zip(raw, allocations, strict=True)
+        ]
+
+    return [
+        _conversation_context_message(
+            item,
+            content,
+            truncated=content != item["content"],
+        )
+        for item, content in zip(raw, bounded_contents, strict=True)
+    ]
+
+
+def _conversation_context_message(
+    item: dict[str, Any],
+    content: str,
+    *,
+    truncated: bool = False,
+) -> ConversationContextMessage:
+    return ConversationContextMessage.model_validate(
+        _conversation_context_message_payload(item, content, truncated=truncated)
+    )
+
+
+def _conversation_context_message_payload(
+    item: dict[str, Any],
+    content: str,
+    *,
+    truncated: bool = False,
+) -> dict[str, Any]:
+    return {
+        "role": item["role"],
+        "content": content,
+        "source_ref": item["source_ref"],
+        "source_kind": "conversation_turn",
+        "trust": "untrusted_data",
+        "turn_id": item["turn_id"],
+        "sequence": item["sequence"],
+        "content_hash": hashlib.sha256(content.encode()).hexdigest(),
+        "content_truncated": truncated,
+    }
+
+
+def _raw_message_payloads(turns: list[ConversationTurn]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for turn in turns:
+        source_ref = f"conversation-turn:{turn.id}"
+        payloads.extend(
+            (
+                {
+                    "role": "user",
+                    "content": turn.user_input,
+                    "source_ref": source_ref,
+                    "source_kind": "conversation_turn",
+                    "trust": "untrusted_data",
+                    "turn_id": str(turn.id),
+                    "sequence": turn.sequence,
+                },
+                {
+                    "role": "assistant",
+                    "content": _normalize_assistant_output(turn.assistant_output),
+                    "source_ref": source_ref,
+                    "source_kind": "conversation_turn",
+                    "trust": "untrusted_data",
+                    "turn_id": str(turn.id),
+                    "sequence": turn.sequence,
+                },
+            )
+        )
+    return payloads
+
+
+def _normalize_assistant_output(value: Any) -> str:
+    if isinstance(value, str):
         return value
-    return rendered[:max_chars] + "…[TRUNCATED]"
+    if isinstance(value, dict):
+        for key in ("content", "answer"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+        result = value.get("result")
+        if isinstance(result, dict) and isinstance(result.get("content"), str):
+            return str(result["content"])
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+
+
+def _allocate_content_chars(lengths: list[int], budget: int) -> list[int]:
+    allocations = [0] * len(lengths)
+    remaining = set(range(len(lengths)))
+    available = budget
+    while remaining:
+        share = available // len(remaining)
+        fitting = [index for index in remaining if lengths[index] <= share]
+        if not fitting:
+            for index in sorted(remaining):
+                allocations[index] = share
+            for index in sorted(remaining)[: available - share * len(remaining)]:
+                allocations[index] += 1
+            break
+        for index in fitting:
+            allocations[index] = lengths[index]
+            available -= lengths[index]
+            remaining.remove(index)
+    return allocations
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= len(_TRUNCATION_SUFFIX):
+        return _TRUNCATION_SUFFIX[:max_chars]
+    return value[: max_chars - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX

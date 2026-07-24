@@ -8,6 +8,9 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nico_agent.domain.context import (
+    ConversationContextMessage as ConversationContextMessage,
+)
 from nico_agent.domain.states import (
     ConversationApprovalMode,
     ConversationQueuePauseReason,

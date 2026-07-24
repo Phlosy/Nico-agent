@@ -49,6 +49,36 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _final_action(content: str) -> str:
+    return json.dumps(
+        {
+            "type": "final",
+            "content": content,
+            "intent": {
+                "interpreted_intent": "Report the completed delegated work",
+                "confidence": 0.95,
+                "candidates": [
+                    {
+                        "candidate_id": "report",
+                        "intent": "Report the completed delegated work",
+                        "confidence": 0.95,
+                    }
+                ],
+                "ambiguity": 0.05,
+                "risk": "low",
+                "risk_reasons": [],
+                "missing_information": [],
+                "safe_partial_answer_possible": True,
+            },
+            "completion": {
+                "answered_user_intent": True,
+                "requires_user_response": False,
+            },
+        },
+        separators=(",", ":"),
+    )
+
+
 class MultiAgentModelProvider:
     name = "openai_compatible"
 
@@ -123,7 +153,10 @@ class MultiAgentModelProvider:
             finish_reason = "stop"
             text = f"child-result:{run_id[-8:]}"
         if text:
-            yield ModelStreamEvent(type=ModelStreamEventType.TEXT_DELTA, text_delta=text)
+            yield ModelStreamEvent(
+                type=ModelStreamEventType.TEXT_DELTA,
+                text_delta=_final_action(text),
+            )
         yield ModelStreamEvent(
             type=ModelStreamEventType.RESPONSE_COMPLETED,
             finish_reason=finish_reason,

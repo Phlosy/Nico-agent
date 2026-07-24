@@ -15,6 +15,7 @@ from nico_agent.models.gateway import ModelGateway
 from nico_agent.models.registry import ModelProviderRegistry
 from nico_agent.runtime.contracts import (
     ContextSeed,
+    RuntimeActionOutcome,
     RuntimeEventType,
     RuntimeExecutionMode,
     RuntimeIntervention,
@@ -25,9 +26,12 @@ from nico_agent.runtime.contracts import (
     RuntimeToolOutcome,
     RuntimeToolSpec,
 )
+from nico_agent.runtime.native.action_dispatcher import InMemoryRuntimeActionHandler
 from nico_agent.runtime.native.checkpoint import make_plan_checkpoint
 from nico_agent.runtime.native.planner import parse_plan, plan_content_hash
+from nico_agent.runtime.native.prompts import NATIVE_CONTINUITY_POLICY
 from nico_agent.runtime.native.provider import NicoNativeRuntimeProvider
+from nico_agent.user_inputs.contracts import RuntimeUserInputRequest
 
 
 class SequencedStructuredProvider:
@@ -53,6 +57,12 @@ class SequencedStructuredProvider:
             for event in payload:
                 yield event
             return
+        if (
+            isinstance(payload, dict)
+            and set(payload) == {"output"}
+            and str(request.metadata.get("call_key", "")).startswith("plan:")
+        ):
+            payload = _plan_step_action(payload)
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
         yield ModelStreamEvent(
             type=ModelStreamEventType.TEXT_DELTA,
@@ -112,6 +122,21 @@ class OneShotInterventionHandler:
         )
 
 
+class RecordingUserInputHandler:
+    def __init__(self) -> None:
+        self.intents = []
+
+    async def request_user_input(self, intent):
+        self.intents.append(intent)
+        return RuntimeUserInputRequest(
+            id=uuid4(),
+            status="requested",
+            revision=1,
+            wake_key="a" * 64,
+            expires_at="2099-01-01T00:00:00Z",
+        )
+
+
 def _request(**updates) -> RuntimeSessionRequest:
     request = RuntimeSessionRequest(
         tenant_id=uuid4(),
@@ -162,6 +187,67 @@ def _plan(keys: list[str]) -> dict:
     return {"objective": "Produce a verified report", "steps": steps}
 
 
+def _plan_step_action(
+    payload: dict,
+    *,
+    answered: bool = True,
+    requires_user: bool = False,
+) -> dict:
+    return {
+        "type": "final",
+        "content": json.dumps(payload, separators=(",", ":")),
+        "intent": {
+            "interpreted_intent": "Execute the current Plan step",
+            "confidence": 0.95,
+            "candidates": [
+                {
+                    "candidate_id": "execute-step",
+                    "intent": "Execute the current Plan step",
+                    "confidence": 0.95,
+                }
+            ],
+            "ambiguity": 0.05,
+            "risk": "low",
+            "risk_reasons": [],
+            "missing_information": [],
+            "safe_partial_answer_possible": True,
+        },
+        "completion": {
+            "answered_user_intent": answered,
+            "requires_user_response": requires_user,
+        },
+    }
+
+
+def _ask_action() -> dict:
+    return {
+        "type": "ask_user",
+        "question": "Which target should the report describe?",
+        "reason": "The two targets are equally plausible.",
+        "intent": {
+            "interpreted_intent": "Describe one of the two candidate targets",
+            "confidence": 0.55,
+            "candidates": [
+                {
+                    "candidate_id": "file",
+                    "intent": "Describe the file target",
+                    "confidence": 0.55,
+                },
+                {
+                    "candidate_id": "database",
+                    "intent": "Describe the database target",
+                    "confidence": 0.54,
+                },
+            ],
+            "ambiguity": 0.9,
+            "risk": "low",
+            "risk_reasons": [],
+            "missing_information": ["target"],
+            "safe_partial_answer_possible": False,
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_plan_and_execute_persists_three_step_trace_and_summary() -> None:
     model = SequencedStructuredProvider(
@@ -205,6 +291,183 @@ async def test_plan_and_execute_persists_three_step_trace_and_summary() -> None:
         "plan:1:step:analyze:attempt:1:round:1",
         "plan:1:step:report:attempt:1:round:1",
     ]
+    assert all(
+        (item.messages[0].content or "").count(NATIVE_CONTINUITY_POLICY) == 1
+        for item in model.requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_step_corrects_pseudo_final_once_before_acceptance_evaluation() -> None:
+    invalid = _plan_step_action(
+        {"output": {"content": "not authoritative"}},
+        answered=False,
+        requires_user=True,
+    )
+    corrected = _plan_step_action({"output": {"content": "verified report"}})
+    model = SequencedStructuredProvider([_plan(["report"]), invalid, corrected])
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(session.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output["result"] == {"content": "verified report"}
+    assert model.requests[-1].tools == ()
+    assert model.requests[-1].metadata["call_key"].startswith("semantic-final-correction:plan:")
+    assert "semantic_completion_observation" in model.requests[-1].messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_plan_step_repeated_invalid_final_exhausts_semantic_correction() -> None:
+    invalid = _plan_step_action(
+        {"output": {"content": "not authoritative"}},
+        answered=False,
+        requires_user=True,
+    )
+    model = SequencedStructuredProvider([_plan(["report"]), invalid, invalid])
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(session.external_session_id, request, RuntimeServices())
+
+    assert outcome.status is RuntimeSessionStatus.FAILED
+    assert outcome.error["code"] == "SEMANTIC_FINAL_CORRECTION_EXHAUSTED"
+    assert len(model.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_plan_semantic_correction_can_enter_normal_clarification_gate() -> None:
+    invalid = _plan_step_action(
+        {"output": {"content": "not authoritative"}},
+        answered=False,
+        requires_user=True,
+    )
+    model = SequencedStructuredProvider([_plan(["report"]), invalid, _ask_action()])
+    provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
+    request = _request()
+    session = await provider.create_session(request)
+    user_inputs = RecordingUserInputHandler()
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(user_input_handler=user_inputs),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.SUSPENDED
+    assert outcome.wake_condition["type"] == "user_input"
+    assert len(user_inputs.intents) == 1
+    assert model.requests[-1].metadata["call_key"].startswith("semantic-final-correction:plan:")
+
+
+@pytest.mark.asyncio
+async def test_plan_answered_semantic_clarification_recovers_without_rebilling() -> None:
+    invalid = _plan_step_action(
+        {"output": {"content": "not authoritative"}},
+        answered=False,
+        requires_user=True,
+    )
+    initial_model = SequencedStructuredProvider([_plan(["report"]), invalid, _ask_action()])
+    initial = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([initial_model])))
+    request = _request()
+    actions = InMemoryRuntimeActionHandler()
+    session = await initial.create_session(request)
+    suspended = await initial.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(
+            action_handler=actions,
+            user_input_handler=RecordingUserInputHandler(),
+        ),
+    )
+    assert suspended.status is RuntimeSessionStatus.SUSPENDED
+    batch_key = suspended.checkpoint["last_action_batch_key"]
+    action_id = suspended.checkpoint["pending_user_input"]["action_id"]
+    await actions.complete_action(
+        batch_key,
+        ordinal=0,
+        action_id=action_id,
+        outcome=RuntimeActionOutcome(
+            status="succeeded",
+            outcome_ref=f"user_input:{uuid4()}",
+            observation_ref=f"user_input_answer:{uuid4()}",
+            value={
+                "kind": "user_input",
+                "trust": "untrusted",
+                "request_id": str(uuid4()),
+                "answer": {"value": "database"},
+                "answer_hash": "b" * 64,
+            },
+        ),
+    )
+    events = [event async for event in initial.stream_events(session.external_session_id)]
+    started = {
+        event.payload["call_key"]: event
+        for event in events
+        if event.type is RuntimeEventType.MODEL_CALL_STARTED
+    }
+    completed = {
+        event.payload["call_key"]: event
+        for event in events
+        if event.type is RuntimeEventType.MODEL_CALL_COMPLETED
+    }
+    created_plan = next(
+        event.payload for event in events if event.type is RuntimeEventType.PLAN_CREATED
+    )
+    recovery_state = {
+        "model_call_keys": list(completed),
+        "recoverable_action_calls": {
+            call_key: {
+                "request_hash": started[call_key].payload["request_hash"],
+                "response_redacted": event.payload["response_redacted"],
+                "response_hash": event.payload["response_hash"],
+                "provider_request_id": event.payload["provider_request_id"],
+                "usage": event.payload["usage"],
+                "usage_status": event.payload["usage_status"],
+                "cost": event.payload["cost"],
+                "cost_status": event.payload["cost_status"],
+                "action_batch_exists": True,
+            }
+            for call_key, event in completed.items()
+        },
+        "planning": {
+            "active_plan": {
+                "revision": created_plan["revision"],
+                "status": "active",
+                "objective": created_plan["objective"],
+                "content_hash": created_plan["content_hash"],
+                "steps": created_plan["steps"],
+                "completed_step_keys": [],
+            }
+        },
+    }
+    resumed_request = request.model_copy(
+        update={
+            "checkpoint": suspended.checkpoint,
+            "recovery_state": recovery_state,
+            "resume_session_id": session.external_session_id,
+        }
+    )
+    resumed_model = SequencedStructuredProvider([{"output": {"content": "database report"}}])
+    resumed = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([resumed_model])))
+    resumed_session = await resumed.create_session(resumed_request)
+
+    outcome = await resumed.execute(
+        resumed_session.external_session_id,
+        resumed_request,
+        RuntimeServices(
+            action_handler=actions,
+            user_input_handler=RecordingUserInputHandler(),
+        ),
+    )
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output["result"] == {"content": "database report"}
+    assert len(resumed_model.requests) == 1
+    assert outcome.usage["model_calls"] == 4
 
 
 @pytest.mark.asyncio
@@ -645,7 +908,7 @@ async def test_plan_resumes_pending_citation_repair_at_most_once(
             "event_sequence": 30,
         }
     )
-    model = SequencedStructuredProvider([repair_payload])
+    model = SequencedStructuredProvider([_plan_step_action(repair_payload)])
     provider = NicoNativeRuntimeProvider(ModelGateway(ModelProviderRegistry([model])))
     session = await provider.create_session(request)
 

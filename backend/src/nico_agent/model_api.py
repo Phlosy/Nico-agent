@@ -14,6 +14,9 @@ from sqlalchemy import func, select
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import AccessDenied, DomainError, ResourceNotFound
 from nico_agent.domain.models import (
+    AgentActionBatch,
+    AgentActionRecord,
+    AgentActionRepair,
     AuditRecord,
     ContextSnapshot,
     Event,
@@ -24,6 +27,7 @@ from nico_agent.domain.models import (
 )
 from nico_agent.domain_api import get_tenant_context
 from nico_agent.model_api_schemas import (
+    AgentActionBatchRead,
     ContextSnapshotRead,
     ModelCallRead,
     ModelEndpointCreate,
@@ -149,6 +153,104 @@ class ModelRuntimeService:
                 )
             )
 
+    async def list_agent_actions(
+        self,
+        context: TenantContext,
+        run_id: UUID,
+    ) -> list[dict]:
+        async with self.database.tenant_transaction(context) as session:
+            await self._require_run(session, context, run_id)
+            batches = list(
+                await session.scalars(
+                    select(AgentActionBatch)
+                    .where(
+                        AgentActionBatch.tenant_id == context.tenant_id,
+                        AgentActionBatch.run_id == run_id,
+                    )
+                    .order_by(AgentActionBatch.created_at, AgentActionBatch.id)
+                )
+            )
+            if not batches:
+                return []
+            batch_ids = [batch.id for batch in batches]
+            actions = list(
+                await session.scalars(
+                    select(AgentActionRecord)
+                    .where(
+                        AgentActionRecord.tenant_id == context.tenant_id,
+                        AgentActionRecord.run_id == run_id,
+                        AgentActionRecord.batch_id.in_(batch_ids),
+                    )
+                    .order_by(AgentActionRecord.batch_id, AgentActionRecord.ordinal)
+                )
+            )
+            repairs = list(
+                await session.scalars(
+                    select(AgentActionRepair)
+                    .where(
+                        AgentActionRepair.tenant_id == context.tenant_id,
+                        AgentActionRepair.run_id == run_id,
+                        AgentActionRepair.result_batch_id.in_(batch_ids),
+                    )
+                    .order_by(
+                        AgentActionRepair.result_batch_id,
+                        AgentActionRepair.repair_ordinal,
+                    )
+                )
+            )
+            actions_by_batch: dict[UUID, list[dict]] = {batch.id: [] for batch in batches}
+            for action in actions:
+                actions_by_batch[action.batch_id].append(
+                    {
+                        "id": action.id,
+                        "ordinal": action.ordinal,
+                        "action_id": action.action_id,
+                        "kind": action.kind,
+                        "provider_call_id": action.provider_call_id,
+                        "tool_name": action.tool_name,
+                        "intent": action.intent_redacted,
+                        "completion": action.completion,
+                        "content_hash": action.content_hash,
+                        "arguments_hash": action.arguments_hash,
+                        "question_hash": action.question_hash,
+                        "reason_hash": action.reason_hash,
+                        "compatibility_mode": action.compatibility_mode,
+                        "status": action.status,
+                        "outcome_ref": action.outcome_ref,
+                        "observation_ref": action.observation_ref,
+                        "created_at": action.created_at,
+                    }
+                )
+            repairs_by_batch: dict[UUID, list[AgentActionRepair]] = {
+                batch.id: [] for batch in batches
+            }
+            for repair in repairs:
+                repairs_by_batch[repair.result_batch_id].append(repair)
+            return [
+                {
+                    "id": batch.id,
+                    "run_id": batch.run_id,
+                    "runtime_session_id": batch.runtime_session_id,
+                    "context_snapshot_id": batch.context_snapshot_id,
+                    "model_call_id": batch.model_call_id,
+                    "run_step_id": batch.run_step_id,
+                    "replay_of_batch_id": batch.replay_of_batch_id,
+                    "schema_version": batch.schema_version,
+                    "parse_revision": batch.parse_revision,
+                    "batch_key": batch.batch_key,
+                    "source_format": batch.source_format,
+                    "response_hash": batch.response_hash,
+                    "action_count": batch.action_count,
+                    "dispatch_cursor": batch.dispatch_cursor,
+                    "status": batch.status,
+                    "actions": actions_by_batch[batch.id],
+                    "repairs": repairs_by_batch[batch.id],
+                    "created_at": batch.created_at,
+                    "updated_at": batch.updated_at,
+                }
+                for batch in batches
+            ]
+
     async def list_contexts(self, context: TenantContext, run_id: UUID) -> list[ContextSnapshot]:
         async with self.database.tenant_transaction(context) as session:
             await self._require_run(session, context, run_id)
@@ -267,6 +369,11 @@ async def patch_model_endpoint(
 @router.get("/runs/{run_id}/model-calls", response_model=list[ModelCallRead])
 async def list_model_calls(run_id: UUID, service: Service, context: Context):
     return await service.list_model_calls(context, run_id)
+
+
+@router.get("/runs/{run_id}/agent-actions", response_model=list[AgentActionBatchRead])
+async def list_agent_actions(run_id: UUID, service: Service, context: Context):
+    return await service.list_agent_actions(context, run_id)
 
 
 @router.get("/runs/{run_id}/contexts", response_model=list[ContextSnapshotRead])

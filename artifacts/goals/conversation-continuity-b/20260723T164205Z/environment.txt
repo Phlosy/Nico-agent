@@ -1,0 +1,28 @@
+2026-07-23T16:44:52Z
+4547eccf8d7345e95fdb5925b4930b1c144abe2f
+dev
+ M backend/src/nico_agent/conversations/context.py
+ M backend/src/nico_agent/conversations/contracts.py
+ M backend/src/nico_agent/runtime/contracts.py
+ M backend/src/nico_agent/runtime/native/context.py
+ M backend/src/nico_agent/runtime/service.py
+ M backend/tests/integration/test_native_runtime_persistence.py
+ M backend/tests/unit/test_conversation_context.py
+ M backend/tests/unit/test_runtime_preparation.py
+ M docs/plans/2026-07-23-001-refactor-agent-runtime-execution-hardening-plan.md
+ M docs/progress/goal-status.md
+ M docs/runtime.md
+?? artifacts/goals/conversation-continuity-a/
+?? artifacts/goals/conversation-continuity-b/
+?? backend/src/nico_agent/domain/context.py
+?? backend/tests/integration/test_conversation_model_request_audit.py
+?? backend/tests/unit/test_conversation_model_messages.py
+?? docs/audits/
+?? docs/brainstorms/2026-07-23-conversation-continuity-clarification-requirements.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-a-handoff.md
+?? docs/handoffs/2026-07-23-conversation-continuity-goal-b-handoff.md
+?? docs/plans/2026-07-23-002-fix-conversation-continuity-clarification-plan.md
+?? scripts/verify-conversation-continuity-goal-a.sh
+?? scripts/verify-conversation-continuity-goal-b.sh
+Python 3.12.7
+Docker version 29.3.0, build 5927d80

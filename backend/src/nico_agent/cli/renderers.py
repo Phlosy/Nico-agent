@@ -524,6 +524,25 @@ class ExecutionRenderer:
         title.append(f" · {risk.upper()}", style=f"bold {risk_style}")
         self.output.out.print(Panel(body, title=title, border_style=risk_style, padding=(0, 1)))
 
+    def user_input_request(self, request: Mapping[str, Any]) -> None:
+        if self.output.json_mode:
+            return
+        details = Table.grid(padding=(0, 1), expand=True)
+        details.add_column(style="dim", no_wrap=True, width=9)
+        details.add_column(ratio=1, overflow="fold")
+        details.add_row("Question", _bounded_text(request.get("question"), 4_000))
+        details.add_row("Why", _bounded_text(request.get("reason"), 4_000))
+        details.add_row("Answer", _user_input_schema_hint(request.get("input_schema")))
+        details.add_row("Expires", str(request.get("expires_at") or "—"))
+        self.output.out.print(
+            Panel(
+                details,
+                title=Text("Agent question", style="bold"),
+                border_style=_BRAND,
+                padding=(0, 1),
+            )
+        )
+
     def approvals(self, approvals: Iterable[Mapping[str, Any]]) -> None:
         self.output.table(
             approvals,
@@ -1066,6 +1085,30 @@ def _tool_summary(value: Any) -> str:
 
 def _risk_style(risk: str) -> str:
     return _RISK_STYLES.get(risk, "yellow")
+
+
+def _bounded_text(value: Any, limit: int) -> str:
+    text = str(value or "—")
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _user_input_schema_hint(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "text"
+    schema_type = value.get("type")
+    choices = value.get("enum")
+    if schema_type == "string" and isinstance(choices, list):
+        labels = [_bounded_text(choice, 80) for choice in choices[:10]]
+        suffix = ", …" if len(choices) > 10 else ""
+        return _bounded_text(f"one of: {', '.join(labels)}{suffix}", 1_000)
+    return {
+        "array": "JSON array",
+        "boolean": "JSON boolean: true or false",
+        "integer": "integer",
+        "number": "number",
+        "object": "JSON object",
+        "string": "text",
+    }.get(str(schema_type), "JSON value")
 
 
 def _project_kind_style(kind: str) -> tuple[str, str]:

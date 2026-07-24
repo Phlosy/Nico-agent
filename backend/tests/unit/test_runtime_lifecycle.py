@@ -95,28 +95,28 @@ async def test_transition_persists_redacted_reason_event_audit_and_revision() ->
     [
         (RunStatus.RUNNING, RunStatus.WAITING_FOR_USER_INPUT),
         (RunStatus.WAITING_FOR_USER_INPUT, RunStatus.RUNNING),
+        (RunStatus.WAITING_FOR_USER_INPUT, RunStatus.FAILED),
         (RunStatus.WAITING_FOR_USER_INPUT, RunStatus.CANCELLED),
     ],
 )
-async def test_reserved_user_input_state_has_no_executable_transitions(
+async def test_user_input_state_has_guarded_executable_transitions(
     source: RunStatus, target: RunStatus
 ) -> None:
-    assert target not in RUN_TRANSITIONS[source]
+    assert target in RUN_TRANSITIONS[source]
     run = _run(source)
     session = Mock()
     context = TenantContext(run.tenant_id, "api:test", uuid4())
 
-    with pytest.raises(InvalidStateTransition):
-        await RunLifecycleAuthority.transition(
-            session,
-            context,
-            run,
-            target=target,
-            reason="reserved_u1_transition",
-        )
+    await RunLifecycleAuthority.transition(
+        session,
+        context,
+        run,
+        target=target,
+        reason="user_input_protocol_transition",
+    )
 
-    assert run.status == source.value
-    session.add.assert_not_called()
+    assert run.status == target.value
+    assert session.add.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -162,6 +162,31 @@ async def test_approval_wake_preserves_only_a_live_handshake_lease() -> None:
     assert expired.lease_token is None
     assert expired.lease_expires_at is None
     assert expired.heartbeat_at is None
+
+
+@pytest.mark.asyncio
+async def test_user_input_wake_preserves_live_handshake_lease_until_checkpoint_suspend() -> None:
+    now = datetime.now(UTC)
+    run = _run(RunStatus.WAITING_FOR_USER_INPUT)
+    run.lease_owner = "worker:one"
+    run.lease_token = uuid4()
+    run.lease_expires_at = now + timedelta(minutes=1)
+    run.heartbeat_at = now
+    lease_token = run.lease_token
+
+    await RunLifecycleAuthority.transition(
+        Mock(),
+        TenantContext(run.tenant_id, "operator:test", uuid4()),
+        run,
+        target=RunStatus.RUNNING,
+        reason="user_input_answered",
+        occurred_at=now,
+    )
+
+    assert run.lease_owner == "worker:one"
+    assert run.lease_token == lease_token
+    assert run.lease_expires_at == now + timedelta(minutes=1)
+    assert run.heartbeat_at == now
 
 
 @pytest.mark.asyncio
@@ -310,6 +335,7 @@ def test_executable_writer_allowlist_names_every_exception_port() -> None:
         "claim_next_run",
         "reconcile_expired_tool_approvals",
         "reconcile_coordination_waiters",
+        "reconcile_user_input_requests",
     }
     assert {
         "control_plane.transition_run",
@@ -321,6 +347,8 @@ def test_executable_writer_allowlist_names_every_exception_port() -> None:
         "tools.begin_call",
         "tools.finish_call",
         "tool_approvals.decide",
+        "user_inputs.request",
+        "user_inputs.answer",
         "coordination.cancel_tree",
     } <= set(LIFECYCLE_WRITER_ALLOWLIST["run"])
 
@@ -332,6 +360,7 @@ def test_application_run_status_writers_are_routed_through_the_authority() -> No
         "src/nico_agent/runtime/service.py",
         "src/nico_agent/tools/gateway.py",
         "src/nico_agent/tool_approvals/service.py",
+        "src/nico_agent/user_inputs/service.py",
         "src/nico_agent/coordination/service.py",
     )
     direct_assignment = re.compile(r"\b(?:run|parent)\.status\s*=(?!=)")

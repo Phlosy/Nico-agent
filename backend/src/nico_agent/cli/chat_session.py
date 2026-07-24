@@ -26,16 +26,19 @@ from nico_agent.cli.renderers import (
     execution_event_output_delta,
 )
 from nico_agent.cli.slash import parse_slash
+from nico_agent.cli.user_inputs import UserInputCoordinator
 
 if TYPE_CHECKING:
     from nico_agent.cli.chat import ChatRunner
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 _APPROVAL_INTERRUPT = "\0nico-approval-interrupt"
+_USER_INPUT_INTERRUPT = "\0nico-user-input-interrupt"
 _APPROVAL_FETCH_ATTEMPTS = 3
 _APPROVAL_FETCH_RETRY_SECONDS = 0.2
 _USER_PROMPT = FormattedText([("class:nico.user-label", "you › ")])
 _APPROVAL_PROMPT = FormattedText([("class:nico.approval", "approval › ")])
+_USER_INPUT_PROMPT = FormattedText([("class:nico.user-input", "answer › ")])
 _QUEUE_PREVIEW_MAX_CELLS = 72
 _QUEUE_LABEL = "  ↳ queued · "
 
@@ -77,7 +80,12 @@ class InteractiveChatSession:
         self._stop = threading.Event()
         self._approvals: deque[dict[str, Any]] = deque()
         self._approval_ready = asyncio.Event()
+        self._interrupt_ready = asyncio.Event()
         self._seen_approvals: set[str] = set()
+        self._user_inputs: deque[dict[str, Any]] = deque()
+        self._user_input_ready = asyncio.Event()
+        self._seen_user_inputs: set[str] = set()
+        self._user_input_coordinator = UserInputCoordinator(self.client, self.runner.output)
         self._rendered_turns: set[str] = set()
         self._draft: Document | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -91,6 +99,8 @@ class InteractiveChatSession:
         try:
             with patch_stdout(raw=True):
                 while True:
+                    if self._user_inputs and not await self._resolve_next_user_input():
+                        break
                     if self._approvals and not await self._resolve_next_approval():
                         break
                     default = self._draft or Document("")
@@ -111,7 +121,7 @@ class InteractiveChatSession:
                     finally:
                         approval_interrupt.cancel()
                         await asyncio.gather(approval_interrupt, return_exceptions=True)
-                    if message == _APPROVAL_INTERRUPT:
+                    if message in {_APPROVAL_INTERRUPT, _USER_INPUT_INTERRUPT}:
                         continue
                     try:
                         command = parse_slash(message)
@@ -294,6 +304,10 @@ class InteractiveChatSession:
         )
         return True
 
+    async def answer_user_input(self, request: dict[str, Any], answer: str) -> bool:
+        await self._api_call(lambda: self._user_input_coordinator.answer_text(request, answer))
+        return True
+
     def save_draft(self, text: str, cursor_position: int) -> None:
         self._draft = Document(text, cursor_position=cursor_position)
 
@@ -349,8 +363,45 @@ class InteractiveChatSession:
         finally:
             self._sync_activity()
 
+    async def _resolve_next_user_input(self) -> bool:
+        request = self._user_inputs[0]
+        self.runner.renderer.user_input_request(request)
+        self._clear_activity()
+        try:
+            while True:
+                try:
+                    answer = await self.prompt_session.prompt_async(
+                        _USER_INPUT_PROMPT,
+                        bottom_toolbar=self.footer,
+                        refresh_interval=0.25,
+                    )
+                except KeyboardInterrupt:
+                    await self.cancel_active_turn()
+                    self._discard_current_user_input()
+                    return True
+                except EOFError:
+                    return False
+                try:
+                    answered = await self.answer_user_input(request, answer)
+                except CliError as exc:
+                    await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
+                    continue
+                if answered:
+                    self._discard_current_user_input()
+                    await self._refresh_state(include_approvals=True)
+                    self._invalidate()
+                    return True
+        finally:
+            self._sync_activity()
+
     async def _refresh_state(self, *, include_approvals: bool = False) -> None:
-        def fetch() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, list[dict]]:
+        def fetch() -> tuple[
+            dict[str, Any],
+            dict[str, Any],
+            dict[str, Any] | None,
+            list[dict],
+            list[dict],
+        ]:
             conversation = self.client.get_conversation(self.conversation["id"])
             queue = self.client.get_conversation_queue(self.conversation["id"])
             target = queue.get("active_turn") or queue.get("head_turn")
@@ -362,13 +413,17 @@ class InteractiveChatSession:
                     if exc.code != "RESOURCE_NOT_FOUND":
                         raise
             approvals: list[dict] = []
+            user_inputs: list[dict] = []
             if include_approvals and isinstance(target, dict) and target.get("run_id"):
                 approvals = self.client.list_tool_approvals(
                     run_id=str(target["run_id"]), status="requested"
                 )
-            return conversation, queue, runtime, approvals
+                user_inputs = self.client.list_user_inputs(
+                    run_id=str(target["run_id"]), status="requested"
+                )
+            return conversation, queue, runtime, approvals, user_inputs
 
-        conversation, queue, runtime, approvals = await self._api_call(fetch)
+        conversation, queue, runtime, approvals, user_inputs = await self._api_call(fetch)
         self.conversation = self.runner._inherit_cli_context(conversation, self.conversation)
         self.queue = queue
         self.next_approval_mode = str(conversation.get("approval_mode") or "ask")
@@ -379,11 +434,14 @@ class InteractiveChatSession:
         )
         if manifest.get("model"):
             self.model = str(manifest["model"])
+        offered_user_input = False
+        for request in user_inputs:
+            offered_user_input = self._offer_user_input(request) or offered_user_input
         offered_approval = False
         for approval in approvals:
             offered_approval = self._offer_approval(approval) or offered_approval
-        if offered_approval:
-            self._interrupt_for_approval()
+        if offered_user_input or offered_approval:
+            self._interrupt_for_current_owner()
         self._invalidate()
 
     async def _api_call(self, operation: Callable[[], Any]) -> Any:
@@ -406,6 +464,7 @@ class InteractiveChatSession:
             "running": "Working",
             "waiting_for_tool": "Running tool",
             "waiting_for_approval": "Waiting for approval",
+            "waiting_for_user_input": "Waiting for answer",
         }.get(str(target.get("run_status")), "Preparing")
         self.progress = self.runner.renderer.progress(initial=initial)
         self._sync_activity()
@@ -493,7 +552,17 @@ class InteractiveChatSession:
                             await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
                         else:
                             if self._offer_approval(approval):
-                                self._interrupt_for_approval()
+                                self._interrupt_for_current_owner()
+                elif event.get("type") == "UserInputRequested":
+                    request_id = (event.get("payload") or {}).get("request_id")
+                    if request_id and str(request_id) not in self._seen_user_inputs:
+                        try:
+                            request = await self._fetch_user_input(str(request_id))
+                        except CliError as exc:
+                            await run_in_terminal(lambda exc=exc: self.runner.output.error(exc))
+                        else:
+                            if self._offer_user_input(request):
+                                self._interrupt_for_current_owner()
             elif kind == "connection":
                 run_id, state, attempt, maximum = value
                 if run_id != self._watch_run_id:
@@ -582,6 +651,18 @@ class InteractiveChatSession:
         assert last_error is not None
         raise last_error
 
+    async def _fetch_user_input(self, request_id: str) -> dict[str, Any]:
+        last_error: CliError | None = None
+        for attempt in range(_APPROVAL_FETCH_ATTEMPTS):
+            try:
+                return await self._api_call(lambda: self.client.get_user_input(request_id))
+            except CliError as exc:
+                last_error = exc
+                if attempt + 1 < _APPROVAL_FETCH_ATTEMPTS:
+                    await asyncio.sleep(_APPROVAL_FETCH_RETRY_SECONDS * (2**attempt))
+        assert last_error is not None
+        raise last_error
+
     def _offer_approval(self, approval: dict[str, Any]) -> bool:
         approval_id = str(approval.get("id") or "")
         if not approval_id or approval_id in self._seen_approvals:
@@ -589,18 +670,45 @@ class InteractiveChatSession:
         self._seen_approvals.add(approval_id)
         self._approvals.append(approval)
         self._approval_ready.set()
+        self._interrupt_ready.set()
         return True
 
     def _discard_current_approval(self) -> None:
         self._approvals.popleft()
         if not self._approvals:
             self._approval_ready.clear()
+        if self._next_interrupt_owner() is None:
+            self._interrupt_ready.clear()
+
+    def _offer_user_input(self, request: dict[str, Any]) -> bool:
+        request_id = str(request.get("id") or "")
+        if not request_id or request_id in self._seen_user_inputs:
+            return False
+        self._seen_user_inputs.add(request_id)
+        self._user_inputs.append(request)
+        self._user_input_ready.set()
+        self._interrupt_ready.set()
+        return True
+
+    def _discard_current_user_input(self) -> None:
+        self._user_inputs.popleft()
+        if not self._user_inputs:
+            self._user_input_ready.clear()
+        if self._next_interrupt_owner() is None:
+            self._interrupt_ready.clear()
+
+    def _next_interrupt_owner(self) -> str | None:
+        if self._user_inputs:
+            return "user_input"
+        if self._approvals:
+            return "approval"
+        return None
 
     async def _interrupt_composer_on_approval(self) -> None:
-        await self._approval_ready.wait()
-        while self._approvals and not self._stop.is_set():
+        await self._interrupt_ready.wait()
+        while self._next_interrupt_owner() is not None and not self._stop.is_set():
             if self.prompt_session.app.is_running:
-                self._interrupt_for_approval()
+                self._interrupt_for_current_owner()
                 return
             await asyncio.sleep(0.01)
 
@@ -614,13 +722,23 @@ class InteractiveChatSession:
                 pass
 
     def _interrupt_for_approval(self) -> None:
+        self._interrupt_prompt(_APPROVAL_INTERRUPT)
+
+    def _interrupt_for_current_owner(self) -> None:
+        owner = self._next_interrupt_owner()
+        if owner == "user_input":
+            self._interrupt_prompt(_USER_INPUT_INTERRUPT)
+        elif owner == "approval":
+            self._interrupt_prompt(_APPROVAL_INTERRUPT)
+
+    def _interrupt_prompt(self, result: str) -> None:
         app = self.prompt_session.app
         if not app.is_running:
             return
         buffer = app.current_buffer
         self.save_draft(buffer.text, buffer.cursor_position)
         try:
-            app.exit(result=_APPROVAL_INTERRUPT)
+            app.exit(result=result)
         except Exception:
             pass
 

@@ -71,6 +71,8 @@ class ReplanningModelProvider:
             "planner:2": self._plan("correct"),
             "plan:2:step:correct:attempt:2:round:1": {"output": {"content": "verified report"}},
         }[call_key]
+        if call_key.startswith("plan:"):
+            payload = _plan_step_action(payload)
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
         yield ModelStreamEvent(
             type=ModelStreamEventType.TEXT_DELTA,
@@ -162,6 +164,8 @@ class PlanningToolModelProvider:
 
     @staticmethod
     async def _json(payload: dict, call_key: str):
+        if call_key.startswith("plan:"):
+            payload = _plan_step_action(payload)
         yield ModelStreamEvent(type=ModelStreamEventType.RESPONSE_STARTED)
         yield ModelStreamEvent(
             type=ModelStreamEventType.TEXT_DELTA,
@@ -173,6 +177,33 @@ class PlanningToolModelProvider:
             usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15, status="exact"),
             provider_request_id=f"provider-{call_key}",
         )
+
+
+def _plan_step_action(payload: dict) -> dict:
+    return {
+        "type": "final",
+        "content": json.dumps(payload, separators=(",", ":")),
+        "intent": {
+            "interpreted_intent": "Execute the current Plan step",
+            "confidence": 0.95,
+            "candidates": [
+                {
+                    "candidate_id": "execute-step",
+                    "intent": "Execute the current Plan step",
+                    "confidence": 0.95,
+                }
+            ],
+            "ambiguity": 0.05,
+            "risk": "low",
+            "risk_reasons": [],
+            "missing_information": [],
+            "safe_partial_answer_possible": True,
+        },
+        "completion": {
+            "answered_user_intent": True,
+            "requires_user_response": False,
+        },
+    }
 
 
 @pytest.mark.asyncio
