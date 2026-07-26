@@ -3471,6 +3471,11 @@ class NativeAgentLoop:
                 "run_step_key": action_step_key,
             }
         request_hash = _hash_json(request_redacted)
+        offered_tool_names = (
+            None
+            if request.execution_mode is RuntimeExecutionMode.DIRECT
+            else frozenset(tool.name for tool in tools)
+        )
 
         async def correct_protocol(
             failure: AgentActionParseError,
@@ -3561,6 +3566,7 @@ class NativeAgentLoop:
                     response,
                     call_key=call_key,
                     run_step_key=action_step_key,
+                    offered_tool_names=offered_tool_names,
                     emit=emit,
                     recovered=recovered_call.get("action_batch_exists") is not True,
                     repair=action_repair,
@@ -3705,6 +3711,7 @@ class NativeAgentLoop:
                     response,
                     call_key=call_key,
                     run_step_key=action_step_key,
+                    offered_tool_names=offered_tool_names,
                     emit=emit,
                     recovered=False,
                     repair=action_repair,
@@ -3727,11 +3734,14 @@ class NativeAgentLoop:
         *,
         call_key: str,
         run_step_key: str,
+        offered_tool_names: frozenset[str] | None,
         emit: Emit,
         recovered: bool,
         repair: dict[str, Any] | None = None,
     ) -> AgentActionBatch:
         batch = _parse_live_action_batch(response)
+        if offered_tool_names is not None:
+            _require_offered_tool_actions(batch, offered_tool_names)
         await emit(
             RuntimeEventType.ACTION_BATCH_CREATED,
             None,
@@ -4774,6 +4784,18 @@ def _parse_live_action_batch(response: ModelResponse) -> AgentActionBatch:
             user_input_handler_enabled=_user_input_handler.get() is not None,
         ),
     )
+
+
+def _require_offered_tool_actions(
+    batch: AgentActionBatch,
+    offered_tool_names: frozenset[str],
+) -> None:
+    for action in batch.actions:
+        if isinstance(action, ToolCallAction) and action.name not in offered_tool_names:
+            raise AgentActionParseError(
+                "INVALID_TOOL_CALL",
+                f"tool call requested an unavailable tool: {action.name}",
+            )
 
 
 def _response_type(response: ModelResponse) -> str:

@@ -404,7 +404,11 @@ class InteractiveChatSession:
         ]:
             conversation = self.client.get_conversation(self.conversation["id"])
             queue = self.client.get_conversation_queue(self.conversation["id"])
-            target = queue.get("active_turn") or queue.get("head_turn")
+            target = (
+                None
+                if queue.get("state") == "paused"
+                else queue.get("active_turn") or queue.get("head_turn")
+            )
             runtime: dict[str, Any] | None = None
             if isinstance(target, dict) and target.get("run_id"):
                 try:
@@ -449,6 +453,10 @@ class InteractiveChatSession:
             return await asyncio.to_thread(operation)
 
     async def _ensure_watch(self) -> None:
+        if self.queue.get("state") == "paused":
+            if self._watch_run_id is not None:
+                self._stop_current_watch()
+            return
         target = self.queue.get("active_turn") or self.queue.get("head_turn")
         if not isinstance(target, dict) or not target.get("run_id"):
             return

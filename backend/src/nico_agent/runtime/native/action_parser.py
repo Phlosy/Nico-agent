@@ -83,6 +83,8 @@ def protocol_correction_instruction(error: AgentActionParseError) -> str:
         problem = "Your response was not JSON."
     elif error.code == "MALFORMED_JSON":
         problem = "Your response started as JSON but was malformed."
+    elif error.code == "INVALID_TOOL_CALL":
+        problem = "Your tool call was invalid or unavailable."
     else:
         problem = f"Your JSON did not satisfy AgentAction ({error.code})."
     return "\n".join(

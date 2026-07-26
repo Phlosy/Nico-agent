@@ -1378,6 +1378,60 @@ async def test_interactive_session_does_not_render_an_idle_submission_notice(
     await session.close()
 
 
+async def test_interactive_session_does_not_watch_a_paused_pending_head(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "nico_agent.cli.chat_session.shutil.get_terminal_size",
+        lambda _fallback: terminal_size((160, 24)),
+    )
+    client = FakeInteractiveChatClient()
+    client.paused = True
+    runtime_requests: list[str] = []
+
+    def get_runtime(run_id: str) -> dict[str, Any]:
+        runtime_requests.append(run_id)
+        return {"execution_manifest": {}}
+
+    client.get_runtime = get_runtime  # type: ignore[method-assign]
+    watcher = BlockingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+
+    await session.initialize()
+
+    assert runtime_requests == []
+    assert watcher.started.is_set() is False
+    assert session._watch_run_id is None
+    footer = fragment_list_to_text(session.footer())
+    assert "Idle" in footer
+    assert "paused" in footer
+    assert "run_failed" in footer
+    await session.close()
+
+
+async def test_interactive_session_stops_an_existing_watch_when_queue_pauses(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "nico_agent.cli.chat_session.shutil.get_terminal_size",
+        lambda _fallback: terminal_size((160, 24)),
+    )
+    client = FakeInteractiveChatClient()
+    watcher = BlockingWatchClient()
+    session = _interactive_session(client, watcher, tmp_path)
+    await session.initialize()
+    assert await asyncio.to_thread(watcher.started.wait, 1)
+    assert session._watch_run_id == "run-1"
+
+    client.paused = True
+    await session._refresh_state()
+    await session._ensure_watch()
+
+    assert watcher.closed is True
+    assert session._watch_run_id is None
+    await session.close()
+
+
 async def test_interactive_composer_uses_fixed_toolbar_and_one_second_refresh(
     monkeypatch, tmp_path: Path
 ) -> None:

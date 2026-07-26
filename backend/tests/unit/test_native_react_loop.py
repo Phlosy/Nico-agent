@@ -1066,6 +1066,42 @@ async def test_react_enforces_tool_budget_before_external_effect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_react_corrects_unoffered_native_tool_before_dispatch() -> None:
+    model = SequencedModelProvider(
+        [
+            _named_tool_response(
+                call_id="final-output-call",
+                name="final_output",
+                arguments='{"content":"Saved result."}',
+            ),
+            _final_response(),
+        ]
+    )
+    provider = _native(model)
+    handler = RecordingToolHandler()
+    request = _request()
+    session = await provider.create_session(request)
+
+    outcome = await provider.execute(
+        session.external_session_id,
+        request,
+        RuntimeServices(tool_handler=handler),
+    )
+    events = [event async for event in provider.stream_events(session.external_session_id)]
+
+    assert outcome.status is RuntimeSessionStatus.COMPLETED
+    assert outcome.output == {"content": "Saved result."}
+    assert handler.intents == []
+    assert len(model.requests) == 2
+    assert [tool.name for tool in model.requests[0].tools] == ["file.write"]
+    assert model.requests[1].tools == ()
+    assert "tool call was invalid or unavailable" in model.requests[1].messages[-1].content
+    event_types = [event.type for event in events]
+    assert event_types.count(RuntimeEventType.MODEL_CALL_COMPLETED) == 2
+    assert event_types.count(RuntimeEventType.ACTION_BATCH_CREATED) == 1
+
+
+@pytest.mark.asyncio
 async def test_react_marks_model_call_failed_when_tool_arguments_are_invalid() -> None:
     response = _tool_response()
     response[1] = response[1].model_copy(update={"tool_arguments_delta": "{"})
