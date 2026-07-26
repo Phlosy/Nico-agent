@@ -20,7 +20,7 @@ WEB_IMAGE = nico-agent-web:$(TAG)
 
 .DEFAULT_GOAL := help
 .PHONY: help dev-setup infra-up run stop clean cli demo infra-down dev-images version version-set tag \
-	validate-release release release-images release-assets install uninstall test-install
+	validate-release release release-images release-assets install uninstall test-install regressions
 
 help:
 	@printf '%s\n' \
@@ -42,6 +42,7 @@ help:
 	  'make install       Reuse or build local assets, then install and start Nico' \
 	  'make uninstall     Stop local services and remove program files' \
 	  'make test-install  Run installer and release contract tests' \
+	  'make regressions   Validate and run the traceable unit regression catalog' \
 	  '' \
 	  'Options: RUNTIME=native|hermes PROVIDER=openrouter|openai|anthropic' \
 	  '         WEB_SEARCH=brave|searxng INSTALL_ARGS="--no-start --non-interactive"' \
@@ -163,3 +164,6 @@ uninstall:
 
 test-install:
 	"$(CURDIR)/scripts/test-install.sh"
+
+regressions:
+	"$(CURDIR)/scripts/test-regressions.sh"

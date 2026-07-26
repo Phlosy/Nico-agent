@@ -66,7 +66,8 @@ jobs:
       - name: Lint public Markdown
         run: >-
           npx --yes markdownlint-cli2@0.22.1
-          README.md backend/README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
+          README.md backend/README.md backend/regressions/README.md
+          CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md
           docs/api.md docs/architecture.md docs/configuration.md
           docs/cli.md docs/domain-model.md docs/getting-started.md docs/installation.md
           docs/memory-and-skill.md docs/repository-assessment.md docs/roadmap.md

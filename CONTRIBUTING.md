@@ -46,6 +46,19 @@ Run the backend lint/format checks, backend unit tests, frontend component tests
 scripts/test.sh
 ```
 
+Classify a sanitized bug symptom before adding a regression test, then run the
+matching problem family:
+
+```bash
+scripts/regression.py classify "error code and observed behavior"
+scripts/test-regressions.sh --family <family-id>
+```
+
+If no family matches, create a family and a failing test first. If a family
+matches, reuse its cases unless the report exposes a distinct uncovered
+boundary. The full workflow is documented in the
+[regression catalog](backend/regressions/README.md).
+
 Run tests against real PostgreSQL, Redis, and MinIO dependencies:
 
 ```bash
@@ -79,7 +92,7 @@ GitHub Discussions is not enabled for this repository, so usage questions curren
 
 1. Keep each change focused on one user-visible outcome.
 2. Add tests for behavior changes and update public documentation when contracts change.
-3. List exact validation commands in the Pull Request description.
+3. Record bug fixes in the regression catalog and list exact validation commands in the Pull Request description.
 4. Do not commit `.env`, `.nico/`, credentials, tenant data, private prompts, database dumps, or runtime workspaces.
 5. Discuss changes to domain models, migrations, Runtime contracts, Tool Gateway policy, tenant isolation, or security boundaries in an Issue before implementation.
 

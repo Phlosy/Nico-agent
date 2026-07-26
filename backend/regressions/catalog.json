@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "suite_id": "nico-regression-catalog-v1",
+  "families": [
+    {
+      "id": "runtime.agent_action.unoffered_tool",
+      "title": "Model emits a tool that was not offered",
+      "invariant": "Every model tool action is checked against the exact request tool set before it is persisted or dispatched.",
+      "owners": [
+        "runtime"
+      ],
+      "tags": [
+        "agent-action",
+        "authorization",
+        "protocol-correction"
+      ],
+      "matchers": [
+        "model requested an unauthorized tool",
+        "\\bfinal_output\\b",
+        "TOOL_NOT_AUTHORIZED.*model requested"
+      ],
+      "cases": [
+        {
+          "id": "unoffered-native-tool-corrected",
+          "title": "Correct an unoffered native tool before dispatch",
+          "tier": "unit",
+          "protects": "An unoffered native tool receives one tool-free protocol correction and never reaches a tool handler.",
+          "test_nodeids": [
+            "backend/tests/unit/test_native_react_loop.py::test_react_corrects_unoffered_native_tool_before_dispatch"
+          ]
+        }
+      ],
+      "incidents": [
+        {
+          "id": "inc-20260724-final-output-as-tool",
+          "detected_at": "2026-07-24",
+          "classification": "new_family",
+          "symptom": "A final model call emitted final_output as a native tool and the Run failed with TOOL_NOT_AUTHORIZED.",
+          "root_cause": "Native tool actions were accepted as AgentAction values before their names were checked against the tools offered in that model request.",
+          "case_ids": [
+            "unoffered-native-tool-corrected"
+          ],
+          "references": [
+            "user-report:2026-07-24"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cli.conversation_queue.paused_head",
+      "title": "Paused queue head is shown as active preparation",
+      "invariant": "A paused conversation queue has no watchable active head and the CLI must render its paused reason instead of Preparing.",
+      "owners": [
+        "cli",
+        "conversation-queue"
+      ],
+      "tags": [
+        "chat",
+        "queue",
+        "terminal-state"
+      ],
+      "matchers": [
+        "paused.*Preparing|Preparing.*paused",
+        "queue_state\\s*[=:]\\s*paused",
+        "run_failed.*pending"
+      ],
+      "cases": [
+        {
+          "id": "paused-pending-head-not-watched",
+          "title": "Do not watch the pending head of a paused queue",
+          "tier": "unit",
+          "protects": "The interactive CLI avoids runtime lookup and watch startup while rendering the durable pause reason.",
+          "test_nodeids": [
+            "backend/tests/unit/test_cli_chat.py::test_interactive_session_does_not_watch_a_paused_pending_head",
+            "backend/tests/unit/test_cli_chat.py::test_interactive_session_stops_an_existing_watch_when_queue_pauses"
+          ]
+        }
+      ],
+      "incidents": [
+        {
+          "id": "inc-20260724-preparing-after-run-failure",
+          "detected_at": "2026-07-24",
+          "classification": "new_family",
+          "symptom": "After a Run failed and paused its conversation, the next queued turn remained on Preparing indefinitely.",
+          "root_cause": "The CLI treated the pending head of a paused queue as runnable and started a watcher even though no Worker could claim it.",
+          "case_ids": [
+            "paused-pending-head-not-watched"
+          ],
+          "references": [
+            "user-report:2026-07-24"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool.contract.input_schema_rejection",
+      "title": "Tool input violates its declared schema",
+      "invariant": "Malformed model tool input is rejected with TOOL_INPUT_INVALID without exposing the submitted value.",
+      "owners": [
+        "tool-gateway"
+      ],
+      "tags": [
+        "json-schema",
+        "model-tool-input",
+        "redaction"
+      ],
+      "matchers": [
+        "\\bTOOL_INPUT_INVALID\\b",
+        "tool value does not satisfy its JSON Schema",
+        "search_tool_call_id.*(?:invalid|malformed|length)"
+      ],
+      "cases": [
+        {
+          "id": "canonical-input-schema-rejection",
+          "title": "Reject malformed input with a stable redacted error",
+          "tier": "unit",
+          "protects": "Tool definitions validate canonical input and output schemas and do not copy invalid values into error details.",
+          "test_nodeids": [
+            "backend/tests/unit/test_tool_contract.py::test_definition_is_canonical_and_validates_input_and_output_without_values_in_errors"
+          ]
+        }
+      ],
+      "incidents": [
+        {
+          "id": "inc-20260717-tool-input-schema-contract",
+          "detected_at": "2026-07-17",
+          "classification": "new_family",
+          "symptom": "TOOL_INPUT_INVALID schema violations required a stable, redacted regression contract.",
+          "root_cause": "The project needed one canonical boundary test for invalid tool arguments and safe error details.",
+          "case_ids": [
+            "canonical-input-schema-rejection"
+          ],
+          "references": [
+            "test-history:test_tool_contract"
+          ]
+        },
+        {
+          "id": "inc-20260724-malformed-search-call-id",
+          "detected_at": "2026-07-24",
+          "classification": "existing_family",
+          "symptom": "A Web fetch used a malformed search_tool_call_id and was rejected with TOOL_INPUT_INVALID.",
+          "root_cause": "The model supplied a value that did not satisfy the fetch tool JSON Schema; rejection was correct and belonged to the existing input-schema family.",
+          "case_ids": [
+            "canonical-input-schema-rejection"
+          ],
+          "references": [
+            "user-report:2026-07-24"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime.mode_capability.direct_tool_action",
+      "title": "Direct mode receives a tool action",
+      "invariant": "Direct mode rejects every native or structured tool action as MODE_CAPABILITY_VIOLATION without executing it.",
+      "owners": [
+        "runtime"
+      ],
+      "tags": [
+        "direct-mode",
+        "mode-capability",
+        "no-side-effects"
+      ],
+      "matchers": [
+        "direct mode cannot execute tool",
+        "MODE_CAPABILITY_VIOLATION.*direct",
+        "direct.*AGENT_ACTION_CORRECTION_EXHAUSTED"
+      ],
+      "cases": [
+        {
+          "id": "direct-native-tool-rejected",
+          "title": "Reject a native tool action in Direct mode",
+          "tier": "unit",
+          "protects": "A Direct-mode native tool response fails with the stable mode-capability code before any tool execution.",
+          "test_nodeids": [
+            "backend/tests/unit/test_native_direct_runtime.py::test_direct_mode_rejects_tool_actions_without_executing_them"
+          ]
+        }
+      ],
+      "incidents": [
+        {
+          "id": "inc-20260726-direct-tool-error-precedence",
+          "detected_at": "2026-07-26",
+          "classification": "new_family",
+          "symptom": "A project-wide regression run showed Direct mode returning AGENT_ACTION_CORRECTION_EXHAUSTED for a native tool response.",
+          "root_cause": "The offered-tool protocol check ran before Direct mode could apply its more precise mode-capability invariant.",
+          "case_ids": [
+            "direct-native-tool-rejected"
+          ],
+          "references": [
+            "validation:scripts-test"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 | Scope | Command | Coverage |
 | --- | --- | --- |
 | Standard local gate | `scripts/test.sh` | Ruff check/format, backend unit tests, frontend tests, TypeScript, and production build |
+| Traceable regressions | `scripts/test-regressions.sh [--family FAMILY]` | Validated problem-family catalog and the existing tests linked to each incident |
 | Installer/Release contracts | `scripts/test-install.sh` | 参数、Secret 保留、校验和、bundle allowlist、安全卸载、Compose Runtime 互斥及 CI trigger/权限 |
 | Provider onboarding E2E | `scripts/e2e-provider-onboarding.sh` | 十个预设、三种协议、setup/chat、激活、回滚、维护门与 canary 泄漏扫描 |
 | Offline Web tools E2E | `scripts/e2e-web-tools.sh` | 隔离数据库中的 configure、probe、AgentVersion、approval、Search、Fetch 与 citation 全链路 |
@@ -43,6 +44,17 @@
 Integration tests are skipped by ordinary `pytest`. The integration script starts
 or checks the required services and sets `RUN_INTEGRATION=1`; a skipped integration
 test is not evidence of a passing integration suite.
+
+## Regression problem families
+
+Every confirmed bug must be checked against
+[`backend/regressions/catalog.json`](../backend/regressions/catalog.json) before
+adding a test. Use `scripts/regression.py classify "sanitized symptom"` to find
+candidate families. A same-family incident reuses that family's tests unless it
+exposes a genuinely uncovered boundary; a new family starts with one failing
+regression test and a `new_family` incident. The catalog validator prevents
+duplicate ownership and broken test references. See the
+[regression workflow](../backend/regressions/README.md) for the complete process.
 
 The Web tools E2E is fully offline. Its deterministic fake Web fixture covers SearXNG JSON,
 HTML, redirects, private targets, 429/5xx and slow responses; no live Provider credential or

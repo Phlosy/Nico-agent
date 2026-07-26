@@ -47,12 +47,20 @@ body:
       label: Sanitized logs
       description: Remove tokens, passwords, tenant data, prompts, and other secrets.
       render: shell
+  - type: input
+    id: regression_family
+    attributes:
+      label: Regression family candidate
+      description: Optional catalog family ID returned by scripts/regression.py classify.
+      placeholder: runtime.agent_action.unoffered_tool
   - type: checkboxes
     id: checks
     attributes:
       label: Checks
       options:
         - label: I searched existing Issues for the same problem.
+          required: true
+        - label: I checked the regression catalog for a matching problem family.
           required: true
         - label: This report does not disclose a security vulnerability or secret.
           required: true
