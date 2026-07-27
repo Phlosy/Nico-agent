@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nico_agent.domain.states import (
     AgentStatus,
@@ -17,6 +17,7 @@ from nico_agent.domain.states import (
     RunStepStatus,
     TaskStatus,
 )
+from nico_agent.tool_providers.contracts import RunToolBindingCreate
 
 
 class FromAttributesModel(BaseModel):
@@ -207,6 +208,7 @@ class RunCreate(BaseModel):
     token_budget: int | None = Field(default=None, ge=1)
     timeout_seconds: int | None = Field(default=None, ge=1, le=604_800)
     budgets: dict[str, Any] = Field(default_factory=dict)
+    tool_bindings: list[RunToolBindingCreate] = Field(default_factory=list, max_length=100)
 
 
 class RunTransition(BaseModel):
@@ -228,6 +230,7 @@ class RunRead(FromAttributesModel):
     token_budget: int | None
     timeout_seconds: int | None
     budgets: dict[str, Any]
+    tool_binding_snapshot: dict[str, Any]
     checkpoint: dict[str, Any] | None
     checkpoint_schema_version: int
     checkpoint_revision: int
@@ -240,6 +243,24 @@ class RunRead(FromAttributesModel):
     revision: int
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("tool_binding_snapshot", mode="before")
+    @classmethod
+    def redact_tool_binding_snapshot(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {"schema_version": "1", "bindings": []}
+        redacted = dict(value)
+        bindings = value.get("bindings")
+        if isinstance(bindings, list):
+            redacted["bindings"] = [
+                (
+                    {**binding, "credential_ref": "[REDACTED]"}
+                    if isinstance(binding, dict) and "credential_ref" in binding
+                    else binding
+                )
+                for binding in bindings
+            ]
+        return redacted
 
 
 class RuntimeSessionRead(FromAttributesModel):
@@ -361,6 +382,8 @@ class ToolCallRead(FromAttributesModel):
     run_id: UUID
     run_step_id: UUID
     tool_definition_id: UUID
+    run_tool_binding_id: UUID | None
+    provider_id: UUID | None
     tool_name: str
     tool_version: str
     idempotency_key: str
@@ -371,6 +394,13 @@ class ToolCallRead(FromAttributesModel):
     result: dict[str, Any] | None
     error: dict[str, Any] | None
     usage: dict[str, Any]
+    provider_request_id: str | None
+    provider_execution_id: str | None
+    provider_request_digest: str | None
+    provider_deadline_at: datetime | None
+    provider_trace_id: str | None
+    provider_status: str | None
+    external_execution_may_continue: bool
     started_at: datetime | None
     ended_at: datetime | None
     revision: int

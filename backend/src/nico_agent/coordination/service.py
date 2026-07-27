@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nico_agent.config import Settings, get_settings
 from nico_agent.coordination.contracts import (
     AgentMessageStatus,
     AgentMessageType,
@@ -52,6 +54,9 @@ from nico_agent.projects.metadata import is_managed_project
 from nico_agent.runtime.contracts import RuntimeLoopState
 from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.runtime.preparation import narrow_knowledge_policy
+from nico_agent.tool_providers.service import ToolProviderService
+
+logger = logging.getLogger(__name__)
 
 _DELEGATABLE_RUN_STATUSES = {
     RunStatus.PLANNING,
@@ -68,8 +73,23 @@ _ACTIVE_DELEGATION_STATUSES = {
 class CoordinationService:
     """Owns coordination ORM writes; runtime providers receive only a narrow handler."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        settings: Settings | None = None,
+        tool_provider_service: ToolProviderService | None = None,
+    ) -> None:
         self.database = database
+        if tool_provider_service is not None:
+            self.tool_provider_service = tool_provider_service
+        else:
+            runtime_settings = settings or get_settings()
+            self.tool_provider_service = ToolProviderService(
+                database,
+                runtime_settings,
+                approval_required_risks=frozenset(runtime_settings.tool_approval_required_risks),
+            )
 
     async def delegate(
         self,
@@ -373,6 +393,41 @@ class CoordinationService:
             return message
 
     async def cancel_tree(
+        self,
+        context: TenantContext,
+        root_run_id: UUID,
+        *,
+        expected_revision: int,
+    ) -> Run:
+        root = await self._cancel_tree_authoritatively(
+            context,
+            root_run_id,
+            expected_revision=expected_revision,
+        )
+        await self.cancel_external_calls(context, root_run_id)
+        return root
+
+    async def cancel_external_calls(
+        self,
+        context: TenantContext,
+        root_run_id: UUID,
+    ) -> None:
+        """Best-effort remote cancellation after authoritative state commits."""
+
+        try:
+            await self.tool_provider_service.cancel_run_tree(context, root_run_id)
+        except Exception:
+            logger.exception(
+                "External Tool Provider cancellation failed after authoritative Run-tree "
+                "cancellation",
+                extra={
+                    "tenant_id": str(context.tenant_id),
+                    "root_run_id": str(root_run_id),
+                    "correlation_id": str(context.correlation_id),
+                },
+            )
+
+    async def _cancel_tree_authoritatively(
         self,
         context: TenantContext,
         root_run_id: UUID,

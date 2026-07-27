@@ -569,6 +569,47 @@ class NicoApiClient:
     def get_task(self, task_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/tasks/{task_id}")
 
+    def register_external_tool_provider(
+        self,
+        *,
+        name: str,
+        endpoint_ref: str,
+        credential_ref: str,
+        project_id: str | None = None,
+        expires_at: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "name": name,
+            "endpoint_ref": endpoint_ref,
+            "credential_ref": credential_ref,
+        }
+        if project_id is not None:
+            body["project_id"] = project_id
+        if expires_at is not None:
+            body["expires_at"] = expires_at
+        return self.request(
+            "POST",
+            "/api/v1/external-tool-providers",
+            json_body=body,
+        )
+
+    def get_external_tool_provider(self, provider_id: str) -> dict[str, Any]:
+        return self.request("GET", f"/api/v1/external-tool-providers/{provider_id}")
+
+    def transition_external_tool_provider(
+        self,
+        provider_id: str,
+        *,
+        action: str,
+    ) -> dict[str, Any]:
+        if action not in {"verify", "disable", "revoke"}:
+            raise ValueError("unsupported external Tool Provider action")
+        return self.request(
+            "POST",
+            f"/api/v1/external-tool-providers/{provider_id}/{action}",
+            json_body={},
+        )
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/v1/runs/{run_id}")
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+import nico_agent.net.safe_http as safe_http
 from nico_agent.net.safe_http import (
     PinnedRequest,
     RawHttpResponse,
     SafeHttpClient,
     SafeHttpError,
     SafeHttpPolicy,
+    SocketHttpTransport,
     resolve_http_target,
 )
 
@@ -191,6 +193,28 @@ async def test_safe_client_encodes_params_and_passes_only_pinned_request_data() 
 
 
 @pytest.mark.asyncio
+async def test_safe_client_applies_per_request_socket_timeouts() -> None:
+    transport = FakeTransport([RawHttpResponse(200, (), b"ok")])
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34"],
+        connect_timeout=5,
+        read_timeout=10,
+    )
+
+    await client.request(
+        "GET",
+        "https://provider.example/tool",
+        policy=SafeHttpPolicy.exact_endpoint("https://provider.example"),
+        connect_timeout=0.25,
+        read_timeout=0.5,
+    )
+
+    assert transport.requests[0].connect_timeout == 0.25
+    assert transport.requests[0].read_timeout == 0.5
+
+
+@pytest.mark.asyncio
 async def test_safe_client_reauthorizes_redirect_before_second_request() -> None:
     transport = FakeTransport(
         [
@@ -273,3 +297,222 @@ async def test_safe_client_reports_private_redirect_target_as_redirect_denied() 
 
     assert captured.value.code == "REDIRECT_DENIED"
     assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_client_passes_bounded_post_bytes_to_pinned_transport() -> None:
+    transport = FakeTransport(
+        [RawHttpResponse(200, (("Content-Type", "application/json"),), b'{"ok":true}')]
+    )
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    body = b'{"arguments":{"query":"nico"}}'
+
+    response = await client.request(
+        "POST",
+        "https://tools.example/v1/execute",
+        policy=SafeHttpPolicy.exact_endpoint("https://tools.example"),
+        headers={
+            "Authorization": "Bearer must-not-appear-in-repr",
+            "Content-Type": "application/json",
+        },
+        body=body,
+        max_request_bytes=len(body),
+        max_response_bytes=100,
+    )
+
+    request = transport.requests[0]
+    assert response.body == b'{"ok":true}'
+    assert request.method == "POST"
+    assert request.target == "/v1/execute"
+    assert request.body == body
+    assert request.max_request_bytes == len(body)
+    assert request.headers == (
+        ("Authorization", "Bearer must-not-appear-in-repr"),
+        ("Content-Type", "application/json"),
+    )
+    assert "must-not-appear-in-repr" not in repr(request)
+    assert body.decode() not in repr(request)
+
+
+@pytest.mark.asyncio
+async def test_safe_client_rejects_unsupported_methods_bodies_and_oversized_posts() -> None:
+    client = SafeHttpClient(
+        transport=FakeTransport([]),
+        resolver=lambda host, port: ["93.184.216.34"],
+    )
+    policy = SafeHttpPolicy.strict_public()
+
+    with pytest.raises(SafeHttpError) as method:
+        await client.request("PUT", "https://tools.example/", policy=policy)
+    assert method.value.code == "METHOD_DENIED"
+
+    with pytest.raises(SafeHttpError) as get_body:
+        await client.request("GET", "https://tools.example/", policy=policy, body=b"not allowed")
+    assert get_body.value.code == "BODY_DENIED"
+
+    with pytest.raises(SafeHttpError) as oversized:
+        await client.request(
+            "POST",
+            "https://tools.example/",
+            policy=policy,
+            body=b"too large",
+            max_request_bytes=3,
+        )
+    assert oversized.value.code == "REQUEST_TOO_LARGE"
+
+
+@pytest.mark.asyncio
+async def test_post_redirect_is_reresolved_and_private_target_is_denied() -> None:
+    transport = FakeTransport(
+        [RawHttpResponse(307, (("Location", "https://private.example/execute"),), b"")]
+    )
+    lookups: list[str] = []
+
+    def resolver(host: str, port: int) -> list[str]:
+        lookups.append(host)
+        if host == "private.example":
+            return ["10.0.0.8"]
+        return ["93.184.216.34"]
+
+    client = SafeHttpClient(transport=transport, resolver=resolver)
+
+    with pytest.raises(SafeHttpError) as captured:
+        await client.request(
+            "POST",
+            "https://tools.example/execute",
+            policy=SafeHttpPolicy.strict_public(allow_cross_origin_redirects=True),
+            body=b"{}",
+            max_redirects=1,
+        )
+
+    assert captured.value.code == "REDIRECT_DENIED"
+    assert lookups == ["tools.example", "private.example"]
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_post_dns_policy_rejects_mixed_public_and_private_addresses() -> None:
+    transport = FakeTransport([])
+    client = SafeHttpClient(
+        transport=transport,
+        resolver=lambda host, port: ["93.184.216.34", "10.0.0.8"],
+    )
+
+    with pytest.raises(SafeHttpError) as captured:
+        await client.request(
+            "POST",
+            "https://tools.example/execute",
+            policy=SafeHttpPolicy.strict_public(),
+            body=b"{}",
+        )
+
+    assert captured.value.code == "ADDRESS_DENIED"
+    assert transport.requests == []
+
+
+def test_socket_transport_sends_exact_post_length_type_and_body(monkeypatch) -> None:
+    class FakeSocket:
+        def settimeout(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeResponse:
+        status = 200
+
+        def getheaders(self):
+            return (("Content-Type", "application/json"),)
+
+        def read(self, amount: int) -> bytes:
+            return b"{}"
+
+    class FakeConnection:
+        instance = None
+
+        def __init__(self, hostname: str, port: int) -> None:
+            self.hostname = hostname
+            self.port = port
+            self.headers: list[tuple[str, str]] = []
+            FakeConnection.instance = self
+
+        def putrequest(self, method: str, target: str, **kwargs) -> None:
+            self.method = method
+            self.target = target
+
+        def putheader(self, name: str, value: str) -> None:
+            self.headers.append((name, value))
+
+        def endheaders(self, body: bytes | None = None) -> None:
+            self.body = body
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+    fake_socket = FakeSocket()
+    monkeypatch.setattr(
+        safe_http.socket,
+        "create_connection",
+        lambda target, timeout: fake_socket,
+    )
+    monkeypatch.setattr(safe_http.http.client, "HTTPConnection", FakeConnection)
+    body = b'{"tool":"echo"}'
+
+    response = SocketHttpTransport._request(
+        PinnedRequest(
+            method="POST",
+            scheme="http",
+            hostname="tools.example",
+            port=80,
+            target="/v1/execute",
+            ip_address="93.184.216.34",
+            connect_timeout=1,
+            read_timeout=2,
+            max_response_bytes=100,
+            max_request_bytes=100,
+            headers=(
+                ("Authorization", "Bearer secret"),
+                ("Content-Type", "application/json"),
+                ("Content-Length", "999"),
+            ),
+            body=body,
+        )
+    )
+
+    connection = FakeConnection.instance
+    assert response.body == b"{}"
+    assert connection.method == "POST"
+    assert connection.target == "/v1/execute"
+    assert connection.body == body
+    assert ("Content-Length", str(len(body))) in connection.headers
+    assert ("Content-Type", "application/json") in connection.headers
+    assert ("Content-Length", "999") not in connection.headers
+    assert ("Authorization", "Bearer secret") in connection.headers
+
+
+def test_socket_transport_reports_socket_deadline_as_timeout(monkeypatch) -> None:
+    def time_out(_target, *, timeout):
+        del timeout
+        raise TimeoutError
+
+    monkeypatch.setattr(safe_http.socket, "create_connection", time_out)
+
+    with pytest.raises(SafeHttpError) as captured:
+        SocketHttpTransport._request(
+            PinnedRequest(
+                method="GET",
+                scheme="https",
+                hostname="provider.example",
+                port=443,
+                target="/v1/health",
+                ip_address="93.184.216.34",
+                connect_timeout=0.1,
+                read_timeout=0.1,
+                max_response_bytes=100,
+            )
+        )
+
+    assert captured.value.code == "TIMEOUT"

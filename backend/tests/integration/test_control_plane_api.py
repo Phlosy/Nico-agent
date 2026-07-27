@@ -9,6 +9,7 @@ from nico_agent.api import create_app
 from nico_agent.config import Settings
 from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
 from nico_agent.runtime.executor import RuntimeWorker
+from nico_agent.tool_providers.service import ToolProviderService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -420,6 +421,7 @@ async def test_task_multiple_runs_steps_events_and_audit(client: AsyncClient) ->
 @pytest.mark.asyncio
 async def test_invalid_transitions_and_revisions_are_stable_and_atomic(
     client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, headers = await bootstrap(client, "Errors")
     project = (
@@ -494,12 +496,85 @@ async def test_invalid_transitions_and_revisions_are_stable_and_atomic(
     pending = (
         await client.post(f"/api/v1/tasks/{assigned['id']}/runs", json={}, headers=headers)
     ).json()
+    provider_cancelled_run_ids: list[str] = []
+
+    async def record_provider_cancellation(
+        _service: ToolProviderService,
+        _context,
+        root_run_id,
+    ) -> None:
+        provider_cancelled_run_ids.append(str(root_run_id))
+
+    monkeypatch.setattr(
+        ToolProviderService,
+        "cancel_run_tree",
+        record_provider_cancellation,
+    )
     cancelled = await client.post(
         f"/api/v1/runs/{pending['id']}/cancel",
         json={"expected_revision": pending["revision"]},
         headers=headers,
     )
     assert cancelled.json()["status"] == "cancelled"
+    assert provider_cancelled_run_ids == [pending["id"]]
+
+    tree_task = (
+        await client.post(
+            "/api/v1/tasks",
+            json={
+                "project_id": project["id"],
+                "title": "Public tree cancellation reaches Providers",
+                "assignee_agent_id": ready["id"],
+            },
+            headers=headers,
+        )
+    ).json()
+    tree_run = (
+        await client.post(f"/api/v1/tasks/{tree_task['id']}/runs", json={}, headers=headers)
+    ).json()
+    tree_cancelled = await client.post(
+        f"/api/v1/runs/{tree_run['id']}/tree-cancel",
+        json={"expected_revision": tree_run["revision"]},
+        headers=headers,
+    )
+    assert tree_cancelled.status_code == 200, tree_cancelled.text
+    assert tree_cancelled.json()["status"] == "cancelled"
+    assert provider_cancelled_run_ids == [pending["id"], tree_run["id"]]
+
+    transition_task = (
+        await client.post(
+            "/api/v1/tasks",
+            json={
+                "project_id": project["id"],
+                "title": "Transition cancellation reaches Providers",
+                "assignee_agent_id": ready["id"],
+            },
+            headers=headers,
+        )
+    ).json()
+    transition_run = (
+        await client.post(
+            f"/api/v1/tasks/{transition_task['id']}/runs",
+            json={},
+            headers=headers,
+        )
+    ).json()
+    transitioned = await client.post(
+        f"/api/v1/runs/{transition_run['id']}/transition",
+        json={
+            "target": "cancelled",
+            "expected_revision": transition_run["revision"],
+        },
+        headers=headers,
+    )
+    assert transitioned.status_code == 200, transitioned.text
+    assert transitioned.json()["status"] == "cancelled"
+    assert provider_cancelled_run_ids == [
+        pending["id"],
+        tree_run["id"],
+        transition_run["id"],
+    ]
+
     retry_cancelled = await client.post(
         f"/api/v1/runs/{pending['id']}/retry", json={}, headers=headers
     )

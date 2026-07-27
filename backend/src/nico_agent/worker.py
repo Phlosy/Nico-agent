@@ -38,6 +38,8 @@ from nico_agent.runtime import (
     RuntimeProviderRegistry,
 )
 from nico_agent.runtime.executor import RuntimeWorker
+from nico_agent.tool_providers.client import ToolProviderClient
+from nico_agent.tool_providers.executor import ExternalToolResolver
 from nico_agent.tools import ToolGateway, ToolRegistry
 from nico_agent.tools.builtin import (
     DatabaseReadExecutor,
@@ -269,6 +271,16 @@ async def worker_main(settings: Settings | None = None) -> None:
         tool_registry,
         approval_required_risks=frozenset(runtime_settings.tool_approval_required_risks),
         approval_ttl_seconds=runtime_settings.tool_approval_ttl_seconds,
+        external_resolver=ExternalToolResolver(
+            database,
+            ToolProviderClient(
+                http=SafeHttpClient(
+                    connect_timeout=runtime_settings.tool_provider_connect_timeout_seconds,
+                    read_timeout=runtime_settings.tool_provider_read_timeout_seconds,
+                ),
+                max_response_bytes=runtime_settings.tool_provider_max_response_bytes,
+            ),
+        ),
     )
     artifact_service = ArtifactService(
         database,

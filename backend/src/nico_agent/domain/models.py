@@ -41,6 +41,7 @@ from nico_agent.domain.states import (
     ConversationStatus,
     ConversationTurnStatus,
     EvaluationStatus,
+    ExternalToolProviderStatus,
     MemoryStatus,
     ModelCallStatus,
     ModelEndpointStatus,
@@ -56,6 +57,7 @@ from nico_agent.domain.states import (
     RunStatus,
     RunStepStatus,
     RuntimeEvaluationStatus,
+    RunToolBindingStatus,
     SkillDeploymentStatus,
     SkillStatus,
     SkillVersionStatus,
@@ -63,6 +65,7 @@ from nico_agent.domain.states import (
     ToolApprovalStatus,
     ToolCallStatus,
     ToolDefinitionStatus,
+    ToolProviderCancelStatus,
     UserInputRequestStatus,
 )
 
@@ -826,6 +829,16 @@ class Run(Base, TimestampMixin):
             "octet_length(lifecycle_metadata::text) <= 16384",
             name="ck_runs_lifecycle_metadata_size",
         ),
+        CheckConstraint(
+            "jsonb_typeof(tool_binding_snapshot) = 'object' "
+            "AND tool_binding_snapshot ->> 'schema_version' = '1' "
+            "AND jsonb_typeof(tool_binding_snapshot -> 'bindings') = 'array'",
+            name="ck_runs_tool_binding_snapshot_shape",
+        ),
+        CheckConstraint(
+            "octet_length(tool_binding_snapshot::text) <= 1048576",
+            name="ck_runs_tool_binding_snapshot_size",
+        ),
         CheckConstraint("checkpoint_schema_version > 0", name="ck_runs_checkpoint_schema"),
         CheckConstraint("checkpoint_revision >= 0", name="ck_runs_checkpoint_revision"),
         CheckConstraint(
@@ -879,6 +892,11 @@ class Run(Base, TimestampMixin):
     token_budget: Mapped[int | None] = mapped_column(BigInteger)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     budgets: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    tool_binding_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("""'{"schema_version":"1","bindings":[]}'::jsonb"""),
+    )
     lease_owner: Mapped[str | None] = mapped_column(String(200))
     lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -2700,6 +2718,122 @@ class RuntimeEvaluation(Base):
     )
 
 
+class ExternalToolProvider(Base, TimestampMixin):
+    """A tenant-controlled, verified endpoint eligible for run-scoped tool bindings."""
+
+    __tablename__ = "external_tool_providers"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('registered', 'verified', 'active', 'disabled', 'expired', 'revoked')",
+            name="ck_external_tool_providers_status",
+        ),
+        CheckConstraint(
+            "protocol = 'nico-tool-provider-v1'",
+            name="ck_external_tool_providers_protocol",
+        ),
+        CheckConstraint(
+            "name ~ '^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$'",
+            name="ck_external_tool_providers_name",
+        ),
+        CheckConstraint(
+            "endpoint_identity ~ '^sha256:[0-9a-f]{64}$' "
+            "AND (capability_digest IS NULL "
+            "OR capability_digest ~ '^sha256:[0-9a-f]{64}$')",
+            name="ck_external_tool_providers_digests",
+        ),
+        CheckConstraint(
+            "credential_ref ~ '^(env:NICO_TOOL_SECRET_[A-Z0-9_]{1,100}|"
+            "secret:[A-Za-z0-9._:/-]{1,240})$'",
+            name="ck_external_tool_providers_credential_ref",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(capability_snapshot) = 'object' "
+            "AND jsonb_typeof(endpoint_policy) = 'object' "
+            "AND jsonb_typeof(metadata) = 'object'",
+            name="ck_external_tool_providers_json_shapes",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > created_at",
+            name="ck_external_tool_providers_expiry",
+        ),
+        CheckConstraint(
+            "(status NOT IN ('verified', 'active') "
+            "OR (verified_at IS NOT NULL AND capability_digest IS NOT NULL)) "
+            "AND (status <> 'active' OR activated_at IS NOT NULL)",
+            name="ck_external_tool_providers_verification",
+        ),
+        CheckConstraint("revision > 0", name="ck_external_tool_providers_revision"),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.id"],
+            ondelete="RESTRICT",
+            name="fk_external_tool_providers_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_external_tool_providers_project",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_external_tool_providers_tenant_id_id"),
+        Index(
+            "uq_external_tool_providers_tenant_name",
+            "tenant_id",
+            "name",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "uq_external_tool_providers_project_name",
+            "tenant_id",
+            "project_id",
+            "name",
+            unique=True,
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_external_tool_providers_tenant_status",
+            "tenant_id",
+            "status",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    protocol: Mapped[str] = mapped_column(
+        String(50), nullable=False, server_default="nico-tool-provider-v1"
+    )
+    endpoint_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    endpoint_identity: Mapped[str] = mapped_column(String(71), nullable=False)
+    credential_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default=ExternalToolProviderStatus.REGISTERED.value,
+    )
+    capability_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    capability_digest: Mapped[str | None] = mapped_column(String(71))
+    endpoint_policy: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default="{}"
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class ToolDefinition(Base, TimestampMixin):
     __tablename__ = "tool_definitions"
     __table_args__ = (
@@ -2757,6 +2891,135 @@ class ToolDefinition(Base, TimestampMixin):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
+class RunToolBinding(Base, TimestampMixin):
+    """Immutable run-scoped provider policy plus durable execution counters."""
+
+    __tablename__ = "run_tool_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('created', 'frozen', 'active', 'expiring', "
+            "'expired', 'revoked', 'completed')",
+            name="ck_run_tool_bindings_status",
+        ),
+        CheckConstraint(
+            "binding_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="ck_run_tool_bindings_digest",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(policy) = 'object'",
+            name="ck_run_tool_bindings_policy",
+        ),
+        CheckConstraint(
+            "max_calls BETWEEN 1 AND 100000 "
+            "AND max_total_duration_ms BETWEEN 1 AND 86400000 "
+            "AND max_single_call_duration_ms BETWEEN 1 AND 300000 "
+            "AND max_single_call_duration_ms <= max_total_duration_ms "
+            "AND max_retries BETWEEN 0 AND 4",
+            name="ck_run_tool_bindings_budgets",
+        ),
+        CheckConstraint(
+            "call_count >= 0 AND call_count <= max_calls AND total_duration_ms >= 0",
+            name="ck_run_tool_bindings_usage",
+        ),
+        CheckConstraint(
+            "cancel_status IN ('none', 'requested', 'cancelled', 'failed', 'unknown')",
+            name="ck_run_tool_bindings_cancel_status",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > created_at",
+            name="ck_run_tool_bindings_expiry",
+        ),
+        CheckConstraint("revision > 0", name="ck_run_tool_bindings_revision"),
+        ForeignKeyConstraint(
+            ["tenant_id", "project_id"],
+            ["projects.tenant_id", "projects.id"],
+            ondelete="RESTRICT",
+            name="fk_run_tool_bindings_project",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["runs.tenant_id", "runs.id"],
+            ondelete="RESTRICT",
+            name="fk_run_tool_bindings_run",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "provider_id"],
+            ["external_tool_providers.tenant_id", "external_tool_providers.id"],
+            ondelete="RESTRICT",
+            name="fk_run_tool_bindings_provider",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "tool_definition_id"],
+            ["tool_definitions.tenant_id", "tool_definitions.id"],
+            ondelete="RESTRICT",
+            name="fk_run_tool_bindings_definition",
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_run_tool_bindings_tenant_id_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "id",
+            "provider_id",
+            "tool_definition_id",
+            name="uq_run_tool_bindings_call_scope",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "run_id",
+            "tool_definition_id",
+            name="uq_run_tool_bindings_run_tool",
+        ),
+        Index(
+            "ix_run_tool_bindings_tenant_run_status",
+            "tenant_id",
+            "run_id",
+            "status",
+        ),
+        Index(
+            "ix_run_tool_bindings_provider_status",
+            "tenant_id",
+            "provider_id",
+            "status",
+        ),
+        Index(
+            "ix_run_tool_bindings_active_request",
+            "tenant_id",
+            "run_id",
+            "active_provider_request_id",
+            postgresql_where=text("active_provider_request_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    provider_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tool_definition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    tool_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    binding_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=RunToolBindingStatus.CREATED.value
+    )
+    policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    max_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_total_duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_single_call_duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    call_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    total_duration_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    active_provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    cancel_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=ToolProviderCancelStatus.NONE.value
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class ToolCall(Base, TimestampMixin):
     __tablename__ = "tool_calls"
     __table_args__ = (
@@ -2765,6 +3028,21 @@ class ToolCall(Base, TimestampMixin):
             name="ck_tool_calls_status",
         ),
         CheckConstraint("length(arguments_hash) = 64", name="ck_tool_calls_arguments_hash"),
+        CheckConstraint(
+            "(run_tool_binding_id IS NULL AND provider_id IS NULL) "
+            "OR (run_tool_binding_id IS NOT NULL AND provider_id IS NOT NULL)",
+            name="ck_tool_calls_provider_binding_shape",
+        ),
+        CheckConstraint(
+            "provider_request_digest IS NULL OR provider_request_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="ck_tool_calls_provider_request_digest",
+        ),
+        CheckConstraint(
+            "provider_status IS NULL OR provider_status IN "
+            "('pending', 'accepted', 'running', 'succeeded', 'failed', "
+            "'cancelled', 'timed_out', 'unknown')",
+            name="ck_tool_calls_provider_status",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "run_id"],
             ["runs.tenant_id", "runs.id"],
@@ -2783,6 +3061,24 @@ class ToolCall(Base, TimestampMixin):
             ondelete="RESTRICT",
             name="fk_tool_calls_tenant_definition",
         ),
+        ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "run_id",
+                "run_tool_binding_id",
+                "provider_id",
+                "tool_definition_id",
+            ],
+            [
+                "run_tool_bindings.tenant_id",
+                "run_tool_bindings.run_id",
+                "run_tool_bindings.id",
+                "run_tool_bindings.provider_id",
+                "run_tool_bindings.tool_definition_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_tool_calls_run_provider_binding",
+        ),
         UniqueConstraint("tenant_id", "id", name="uq_tool_calls_tenant_id_id"),
         UniqueConstraint(
             "tenant_id",
@@ -2800,6 +3096,21 @@ class ToolCall(Base, TimestampMixin):
         ),
         Index("ix_tool_calls_tenant_run_created", "tenant_id", "run_id", "created_at"),
         Index("ix_tool_calls_tenant_status", "tenant_id", "status", "created_at"),
+        Index(
+            "uq_tool_calls_provider_request",
+            "tenant_id",
+            "provider_id",
+            "provider_request_id",
+            unique=True,
+            postgresql_where=text("provider_request_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_tool_calls_active_provider_request",
+            "tenant_id",
+            "run_id",
+            "provider_status",
+            postgresql_where=text("provider_status IN ('pending', 'accepted', 'running')"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -2809,6 +3120,8 @@ class ToolCall(Base, TimestampMixin):
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     run_step_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     tool_definition_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    run_tool_binding_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    provider_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     tool_name: Mapped[str] = mapped_column(String(120), nullable=False)
     tool_version: Mapped[str] = mapped_column(String(50), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -2816,6 +3129,15 @@ class ToolCall(Base, TimestampMixin):
     caller: Mapped[str] = mapped_column(String(200), nullable=False)
     execution_owner: Mapped[str | None] = mapped_column(String(200))
     execution_lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    provider_execution_id: Mapped[str | None] = mapped_column(String(300))
+    provider_request_digest: Mapped[str | None] = mapped_column(String(71))
+    provider_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_trace_id: Mapped[str | None] = mapped_column(String(128))
+    provider_status: Mapped[str | None] = mapped_column(String(32))
+    external_execution_may_continue: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
     arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=ToolCallStatus.PENDING.value

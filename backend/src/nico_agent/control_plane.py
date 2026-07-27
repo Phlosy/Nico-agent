@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from nico_agent.api_schemas import (
     TenantCreate,
     TenantSettingsPatch,
 )
+from nico_agent.config import Settings, get_settings
 from nico_agent.coordination.service import CoordinationService
 from nico_agent.database import Database, TenantContext
 from nico_agent.domain.errors import (
@@ -71,6 +72,7 @@ from nico_agent.domain.states import (
 from nico_agent.projects.metadata import is_managed_project
 from nico_agent.runtime.contracts import RuntimeTrajectory
 from nico_agent.runtime.lifecycle import RunLifecycleAuthority
+from nico_agent.tool_providers.service import ProviderBindingObservation, ToolProviderService
 
 
 class ControlPlaneService:
@@ -79,9 +81,21 @@ class ControlPlaneService:
         database: Database,
         *,
         approval_locked_risks: frozenset[str] = frozenset(),
+        settings: Settings | None = None,
+        tool_provider_service: ToolProviderService | None = None,
     ) -> None:
         self.database = database
         self.approval_locked_risks = approval_locked_risks
+        runtime_settings = settings or get_settings()
+        self.tool_provider_service = tool_provider_service or ToolProviderService(
+            database,
+            runtime_settings,
+            approval_required_risks=frozenset(runtime_settings.tool_approval_required_risks),
+        )
+        self.coordination_service = CoordinationService(
+            database,
+            tool_provider_service=self.tool_provider_service,
+        )
 
     async def bootstrap_tenant(
         self, command: TenantCreate, *, actor_id: str, correlation_id: UUID
@@ -221,7 +235,7 @@ class ControlPlaneService:
                     )
                 )
             )
-            coordination = CoordinationService(self.database)
+            coordination = self.coordination_service
             now = datetime.now(UTC)
             for cycle in active_cycles:
                 if cycle.run_id is not None:
@@ -631,6 +645,10 @@ class ControlPlaneService:
             return task
 
     async def create_run(self, context: TenantContext, task_id: UUID, command: RunCreate) -> Run:
+        provider_observations = await self.tool_provider_service.preflight_run_bindings(
+            context,
+            command.tool_bindings,
+        )
         async with self.database.tenant_transaction(context) as session:
             task = await self._task(session, context, task_id, for_update=True)
             project = await self._project(session, context, task.project_id)
@@ -639,7 +657,13 @@ class ControlPlaneService:
                 raise DomainConflict(
                     "TASK_NOT_RUNNABLE", "task must be assigned or require revision"
                 )
-            run = await self._new_run(session, context, task, command)
+            run = await self._new_run(
+                session,
+                context,
+                task,
+                command,
+                provider_observations=provider_observations,
+            )
             task.status = transition_state(
                 "task", TaskStatus(task.status), TaskStatus.RUNNING, TASK_TRANSITIONS
             ).value
@@ -832,18 +856,24 @@ class ControlPlaneService:
                         run_id=run.id,
                     )
             await session.flush()
-            return run
+        if command.target in {RunStatus.CANCELLED, RunStatus.TIMED_OUT}:
+            await self.coordination_service.cancel_external_calls(context, run_id)
+        return run
 
     async def cancel_run(
         self, context: TenantContext, run_id: UUID, *, expected_revision: int
     ) -> Run:
-        return await CoordinationService(self.database).cancel_tree(
+        return await self.coordination_service.cancel_tree(
             context,
             run_id,
             expected_revision=expected_revision,
         )
 
     async def retry_run(self, context: TenantContext, run_id: UUID, command: RunCreate) -> Run:
+        provider_observations = await self.tool_provider_service.preflight_run_bindings(
+            context,
+            command.tool_bindings,
+        )
         async with self.database.tenant_transaction(context) as session:
             previous = await self._run(session, context, run_id, for_update=True)
             conversation_turn = await session.scalar(
@@ -870,7 +900,12 @@ class ControlPlaneService:
             }:
                 raise DomainConflict("TASK_NOT_RUNNABLE", "task state does not allow another run")
             new_run = await self._new_run(
-                session, context, task, command, retry_of_run_id=previous.id
+                session,
+                context,
+                task,
+                command,
+                retry_of_run_id=previous.id,
+                provider_observations=provider_observations,
             )
             if TaskStatus(task.status) in {TaskStatus.REVISION_REQUIRED, TaskStatus.FAILED}:
                 task.status = transition_state(
@@ -1057,12 +1092,19 @@ class ControlPlaneService:
         command: RunCreate,
         *,
         retry_of_run_id: UUID | None = None,
+        provider_observations: dict[UUID, ProviderBindingObservation] | None = None,
     ) -> Run:
         if task.assignee_agent_id is None:
             raise DomainConflict("ASSIGNEE_REQUIRED", "task needs an agent before creating a run")
         agent = await self._ready_agent(session, context, task.assignee_agent_id)
         if agent.current_version_id is None:
             raise DomainConflict("AGENT_VERSION_REQUIRED", "agent needs a published version")
+        version = await self._agent_version(
+            session,
+            context,
+            agent.id,
+            agent.current_version_id,
+        )
         latest_attempt = await session.scalar(
             select(func.max(Run.attempt)).where(
                 Run.tenant_id == context.tenant_id,
@@ -1070,6 +1112,7 @@ class ControlPlaneService:
             )
         )
         run = Run(
+            id=uuid4(),
             tenant_id=context.tenant_id,
             task_id=task.id,
             agent_id=agent.id,
@@ -1082,6 +1125,22 @@ class ControlPlaneService:
             budgets=command.budgets,
         )
         session.add(run)
+        # Queries and Provider validation inside the freeze step must not
+        # auto-flush a Run carrying the empty column default. The database
+        # immutability trigger expects the final Snapshot on the first INSERT.
+        with session.no_autoflush:
+            bindings = await self.tool_provider_service.freeze_run_bindings(
+                session,
+                context,
+                task=task,
+                run=run,
+                version=version,
+                commands=command.tool_bindings,
+                provider_observations=provider_observations or {},
+            )
+        # Persist the Run and its FK-dependent bindings before their audit
+        # Events. These models intentionally do not expose ORM relationships.
+        await session.flush([run, *bindings])
         await session.flush()
         return run
 

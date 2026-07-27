@@ -169,6 +169,15 @@ class FakeClient:
     def get_task(self, task_id: str) -> dict[str, Any]:
         return {"id": task_id, "status": "running"}
 
+    def register_external_tool_provider(self, **kwargs) -> dict[str, Any]:
+        return {"id": "99999999-9999-4999-8999-999999999999", **kwargs, "status": "registered"}
+
+    def get_external_tool_provider(self, provider_id: str) -> dict[str, Any]:
+        return {"id": provider_id, "name": "local.stub", "status": "active"}
+
+    def transition_external_tool_provider(self, provider_id: str, *, action: str) -> dict[str, Any]:
+        return {"id": provider_id, "name": "local.stub", "status": action}
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         return {"id": run_id, "status": "completed"}
 
@@ -460,6 +469,39 @@ def test_health_doctor_and_resource_json(monkeypatch, tmp_path: Path) -> None:
         "tenant_access",
     }
     assert json.loads(agents.stdout)[0]["name"] == "researcher"
+
+
+def test_external_tool_provider_cli_is_remote_and_machine_readable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli_module, "NicoApiClient", FakeClient)
+    prefix = [
+        "--config-file",
+        str(tmp_path / "config.toml"),
+        "--tenant-id",
+        str(TENANT_ID),
+        "--json",
+        "tool-provider",
+    ]
+    provider_id = "99999999-9999-4999-8999-999999999999"
+
+    registered = runner.invoke(
+        cli_module.app,
+        [
+            *prefix,
+            "register",
+            "local.stub",
+            "--endpoint",
+            "https://provider.example.test",
+            "--credential-ref",
+            "env:NICO_TOOL_SECRET_STUB",
+        ],
+    )
+    verified = runner.invoke(cli_module.app, [*prefix, "verify", provider_id])
+
+    assert registered.exit_code == verified.exit_code == 0
+    assert json.loads(registered.stdout)["status"] == "registered"
+    assert json.loads(verified.stdout)["status"] == "verify"
 
 
 def test_doctor_fails_when_profile_tenant_is_not_available(monkeypatch, tmp_path: Path) -> None:

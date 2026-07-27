@@ -74,7 +74,8 @@ Provider 业务失败均返回结构化错误，不查询同名本地 executor�
 
 公开协议为 `nico-tool-provider-v1`。v1 使用短期 HMAC request signature：
 
-- 长期根密钥只通过 `credential_ref` 在 Worker 内解析；
+- v1 长期根密钥只接受 `env:NICO_TOOL_SECRET_*` 形式的 `credential_ref`，并在
+  Worker 内解析；
 - 每次请求签名包含 method、path、body digest、provider/binding/run/request identity、
   timestamp 和 nonce；
 - Provider 接受窗口默认 60 秒，并持久化/缓存 nonce 防 replay；
@@ -139,7 +140,7 @@ Run 完成、失败、取消或超时后，binding 进入 COMPLETED/REVOKED/EXPI
 ### ExternalToolProvider
 
 - tenant/project scope、name、protocol、endpoint identity；
-- opaque `credential_ref`；
+- `env:NICO_TOOL_SECRET_*` credential reference（不保存 Secret 值）；
 - REGISTERED/VERIFIED/ACTIVE/DISABLED/EXPIRED/REVOKED；
 - verified capability snapshot 与 digest；
 - endpoint security policy、expiry、metadata、revision。

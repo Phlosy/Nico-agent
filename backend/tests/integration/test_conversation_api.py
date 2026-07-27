@@ -29,6 +29,7 @@ from nico_agent.domain.models import (
 from nico_agent.runtime import MockRuntimeProvider, RuntimeProviderRegistry
 from nico_agent.runtime.executor import RuntimeWorker
 from nico_agent.runtime.service import RuntimeExecutionService
+from nico_agent.tool_providers.service import ToolProviderService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -898,7 +899,10 @@ async def test_two_turn_conversation_is_atomic_streamable_resumable_and_version_
 
 
 @pytest.mark.asyncio
-async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(app_client) -> None:
+async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(
+    app_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app, client = app_client
     tenant_id, headers = await _bootstrap(client, "ConversationGuards")
     project, agent, version = await _project_and_agent(client, headers)
@@ -928,6 +932,20 @@ async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(app_clien
     assert mismatch.status_code == 400
     assert mismatch.json()["code"] == "IDEMPOTENCY_KEY_REUSED"
 
+    provider_cancelled_run_ids: list[str] = []
+
+    async def record_provider_cancellation(
+        _service: ToolProviderService,
+        _context,
+        root_run_id,
+    ) -> None:
+        provider_cancelled_run_ids.append(str(root_run_id))
+
+    monkeypatch.setattr(
+        ToolProviderService,
+        "cancel_run_tree",
+        record_provider_cancellation,
+    )
     cancelled_response = await client.post(
         f"/api/v1/conversation-turns/{turn['id']}/cancel",
         json={"expected_revision": turn["run_revision"]},
@@ -936,6 +954,7 @@ async def test_turn_idempotency_cancel_archive_rls_and_identity_guards(app_clien
     assert cancelled_response.status_code == 200, cancelled_response.text
     cancelled = cancelled_response.json()
     assert cancelled["status"] == cancelled["run_status"] == "cancelled"
+    assert provider_cancelled_run_ids == [turn["run_id"]]
     assert (await client.get(f"/api/v1/tasks/{turn['task_id']}", headers=headers)).json()[
         "status"
     ] == "cancelled"

@@ -4,6 +4,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -38,6 +39,7 @@ from nico_agent.domain.models import (
     Task,
     Tenant,
 )
+from nico_agent.tool_providers.service import ToolProviderService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -617,7 +619,14 @@ async def test_tree_cancel_releases_reservations_and_prevents_late_wake() -> Non
     database = Database(engine)
     try:
         seeded = await _seed(database)
-        service = CoordinationService(database)
+        provider_cancellation = AsyncMock(spec=ToolProviderService)
+        provider_cancellation.cancel_run_tree.side_effect = RuntimeError(
+            "simulated post-commit Provider cancellation failure"
+        )
+        service = CoordinationService(
+            database,
+            tool_provider_service=provider_cancellation,
+        )
         first = await service.delegate(
             seeded.context,
             seeded.parent_run_id,
@@ -674,6 +683,11 @@ async def test_tree_cancel_releases_reservations_and_prevents_late_wake() -> Non
         assert {run.status for run in runs} == {"cancelled"}
         assert {delegation.status for delegation in delegations} == {"cancelled"}
         assert ledger is not None and ledger.token_child_reserved == 0
+        assert provider_cancellation.cancel_run_tree.await_count == 2
+        assert {
+            invocation.args[1]
+            for invocation in provider_cancellation.cancel_run_tree.await_args_list
+        } == {seeded.parent_run_id}
     finally:
         await engine.dispose()
 

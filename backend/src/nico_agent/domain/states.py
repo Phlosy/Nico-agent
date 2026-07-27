@@ -218,6 +218,33 @@ class ToolDefinitionStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class ExternalToolProviderStatus(StrEnum):
+    REGISTERED = "registered"
+    VERIFIED = "verified"
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+class RunToolBindingStatus(StrEnum):
+    CREATED = "created"
+    FROZEN = "frozen"
+    ACTIVE = "active"
+    EXPIRING = "expiring"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    COMPLETED = "completed"
+
+
+class ToolProviderCancelStatus(StrEnum):
+    NONE = "none"
+    REQUESTED = "requested"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
 class ToolCallStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
