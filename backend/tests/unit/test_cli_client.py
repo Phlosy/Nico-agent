@@ -48,6 +48,49 @@ def test_health_does_not_require_tenant_context() -> None:
         assert client.liveness() == {"status": "alive"}
 
 
+def test_external_tool_provider_client_uses_public_registry_routes() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": "provider-1", "status": "active"})
+
+    with NicoApiClient(profile(), transport=httpx.MockTransport(handler)) as client:
+        client.register_external_tool_provider(
+            name="local.stub",
+            endpoint_ref="https://provider.example.test",
+            credential_ref="env:NICO_TOOL_SECRET_STUB",
+            project_id="project-1",
+        )
+        client.get_external_tool_provider("provider-1")
+        client.transition_external_tool_provider("provider-1", action="verify")
+        client.transition_external_tool_provider("provider-1", action="disable")
+        client.transition_external_tool_provider("provider-1", action="revoke")
+
+    assert [request.url.path for request in seen] == [
+        "/api/v1/external-tool-providers",
+        "/api/v1/external-tool-providers/provider-1",
+        "/api/v1/external-tool-providers/provider-1/verify",
+        "/api/v1/external-tool-providers/provider-1/disable",
+        "/api/v1/external-tool-providers/provider-1/revoke",
+    ]
+    assert seen[0].read() == (
+        b'{"name":"local.stub","endpoint_ref":"https://provider.example.test",'
+        b'"credential_ref":"env:NICO_TOOL_SECRET_STUB","project_id":"project-1"}'
+    )
+
+
+def test_external_tool_provider_client_rejects_unknown_transition() -> None:
+    with (
+        NicoApiClient(
+            profile(),
+            transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
+        ) as client,
+        pytest.raises(ValueError, match="unsupported"),
+    ):
+        client.transition_external_tool_provider("provider-1", action="delete")
+
+
 def test_resource_request_without_tenant_fails_before_network() -> None:
     called = False
 

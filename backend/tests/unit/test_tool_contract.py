@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from nico_agent.tool_providers.errors import ToolProviderError
 from nico_agent.tools import (
     ToolDefinitionSpec,
     ToolExecutionContext,
@@ -184,3 +187,55 @@ def test_executor_retry_override_can_fail_closed_without_widening_policy() -> No
     )
     assert provider_limit.retry_after_seconds == 7
     assert ToolGateway._should_retry(spec, "NOT_DECLARED", 1, retryable=True) is False
+
+
+def test_external_binding_serializes_distinct_in_flight_requests() -> None:
+    binding = SimpleNamespace(
+        call_count=1,
+        max_calls=10,
+        total_duration_ms=100,
+        max_total_duration_ms=10_000,
+        active_provider_request_id="provider-existing",
+        provider_id=uuid4(),
+    )
+    call = SimpleNamespace(id=uuid4(), provider_request_id="provider-new")
+    run = SimpleNamespace(id=uuid4())
+
+    with pytest.raises(ToolProviderError) as captured:
+        ToolGateway._ensure_external_binding_capacity(binding, call, run)
+
+    assert captured.value.code == "TOOL_BINDING_BUDGET_EXCEEDED"
+    assert captured.value.cause == "BINDING_CALL_IN_PROGRESS"
+
+
+def test_external_deadline_is_capped_by_remaining_binding_duration() -> None:
+    now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+    run = SimpleNamespace(
+        id=uuid4(),
+        created_at=now,
+        timeout_seconds=None,
+    )
+    binding = SimpleNamespace(
+        max_total_duration_ms=10_000,
+        total_duration_ms=8_750,
+    )
+    executor = SimpleNamespace(
+        effective_timeout_seconds=10,
+        provider_id=uuid4(),
+        snapshot=SimpleNamespace(binding_expires_at=None),
+    )
+
+    deadline = ToolGateway._external_deadline(run, binding, executor, now)
+
+    assert (deadline - now).total_seconds() == 1.25
+
+
+def test_cancellation_usage_marks_unconfirmed_external_execution() -> None:
+    usage = ToolGateway._cancellation_usage({}, confirmed=False)
+
+    assert usage == {
+        "provider_cancel_requested": True,
+        "provider_cancel_confirmed": False,
+        "provider_cancel_attempts": 1,
+        "external_execution_may_continue": True,
+    }

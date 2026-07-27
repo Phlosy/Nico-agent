@@ -40,6 +40,7 @@ from nico_agent.plan_api import router as plan_router
 from nico_agent.projects.api import router as project_collaboration_router
 from nico_agent.provider_onboarding.api import router as provider_onboarding_router
 from nico_agent.tool_approvals.api import router as tool_approval_router
+from nico_agent.tool_providers.api import router as tool_provider_router
 from nico_agent.user_inputs.api import router as user_input_router
 from nico_agent.web_onboarding.api import router as web_onboarding_router
 
@@ -178,7 +179,11 @@ def create_app(
     @app.exception_handler(DomainError)
     async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
         status_code = 400
-        if exc.code == "RESOURCE_NOT_FOUND":
+        if exc.code in {
+            "RESOURCE_NOT_FOUND",
+            "TOOL_PROVIDER_NOT_FOUND",
+            "TOOL_BINDING_NOT_FOUND",
+        }:
             status_code = 404
         elif exc.code == "ARTIFACT_TOO_LARGE":
             status_code = 413
@@ -200,6 +205,9 @@ def create_app(
             "AGENT_APPROVAL_MODE_LOCKED",
             "CONVERSATION_APPROVAL_MODE_LOCKED",
             "CONVERSATION_QUEUE_FULL",
+            "TOOL_BINDING_IMMUTABLE",
+            "TOOL_BINDING_BUDGET_EXCEEDED",
+            "TOOL_BINDING_VERSION_MISMATCH",
         }:
             status_code = 409
         elif isinstance(exc, AccessDenied):
@@ -265,6 +273,7 @@ def create_app(
     app.include_router(plan_router)
     app.include_router(provider_onboarding_router)
     app.include_router(tool_approval_router)
+    app.include_router(tool_provider_router)
     app.include_router(user_input_router)
     app.include_router(web_onboarding_router)
 

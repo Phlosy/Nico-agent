@@ -43,6 +43,10 @@ task_app = typer.Typer(help="查询 Task。", no_args_is_help=True)
 run_app = typer.Typer(help="查询 Run、Runtime 和持久化事件。", no_args_is_help=True)
 conversation_app = typer.Typer(help="查询持久化 Conversation。", no_args_is_help=True)
 provider_app = typer.Typer(help="交互式配置和验证 AI Provider。", no_args_is_help=True)
+tool_provider_app = typer.Typer(
+    help="注册并管理 Run-scoped external Tool Provider。",
+    no_args_is_help=True,
+)
 web_app = typer.Typer(help="配置、测试和关闭 Web 搜索能力。", no_args_is_help=True)
 
 app.add_typer(config_app, name="config")
@@ -52,6 +56,7 @@ app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(conversation_app, name="conversation")
 app.add_typer(provider_app, name="provider")
+app.add_typer(tool_provider_app, name="tool-provider")
 app.add_typer(web_app, name="web")
 
 
@@ -1772,6 +1777,70 @@ def agent_versions(ctx: typer.Context, agent_id: UUID) -> None:
 def task_get(ctx: typer.Context, task_id: UUID) -> None:
     state = _state(ctx)
     state.output().emit(_api(state, lambda client: client.get_task(str(task_id))), title="Task")
+
+
+@tool_provider_app.command("register")
+def tool_provider_register(
+    ctx: typer.Context,
+    name: str,
+    endpoint: str = typer.Option(..., "--endpoint"),
+    credential_ref: str = typer.Option(..., "--credential-ref"),
+    project_id: UUID | None = typer.Option(None, "--project"),
+    expires_at: str | None = typer.Option(None, "--expires-at"),
+) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: client.register_external_tool_provider(
+            name=name,
+            endpoint_ref=endpoint,
+            credential_ref=credential_ref,
+            project_id=str(project_id) if project_id is not None else None,
+            expires_at=expires_at,
+        ),
+    )
+    state.output().emit(value, title="External Tool Provider")
+
+
+@tool_provider_app.command("get")
+def tool_provider_get(ctx: typer.Context, provider_id: UUID) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: client.get_external_tool_provider(str(provider_id)),
+    )
+    state.output().emit(value, title="External Tool Provider")
+
+
+def _transition_tool_provider(
+    ctx: typer.Context,
+    provider_id: UUID,
+    action: str,
+) -> None:
+    state = _state(ctx)
+    value = _api(
+        state,
+        lambda client: client.transition_external_tool_provider(
+            str(provider_id),
+            action=action,
+        ),
+    )
+    state.output().emit(value, title="External Tool Provider")
+
+
+@tool_provider_app.command("verify")
+def tool_provider_verify(ctx: typer.Context, provider_id: UUID) -> None:
+    _transition_tool_provider(ctx, provider_id, "verify")
+
+
+@tool_provider_app.command("disable")
+def tool_provider_disable(ctx: typer.Context, provider_id: UUID) -> None:
+    _transition_tool_provider(ctx, provider_id, "disable")
+
+
+@tool_provider_app.command("revoke")
+def tool_provider_revoke(ctx: typer.Context, provider_id: UUID) -> None:
+    _transition_tool_provider(ctx, provider_id, "revoke")
 
 
 @run_app.command("get")

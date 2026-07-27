@@ -10,7 +10,7 @@ import socket
 import ssl
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -138,7 +138,9 @@ class PinnedRequest:
     connect_timeout: float
     read_timeout: float
     max_response_bytes: int
-    headers: tuple[tuple[str, str], ...] = ()
+    max_request_bytes: int = 1_048_576
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    body: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +173,17 @@ class SocketHttpTransport:
 
     @staticmethod
     def _request(request: PinnedRequest) -> RawHttpResponse:
+        if request.method not in {"GET", "HEAD", "POST"}:
+            raise SafeHttpError("METHOD_DENIED", "HTTP method is not allowed")
+        if not 1 <= request.max_request_bytes <= 10_485_760:
+            raise ValueError("max_request_bytes is outside the platform range")
+        if request.body is not None and not isinstance(request.body, bytes):
+            raise TypeError("HTTP request body must be bytes")
+        if request.method != "POST" and request.body is not None:
+            raise SafeHttpError("BODY_DENIED", "HTTP method does not accept a request body")
+        body = request.body if request.body is not None else b""
+        if len(body) > request.max_request_bytes:
+            raise SafeHttpError("REQUEST_TOO_LARGE", "HTTP request exceeded its byte limit")
         try:
             raw_socket = socket.create_connection(
                 (request.ip_address, request.port), timeout=request.connect_timeout
@@ -199,11 +212,15 @@ class SocketHttpTransport:
                 if "user-agent" not in supplied:
                     connection.putheader("User-Agent", "Nico-Agent-Safe-HTTP/1.0")
                 connection.putheader("Connection", "close")
+                if request.method == "POST":
+                    connection.putheader("Content-Length", str(len(body)))
+                    if "content-type" not in supplied:
+                        connection.putheader("Content-Type", "application/octet-stream")
                 for name, value in request.headers:
                     if name.lower() in {"host", "accept-encoding", "connection", "content-length"}:
                         continue
                     connection.putheader(name, value)
-                connection.endheaders()
+                connection.endheaders(body if request.method == "POST" else None)
                 response = connection.getresponse()
                 body = (
                     b""
@@ -217,6 +234,8 @@ class SocketHttpTransport:
                 )
             finally:
                 raw_socket.close()
+        except TimeoutError as exc:
+            raise SafeHttpError("TIMEOUT", "HTTP request timed out") from exc
         except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
             raise SafeHttpError("NETWORK_ERROR", "HTTP request failed") from exc
 
@@ -247,8 +266,12 @@ class SafeHttpClient:
         policy: SafeHttpPolicy,
         headers: Mapping[str, str] | None = None,
         params: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        max_request_bytes: int = 1_048_576,
         max_response_bytes: int = 1_048_576,
         max_redirects: int = 0,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
     ) -> RawHttpResponse:
         result = await self.request_with_metadata(
             method,
@@ -256,8 +279,12 @@ class SafeHttpClient:
             policy=policy,
             headers=headers,
             params=params,
+            body=body,
+            max_request_bytes=max_request_bytes,
             max_response_bytes=max_response_bytes,
             max_redirects=max_redirects,
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
         )
         return result.response
 
@@ -269,16 +296,35 @@ class SafeHttpClient:
         policy: SafeHttpPolicy,
         headers: Mapping[str, str] | None = None,
         params: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        max_request_bytes: int = 1_048_576,
         max_response_bytes: int = 1_048_576,
         max_redirects: int = 0,
         authorize: RequestAuthorizer | None = None,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
     ) -> SafeHttpResult:
-        if method not in {"GET", "HEAD"}:
+        if method not in {"GET", "HEAD", "POST"}:
             raise SafeHttpError("METHOD_DENIED", "HTTP method is not allowed")
+        if not 1 <= max_request_bytes <= 10_485_760:
+            raise ValueError("max_request_bytes is outside the platform range")
+        if body is not None and not isinstance(body, bytes):
+            raise TypeError("HTTP request body must be bytes")
+        if method != "POST" and body is not None:
+            raise SafeHttpError("BODY_DENIED", "HTTP method does not accept a request body")
+        request_body = body if method == "POST" else None
+        if request_body is not None and len(request_body) > max_request_bytes:
+            raise SafeHttpError("REQUEST_TOO_LARGE", "HTTP request exceeded its byte limit")
         if not 1 <= max_response_bytes <= 10_485_760:
             raise ValueError("max_response_bytes is outside the platform range")
         if not 0 <= max_redirects <= 10:
             raise ValueError("max_redirects is outside the platform range")
+        effective_connect_timeout = (
+            self.connect_timeout if connect_timeout is None else connect_timeout
+        )
+        effective_read_timeout = self.read_timeout if read_timeout is None else read_timeout
+        if effective_connect_timeout <= 0 or effective_read_timeout <= 0:
+            raise ValueError("HTTP timeouts must be positive")
         current_url = _with_query_params(url, params)
         redirect_from: str | None = None
         redirects = 0
@@ -314,10 +360,12 @@ class SafeHttpClient:
                     port=target.port,
                     target=target.path_and_query,
                     ip_address=target.addresses[0],
-                    connect_timeout=self.connect_timeout,
-                    read_timeout=self.read_timeout,
+                    connect_timeout=effective_connect_timeout,
+                    read_timeout=effective_read_timeout,
                     max_response_bytes=max_response_bytes,
+                    max_request_bytes=max_request_bytes,
                     headers=tuple((headers or {}).items()),
+                    body=request_body,
                 )
             )
             if len(response.body) > max_response_bytes:

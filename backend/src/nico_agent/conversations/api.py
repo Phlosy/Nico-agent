@@ -41,6 +41,7 @@ def get_service(request: Request) -> ConversationService:
     return ConversationService(
         database,
         approval_locked_risks=frozenset(request.app.state.settings.tool_approval_locked_risks),
+        settings=request.app.state.settings,
     )
 
 

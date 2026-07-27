@@ -69,6 +69,7 @@ def get_service(request: Request) -> ControlPlaneService:
     return ControlPlaneService(
         database,
         approval_locked_risks=frozenset(request.app.state.settings.tool_approval_locked_risks),
+        settings=request.app.state.settings,
     )
 
 

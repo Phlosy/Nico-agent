@@ -20,6 +20,8 @@ from nico_agent.domain.models import (
     Run,
     RunStep,
     RuntimeSession,
+    RunToolBinding,
+    Task,
     ToolApprovalRequest,
     ToolCall,
     ToolDefinition,
@@ -28,13 +30,22 @@ from nico_agent.domain.states import (
     ConversationApprovalMode,
     RunStatus,
     RunStepStatus,
+    RunToolBindingStatus,
     ToolApprovalStatus,
     ToolCallStatus,
+    ToolProviderCancelStatus,
     conversation_auto_approved_risks,
 )
 from nico_agent.runtime.contracts import RuntimeLoopState
 from nico_agent.runtime.lifecycle import RunLifecycleAuthority
 from nico_agent.tool_approvals.service import ToolApprovalService
+from nico_agent.tool_providers.contracts import ToolBindingApprovalMode, canonical_digest
+from nico_agent.tool_providers.errors import (
+    ToolProviderError,
+    ToolProviderErrorCode,
+    provider_error,
+)
+from nico_agent.tool_providers.executor import ExternalToolExecutor, ExternalToolResolver
 from nico_agent.tools.contracts import (
     ToolDefinitionSpec,
     ToolExecutionContext,
@@ -132,6 +143,7 @@ class ToolGateway:
         secret_resolver: SecretResolver | None = None,
         approval_required_risks: frozenset[str] = frozenset({"medium", "high"}),
         approval_ttl_seconds: int = 900,
+        external_resolver: ExternalToolResolver | None = None,
     ) -> None:
         if not approval_required_risks <= {"medium", "high"}:
             raise ValueError("approval_required_risks may contain only medium and high")
@@ -142,6 +154,7 @@ class ToolGateway:
         self.secret_resolver = secret_resolver or EnvironmentSecretResolver()
         self.approval_required_risks = approval_required_risks
         self.approval_ttl_seconds = approval_ttl_seconds
+        self.external_resolver = external_resolver
 
     async def list_authorized(
         self,
@@ -153,6 +166,14 @@ class ToolGateway:
 
         context = TenantContext(claim.tenant_id, f"worker:{worker_id}", uuid4())
         authorized: list[ToolDefinitionSpec] = []
+        external_executors = (
+            await self.external_resolver.list_for_run(claim, worker_id=worker_id)
+            if self.external_resolver is not None
+            else ()
+        )
+        externally_bound = {
+            (executor.spec.name, executor.spec.version) for executor in external_executors
+        }
         async with self.database.tenant_transaction(context) as session:
             run = await self._owned_run(session, claim, worker_id)
             runtime_session = await session.scalar(
@@ -163,7 +184,35 @@ class ToolGateway:
             )
             if runtime_session is None:
                 return ()
+            for executor in external_executors:
+                try:
+                    authorization = self._authorize_snapshot(
+                        runtime_session.tool_policy_snapshot,
+                        executor,
+                    )
+                    executor.client.secret_resolver.resolve(
+                        "tool_provider",
+                        executor.endpoint.credential_ref,
+                    )
+                    await self._authorization(
+                        session,
+                        claim,
+                        executor.spec,
+                        await self._definition(session, context, executor, run.id),
+                        executor,
+                    )
+                    if authorization.secret_refs:
+                        raise ToolAccessDenied(
+                            executor.spec.name,
+                            executor.spec.version,
+                            "external Tool Providers cannot receive Nico Tool Secrets",
+                        )
+                except (ToolError, ToolProviderError):
+                    continue
+                authorized.append(executor.spec)
             for spec in self.registry.definitions():
+                if (spec.name, spec.version) in externally_bound:
+                    continue
                 executor = self.registry.get(spec.name, spec.version)
                 try:
                     self._authorize_snapshot(runtime_session.tool_policy_snapshot, executor)
@@ -171,7 +220,13 @@ class ToolGateway:
                     continue
                 definition = await self._definition(session, context, executor, run.id)
                 try:
-                    authorization = await self._authorization(session, claim, spec, definition)
+                    authorization = await self._authorization(
+                        session,
+                        claim,
+                        spec,
+                        definition,
+                        executor,
+                    )
                     resolve_secrets(self.secret_resolver, authorization.secret_refs)
                 except ToolError:
                     continue
@@ -185,7 +240,18 @@ class ToolGateway:
         worker_id: str,
         request: ToolGatewayRequest,
     ) -> ToolGatewayResult:
-        executor = self.registry.get(request.tool_name, request.tool_version)
+        executor = (
+            await self.external_resolver.resolve(
+                claim,
+                worker_id=worker_id,
+                tool_name=request.tool_name,
+                tool_version=request.tool_version,
+            )
+            if self.external_resolver is not None
+            else None
+        )
+        if executor is None:
+            executor = self.registry.get(request.tool_name, request.tool_version)
         try:
             serialized_arguments = canonical_json(request.arguments)
         except (TypeError, ValueError) as exc:
@@ -227,33 +293,81 @@ class ToolGateway:
         final_output: dict[str, Any] | None = None
         final_error: dict[str, Any] | None = None
         final_usage: dict[str, Any] = {}
+        max_attempts = int(
+            getattr(
+                prepared.executor,
+                "effective_max_attempts",
+                prepared.executor.spec.retry_policy.max_attempts,
+            )
+        )
+        timeout_seconds = float(
+            getattr(
+                prepared.executor,
+                "effective_timeout_seconds",
+                prepared.executor.spec.timeout_seconds,
+            )
+        )
 
         try:
             for attempt_number in range(
                 len(attempts) + 1,
-                prepared.executor.spec.retry_policy.max_attempts + 1,
+                max_attempts + 1,
             ):
                 started = time.monotonic()
                 retry_after_seconds = prepared.executor.spec.retry_policy.backoff_seconds
+                execution_context = prepared.context.model_copy(update={"attempt": attempt_number})
                 try:
-                    async with asyncio.timeout(prepared.executor.spec.timeout_seconds):
+                    remaining_seconds = timeout_seconds
+                    if execution_context.deadline is not None:
+                        remaining_seconds = min(
+                            remaining_seconds,
+                            (execution_context.deadline - datetime.now(UTC)).total_seconds(),
+                        )
+                    if remaining_seconds <= 0:
+                        raise TimeoutError
+                    async with asyncio.timeout(remaining_seconds):
                         execution = await prepared.executor.execute(
-                            prepared.context,
+                            execution_context,
                             request.arguments,
                             secrets,
                         )
                     prepared.executor.spec.validate_output(execution.output)
                     final_output = redact_value(execution.output, secrets)
-                    final_usage = redact_value(execution.usage, secrets)
+                    final_usage = {
+                        **final_usage,
+                        **redact_value(execution.usage, secrets),
+                    }
                     attempts.append(self._attempt(attempt_number, started, status="succeeded"))
                     final_status = ToolCallStatus.SUCCEEDED
                     break
                 except TimeoutError:
-                    code = "TOOL_TIMEOUT"
+                    code = (
+                        "TOOL_PROVIDER_TIMEOUT"
+                        if isinstance(prepared.executor, ExternalToolExecutor)
+                        else "TOOL_TIMEOUT"
+                    )
+                    cancel_confirmed: bool | None = None
+                    if isinstance(prepared.executor, ExternalToolExecutor):
+                        cancel_confirmed = await self._cancel_external(
+                            prepared.executor,
+                            execution_context,
+                            reason="tool_timed_out",
+                        )
+                        final_usage = self._cancellation_usage(
+                            final_usage,
+                            confirmed=cancel_confirmed,
+                        )
                     attempts.append(
                         self._attempt(attempt_number, started, status="timed_out", code=code)
                     )
-                    if not self._should_retry(prepared.executor.spec, code, attempt_number):
+                    if cancel_confirmed is False or not self._should_retry(
+                        prepared.executor.spec,
+                        code,
+                        attempt_number,
+                        retryable=isinstance(prepared.executor, ExternalToolExecutor),
+                        max_attempts=max_attempts,
+                        allow_undeclared=isinstance(prepared.executor, ExternalToolExecutor),
+                    ):
                         final_status = ToolCallStatus.TIMED_OUT
                         final_error = {
                             "code": code,
@@ -285,7 +399,7 @@ class ToolGateway:
                             retry_after_seconds,
                             min(
                                 exc.retry_after_seconds,
-                                prepared.executor.spec.timeout_seconds,
+                                timeout_seconds,
                             ),
                         )
                     if not await self._checkpoint_attempts(
@@ -295,6 +409,46 @@ class ToolGateway:
                         attempts=attempts,
                     ):
                         raise ToolLeaseLost(str(claim.run_id)) from None
+                except ToolProviderError as exc:
+                    cancel_confirmed = None
+                    if (
+                        isinstance(prepared.executor, ExternalToolExecutor)
+                        and exc.code == ToolProviderErrorCode.TIMEOUT.value
+                    ):
+                        cancel_confirmed = await self._cancel_external(
+                            prepared.executor,
+                            execution_context,
+                            reason="tool_timed_out",
+                        )
+                        final_usage = self._cancellation_usage(
+                            final_usage,
+                            confirmed=cancel_confirmed,
+                        )
+                    attempts.append(
+                        self._attempt(attempt_number, started, status="failed", code=exc.code)
+                    )
+                    if cancel_confirmed is not False and self._should_retry(
+                        prepared.executor.spec,
+                        exc.code,
+                        attempt_number,
+                        retryable=exc.retryable,
+                        max_attempts=max_attempts,
+                        allow_undeclared=True,
+                    ):
+                        if not await self._checkpoint_attempts(
+                            claim,
+                            worker_id=worker_id,
+                            prepared=prepared,
+                            attempts=attempts,
+                        ):
+                            raise ToolLeaseLost(str(claim.run_id)) from None
+                    else:
+                        final_error = {
+                            "code": exc.code,
+                            "message": str(redact_value(exc.message, secrets))[:1000],
+                            "details": exc.context.model_dump(mode="json"),
+                        }
+                        break
                 except ToolError as exc:
                     attempts.append(
                         self._attempt(attempt_number, started, status="failed", code=exc.code)
@@ -319,6 +473,18 @@ class ToolGateway:
                     }
                     break
 
+                if (
+                    isinstance(prepared.executor, ExternalToolExecutor)
+                    and prepared.context.deadline is not None
+                    and (prepared.context.deadline - datetime.now(UTC)).total_seconds()
+                    <= retry_after_seconds
+                ):
+                    final_status = ToolCallStatus.TIMED_OUT
+                    final_error = {
+                        "code": ToolProviderErrorCode.TIMEOUT.value,
+                        "message": "Tool Binding duration budget cannot accommodate a retry",
+                    }
+                    break
                 if retry_after_seconds:
                     await asyncio.sleep(retry_after_seconds)
             if final_status is ToolCallStatus.FAILED and final_error is None:
@@ -327,6 +493,16 @@ class ToolGateway:
                     "message": "the tool retry budget was exhausted",
                 }
         except asyncio.CancelledError:
+            if isinstance(prepared.executor, ExternalToolExecutor):
+                confirmed = await self._cancel_external(
+                    prepared.executor,
+                    prepared.context,
+                    reason="run_cancelled",
+                )
+                final_usage = self._cancellation_usage(
+                    final_usage,
+                    confirmed=confirmed,
+                )
             attempts.append(
                 {
                     "number": len(attempts) + 1,
@@ -343,7 +519,7 @@ class ToolGateway:
                 attempts=attempts,
                 output=None,
                 error={"code": "TOOL_CANCELLED", "message": "tool execution was cancelled"},
-                usage={},
+                usage=final_usage,
             )
             raise
 
@@ -405,6 +581,46 @@ class ToolGateway:
             if request.checkpoint is not None:
                 await self._persist_pre_action_checkpoint(session, run, request.checkpoint)
             definition = await self._definition(session, context, executor, run.id)
+            task = await session.scalar(
+                select(Task).where(
+                    Task.tenant_id == claim.tenant_id,
+                    Task.id == run.task_id,
+                )
+            )
+            if task is None:
+                raise ToolLeaseLost(str(run.id))
+            external_binding = (
+                await session.scalar(
+                    select(RunToolBinding)
+                    .where(
+                        RunToolBinding.tenant_id == claim.tenant_id,
+                        RunToolBinding.run_id == run.id,
+                        RunToolBinding.id == executor.provider_binding_id,
+                        RunToolBinding.provider_id == executor.provider_id,
+                        RunToolBinding.tool_definition_id == definition.id,
+                    )
+                    .with_for_update()
+                )
+                if isinstance(executor, ExternalToolExecutor)
+                else None
+            )
+            if isinstance(executor, ExternalToolExecutor) and external_binding is None:
+                raise ToolAccessDenied(
+                    executor.spec.name,
+                    executor.spec.version,
+                    "frozen external Tool Binding is unavailable",
+                )
+            approval_mode = (
+                executor.snapshot.policy.approval
+                if isinstance(executor, ExternalToolExecutor)
+                else None
+            )
+            approval_risk_level = (
+                "medium"
+                if approval_mode is ToolBindingApprovalMode.ALWAYS
+                and executor.spec.risk.value == "low"
+                else executor.spec.risk.value
+            )
             existing = await session.scalar(
                 select(ToolCall)
                 .where(
@@ -453,9 +669,15 @@ class ToolGateway:
                         risk_level=approval.risk_level,
                     )
                 if (
-                    executor.spec.risk.value in self.approval_required_risks
+                    (
+                        executor.spec.risk.value in self.approval_required_risks
+                        or approval_mode is ToolBindingApprovalMode.ALWAYS
+                    )
                     and approval is None
-                    and not await self._run_scope_grant(session, claim, definition.id)
+                    and (
+                        approval_mode is ToolBindingApprovalMode.ALWAYS
+                        or not await self._run_scope_grant(session, claim, definition.id)
+                    )
                 ):
                     raise ToolAccessDenied(
                         executor.spec.name,
@@ -482,8 +704,51 @@ class ToolGateway:
                 step.status = RunStepStatus.RUNNING.value
                 step.ended_at = None
                 step.revision += 1
-                authorization = await self._authorization(session, claim, executor.spec, definition)
+                authorization = await self._authorization(
+                    session,
+                    claim,
+                    executor.spec,
+                    definition,
+                    executor,
+                )
                 secrets = resolve_secrets(self.secret_resolver, authorization.secret_refs)
+                if external_binding is not None and existing.provider_status in {None, "pending"}:
+                    self._activate_external_binding(
+                        external_binding,
+                        existing,
+                        run=run,
+                        request=request,
+                        arguments_hash=arguments_hash,
+                        executor=executor,
+                    )
+                    self._record(
+                        session,
+                        context,
+                        event_type="tool.provider.requested",
+                        call=existing,
+                        action="tool.provider.request",
+                        payload=self._provider_event_payload(
+                            existing,
+                            external_binding,
+                            task_id=task.id,
+                            attempt=len(existing.attempts) + 1,
+                            status="requested",
+                        ),
+                    )
+                    self._record(
+                        session,
+                        context,
+                        event_type="tool.provider.started",
+                        call=existing,
+                        action="tool.provider.start",
+                        payload=self._provider_event_payload(
+                            existing,
+                            external_binding,
+                            task_id=task.id,
+                            attempt=len(existing.attempts) + 1,
+                            status="running",
+                        ),
+                    )
                 if RunStatus(run.status) is not RunStatus.WAITING_FOR_TOOL:
                     await RunLifecycleAuthority.transition(
                         session,
@@ -505,6 +770,8 @@ class ToolGateway:
                     request,
                     context,
                     secrets,
+                    run,
+                    task,
                 )
 
             rejected: ToolError | None = None
@@ -514,17 +781,32 @@ class ToolGateway:
             policy_auto_approval: dict[str, Any] | None = None
             run_scope_grant: ToolApprovalRequest | None = None
             try:
-                authorization = await self._authorization(session, claim, executor.spec, definition)
+                authorization = await self._authorization(
+                    session,
+                    claim,
+                    executor.spec,
+                    definition,
+                    executor,
+                )
                 executor.spec.validate_input(request.arguments)
-                if executor.spec.risk.value in self.approval_required_risks:
+                if (
+                    executor.spec.risk.value in self.approval_required_risks
+                    or approval_mode is ToolBindingApprovalMode.ALWAYS
+                ):
                     if request.checkpoint is None:
                         raise ToolApprovalCheckpointRequired(
                             executor.spec.name, executor.spec.version
                         )
-                    run_scope_grant = await self._run_scope_grant(session, claim, definition.id)
+                    run_scope_grant = (
+                        None
+                        if approval_mode is ToolBindingApprovalMode.ALWAYS
+                        else await self._run_scope_grant(session, claim, definition.id)
+                    )
                     if run_scope_grant is None:
                         policy = self._tool_approval_policy(runtime_projection)
-                        if self._policy_auto_approves(policy, executor.spec.risk.value):
+                        if approval_mode is ToolBindingApprovalMode.ALWAYS:
+                            approval_required = True
+                        elif self._policy_auto_approves(policy, approval_risk_level):
                             policy_auto_approval = policy
                         else:
                             approval_required = True
@@ -638,11 +920,23 @@ class ToolGateway:
             )
             session.add(step)
             await session.flush()
+            call_id = uuid4()
+            provider_request_id = f"provider-{call_id}" if external_binding is not None else None
+            provider_deadline = (
+                self._external_deadline(run, external_binding, executor, now)
+                if isinstance(executor, ExternalToolExecutor)
+                else None
+            )
             call = ToolCall(
+                id=call_id,
                 tenant_id=claim.tenant_id,
                 run_id=claim.run_id,
                 run_step_id=step.id,
                 tool_definition_id=definition.id,
+                run_tool_binding_id=(external_binding.id if external_binding is not None else None),
+                provider_id=(
+                    external_binding.provider_id if external_binding is not None else None
+                ),
                 tool_name=executor.spec.name,
                 tool_version=executor.spec.version,
                 idempotency_key=request.idempotency_key,
@@ -651,6 +945,25 @@ class ToolGateway:
                 execution_owner=worker_id,
                 execution_lease_token=claim.lease_token,
                 arguments=redact_value(request.arguments),
+                provider_request_id=provider_request_id,
+                provider_request_digest=(
+                    canonical_digest(
+                        {
+                            "binding_digest": external_binding.binding_digest,
+                            "idempotency_key": request.idempotency_key,
+                            "arguments_hash": arguments_hash,
+                            "run_id": str(run.id),
+                            "tool_call_id": str(call_id),
+                        }
+                    )
+                    if external_binding is not None
+                    else None
+                ),
+                provider_deadline_at=provider_deadline,
+                provider_trace_id=(
+                    str(request.correlation_id) if external_binding is not None else None
+                ),
+                provider_status=("pending" if external_binding is not None else None),
                 status=(
                     ToolCallStatus.FAILED.value
                     if rejected is not None
@@ -669,6 +982,15 @@ class ToolGateway:
                 ended_at=now if rejected is not None else None,
             )
             session.add(call)
+            if external_binding is not None and rejected is None and not approval_required:
+                self._activate_external_binding(
+                    external_binding,
+                    call,
+                    run=run,
+                    request=request,
+                    arguments_hash=arguments_hash,
+                    executor=executor,
+                )
             await session.flush()
             self._record(
                 session,
@@ -689,8 +1011,42 @@ class ToolGateway:
                     "status": call.status,
                     "code": rejected.code if rejected is not None else None,
                     "run_step_id": str(step.id),
+                    "provider_id": str(call.provider_id) if call.provider_id else None,
+                    "binding_digest": (
+                        external_binding.binding_digest if external_binding is not None else None
+                    ),
+                    "request_id": call.provider_request_id,
                 },
             )
+            if external_binding is not None and rejected is None and not approval_required:
+                self._record(
+                    session,
+                    context,
+                    event_type="tool.provider.requested",
+                    call=call,
+                    action="tool.provider.request",
+                    payload=self._provider_event_payload(
+                        call,
+                        external_binding,
+                        task_id=task.id,
+                        attempt=1,
+                        status="requested",
+                    ),
+                )
+                self._record(
+                    session,
+                    context,
+                    event_type="tool.provider.started",
+                    call=call,
+                    action="tool.provider.start",
+                    payload=self._provider_event_payload(
+                        call,
+                        external_binding,
+                        task_id=task.id,
+                        attempt=1,
+                        status="running",
+                    ),
+                )
             if rejected is not None:
                 return self._result(call)
             assert authorization is not None
@@ -701,7 +1057,7 @@ class ToolGateway:
                     run_step_id=step.id,
                     tool_call_id=call.id,
                     tool_definition_id=definition.id,
-                    risk_level=executor.spec.risk.value,
+                    risk_level=approval_risk_level,
                     requester=request.caller,
                     arguments_redacted=redact_value(request.arguments),
                     arguments_hash=arguments_hash,
@@ -742,7 +1098,7 @@ class ToolGateway:
                     session,
                     context,
                     call=call,
-                    risk_level=executor.spec.risk.value,
+                    risk_level=approval_risk_level,
                     requester=request.caller,
                     arguments_redacted=redact_value(request.arguments),
                     arguments_hash=arguments_hash,
@@ -764,7 +1120,16 @@ class ToolGateway:
                 event_type="RunWaitingForTool",
                 action="tool.lifecycle.wait_tool",
             )
-            return self._prepared(call, executor, authorization, request, context, secrets)
+            return self._prepared(
+                call,
+                executor,
+                authorization,
+                request,
+                context,
+                secrets,
+                run,
+                task,
+            )
 
     @staticmethod
     def _tool_approval_policy(runtime_session: RuntimeSession | None) -> dict[str, Any]:
@@ -988,12 +1353,65 @@ class ToolGateway:
             if step is None:
                 return False
             now = datetime.now(UTC)
+            binding = (
+                await session.scalar(
+                    select(RunToolBinding)
+                    .where(
+                        RunToolBinding.tenant_id == claim.tenant_id,
+                        RunToolBinding.id == call.run_tool_binding_id,
+                    )
+                    .with_for_update()
+                )
+                if call.run_tool_binding_id is not None
+                else None
+            )
             call.status = status.value
             call.attempts = attempts
             call.result = output
             call.error = error
             call.usage = usage
             call.ended_at = now
+            if binding is not None:
+                duration_ms = round(
+                    sum(
+                        float(item.get("duration_ms", 0))
+                        for item in attempts
+                        if isinstance(item, dict)
+                    )
+                )
+                remaining_duration_ms = max(
+                    binding.max_total_duration_ms - binding.total_duration_ms,
+                    0,
+                )
+                binding.total_duration_ms += min(
+                    max(duration_ms, 0),
+                    remaining_duration_ms,
+                )
+                binding.active_provider_request_id = None
+                cancel_requested = usage.get("provider_cancel_requested") is True
+                cancel_confirmed = usage.get("provider_cancel_confirmed") is True
+                if cancel_requested:
+                    binding.cancel_status = (
+                        ToolProviderCancelStatus.CANCELLED.value
+                        if cancel_confirmed
+                        else ToolProviderCancelStatus.UNKNOWN.value
+                    )
+                binding.revision += 1
+                call.provider_status = (
+                    ToolProviderCancelStatus.UNKNOWN.value
+                    if cancel_requested and not cancel_confirmed
+                    else (
+                        ToolCallStatus.CANCELLED.value
+                        if cancel_requested and status is ToolCallStatus.CANCELLED
+                        else status.value
+                    )
+                )
+                execution_id = usage.get("provider_execution_id")
+                if isinstance(execution_id, str):
+                    call.provider_execution_id = execution_id
+                call.external_execution_may_continue = bool(
+                    usage.get("external_execution_may_continue", False)
+                )
             call.revision += 1
             step.status = {
                 ToolCallStatus.SUCCEEDED: RunStepStatus.COMPLETED,
@@ -1038,8 +1456,92 @@ class ToolGateway:
                     "code": error.get("code") if error else None,
                 },
             )
+            if binding is not None:
+                error_code = error.get("code") if error else None
+                cancel_requested = usage.get("provider_cancel_requested") is True
+                cancel_confirmed = usage.get("provider_cancel_confirmed") is True
+                if cancel_requested:
+                    self._record(
+                        session,
+                        context,
+                        event_type="tool.provider.cancel.requested",
+                        call=call,
+                        action="tool.provider.cancel.request",
+                        payload=self._provider_event_payload(
+                            call,
+                            binding,
+                            task_id=run.task_id,
+                            attempt=len(attempts),
+                            status="cancel_requested",
+                        ),
+                    )
+                    cancellation_event = (
+                        "tool.provider.cancelled" if cancel_confirmed else "tool.provider.failed"
+                    )
+                    self._record(
+                        session,
+                        context,
+                        event_type=cancellation_event,
+                        call=call,
+                        action=(
+                            "tool.provider.cancel"
+                            if cancel_confirmed
+                            else "tool.provider.cancel.failed"
+                        ),
+                        payload=self._provider_event_payload(
+                            call,
+                            binding,
+                            task_id=run.task_id,
+                            attempt=len(attempts),
+                            status="cancelled" if cancel_confirmed else "unknown",
+                            duration_ms=duration_ms,
+                            error_code=(
+                                None
+                                if cancel_confirmed
+                                else ToolProviderErrorCode.CANCEL_ERROR.value
+                            ),
+                        ),
+                    )
+                if not cancel_requested or (
+                    cancel_confirmed and status is not ToolCallStatus.CANCELLED
+                ):
+                    provider_event = self._provider_terminal_event(status, error_code)
+                    self._record(
+                        session,
+                        context,
+                        event_type=provider_event,
+                        call=call,
+                        action=provider_event,
+                        payload=self._provider_event_payload(
+                            call,
+                            binding,
+                            task_id=run.task_id,
+                            attempt=len(attempts),
+                            status=status.value,
+                            duration_ms=duration_ms,
+                            error_code=error_code,
+                        ),
+                    )
             await session.flush()
             return True
+
+    @staticmethod
+    def _provider_terminal_event(
+        status: ToolCallStatus,
+        error_code: str | None,
+    ) -> str:
+        if status is ToolCallStatus.SUCCEEDED:
+            return "tool.provider.completed"
+        if status is ToolCallStatus.CANCELLED:
+            return "tool.provider.cancelled"
+        if error_code in {
+            ToolProviderErrorCode.PROTOCOL_ERROR.value,
+            ToolProviderErrorCode.INVALID_RESPONSE.value,
+            ToolProviderErrorCode.SCHEMA_MISMATCH.value,
+            "TOOL_OUTPUT_INVALID",
+        }:
+            return "tool.provider.protocol_error"
+        return "tool.provider.failed"
 
     async def _definition(
         self,
@@ -1093,10 +1595,10 @@ class ToolGateway:
         claim: RunClaim,
         spec: ToolDefinitionSpec,
         definition: ToolDefinition,
+        executor: ToolExecutor,
     ) -> ToolAuthorization:
         if definition.status != "enabled":
             raise ToolDisabled(spec.name, spec.version)
-        executor = self.registry.get(spec.name, spec.version)
         if (
             definition.content_hash != spec.content_hash
             or definition.implementation_hash != executor.implementation_hash
@@ -1155,6 +1657,8 @@ class ToolGateway:
         request: ToolGatewayRequest,
         tenant_context: TenantContext,
         secrets: dict[str, str],
+        run: Run,
+        task: Task,
     ) -> _PreparedCall:
         return _PreparedCall(
             tool_call_id=call.id,
@@ -1165,6 +1669,17 @@ class ToolGateway:
                 tenant_id=call.tenant_id,
                 run_id=call.run_id,
                 run_step_id=call.run_step_id,
+                tool_call_id=call.id,
+                project_id=task.project_id,
+                task_id=task.id,
+                agent_id=run.agent_id,
+                agent_version_id=run.agent_version_id,
+                provider_id=call.provider_id,
+                run_tool_binding_id=call.run_tool_binding_id,
+                provider_request_id=call.provider_request_id,
+                idempotency_key=call.idempotency_key,
+                deadline=call.provider_deadline_at,
+                trace_id=call.provider_trace_id,
                 actor_id=request.caller,
                 correlation_id=tenant_context.correlation_id,
                 tool_config=authorization.tool_config,
@@ -1172,6 +1687,139 @@ class ToolGateway:
             previous_attempts=tuple(call.attempts),
             secrets=secrets,
         )
+
+    @staticmethod
+    def _activate_external_binding(
+        binding: RunToolBinding,
+        call: ToolCall,
+        *,
+        run: Run,
+        request: ToolGatewayRequest,
+        arguments_hash: str,
+        executor: ToolExecutor,
+    ) -> None:
+        if not isinstance(executor, ExternalToolExecutor):
+            raise ToolAccessDenied(
+                request.tool_name,
+                request.tool_version,
+                "external binding cannot use a local Tool executor",
+            )
+        ToolGateway._ensure_external_binding_capacity(binding, call, run)
+        if call.arguments_hash != arguments_hash:
+            raise ToolIdempotencyConflict(request.idempotency_key)
+        if binding.status == RunToolBindingStatus.FROZEN.value:
+            binding.status = RunToolBindingStatus.ACTIVE.value
+        elif binding.status != RunToolBindingStatus.ACTIVE.value:
+            raise provider_error(
+                ToolProviderErrorCode.EXPIRED,
+                "Run Tool Binding is not active",
+                run_id=run.id,
+                tool_call_id=call.id,
+                provider_id=binding.provider_id,
+            )
+        binding.call_count += 1
+        binding.active_provider_request_id = call.provider_request_id
+        binding.cancel_status = ToolProviderCancelStatus.NONE.value
+        binding.revision += 1
+        call.provider_status = ToolCallStatus.RUNNING.value
+
+    @staticmethod
+    def _ensure_external_binding_capacity(
+        binding: RunToolBinding,
+        call: ToolCall,
+        run: Run,
+    ) -> None:
+        if (
+            binding.call_count >= binding.max_calls
+            or binding.total_duration_ms >= binding.max_total_duration_ms
+        ):
+            raise provider_error(
+                ToolProviderErrorCode.BINDING_BUDGET_EXCEEDED,
+                "Run Tool Binding call or duration budget is exhausted",
+                run_id=run.id,
+                tool_call_id=call.id,
+                provider_id=binding.provider_id,
+                cause="BINDING_BUDGET_EXHAUSTED",
+            )
+        if (
+            binding.active_provider_request_id is not None
+            and binding.active_provider_request_id != call.provider_request_id
+        ):
+            raise provider_error(
+                ToolProviderErrorCode.BINDING_BUDGET_EXCEEDED,
+                "Run Tool Binding already has an in-flight Provider request",
+                run_id=run.id,
+                tool_call_id=call.id,
+                provider_id=binding.provider_id,
+                cause="BINDING_CALL_IN_PROGRESS",
+            )
+
+    @staticmethod
+    def _external_deadline(
+        run: Run,
+        binding: RunToolBinding,
+        executor: ExternalToolExecutor,
+        now: datetime,
+    ) -> datetime:
+        remaining_binding_duration_ms = binding.max_total_duration_ms - binding.total_duration_ms
+        if remaining_binding_duration_ms <= 0:
+            raise provider_error(
+                ToolProviderErrorCode.BINDING_BUDGET_EXCEEDED,
+                "Run Tool Binding duration budget is exhausted",
+                run_id=run.id,
+                provider_id=executor.provider_id,
+                cause="BINDING_DURATION_EXHAUSTED",
+            )
+        candidates = [
+            now + timedelta(seconds=executor.effective_timeout_seconds),
+            now + timedelta(milliseconds=remaining_binding_duration_ms),
+        ]
+        if executor.snapshot.binding_expires_at is not None:
+            candidates.append(executor.snapshot.binding_expires_at)
+        if run.timeout_seconds is not None:
+            candidates.append(run.created_at + timedelta(seconds=run.timeout_seconds))
+        deadline = min(candidates)
+        if deadline <= now:
+            raise provider_error(
+                ToolProviderErrorCode.TIMEOUT,
+                "Run or Tool Binding deadline has elapsed",
+                run_id=run.id,
+                provider_id=executor.provider_id,
+                cause="DEADLINE_ELAPSED",
+            )
+        return deadline
+
+    @staticmethod
+    def _provider_event_payload(
+        call: ToolCall,
+        binding: RunToolBinding,
+        *,
+        task_id: UUID,
+        attempt: int,
+        status: str,
+        duration_ms: int | float | None = None,
+        error_code: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "run_id": str(call.run_id),
+            "task_id": str(task_id),
+            "tool_call_id": str(call.id),
+            "provider_id": str(binding.provider_id),
+            "binding_digest": binding.binding_digest,
+            "request_id": call.provider_request_id,
+            "tool_name": call.tool_name,
+            "tool_version": call.tool_version,
+            "attempt": attempt,
+            "deadline": (
+                call.provider_deadline_at.astimezone(UTC).isoformat()
+                if call.provider_deadline_at is not None
+                else None
+            ),
+            "duration_ms": duration_ms,
+            "result_status": status,
+            "error_code": error_code,
+            "trace_id": call.provider_trace_id,
+        }
 
     @staticmethod
     def _result(call: ToolCall, *, cached: bool = False) -> ToolGatewayResult:
@@ -1187,18 +1835,47 @@ class ToolGateway:
         )
 
     @staticmethod
+    async def _cancel_external(
+        executor: ExternalToolExecutor,
+        context: ToolExecutionContext,
+        *,
+        reason: str,
+    ) -> bool:
+        try:
+            async with asyncio.timeout(executor.snapshot.policy.cancel_timeout_ms / 1000):
+                return await executor.cancel(context, reason=reason)
+        except (TimeoutError, ToolError, ToolProviderError):
+            return False
+
+    @staticmethod
+    def _cancellation_usage(
+        usage: dict[str, Any],
+        *,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        return {
+            **usage,
+            "provider_cancel_requested": True,
+            "provider_cancel_confirmed": confirmed,
+            "provider_cancel_attempts": int(usage.get("provider_cancel_attempts", 0)) + 1,
+            "external_execution_may_continue": not confirmed,
+        }
+
+    @staticmethod
     def _should_retry(
         spec: ToolDefinitionSpec,
         code: str,
         attempt_number: int,
         *,
         retryable: bool | None = None,
+        max_attempts: int | None = None,
+        allow_undeclared: bool = False,
     ) -> bool:
         policy = spec.retry_policy
         return (
             retryable is not False
-            and attempt_number < policy.max_attempts
-            and code in policy.retryable_codes
+            and attempt_number < (max_attempts or policy.max_attempts)
+            and (code in policy.retryable_codes or allow_undeclared)
         )
 
     @staticmethod

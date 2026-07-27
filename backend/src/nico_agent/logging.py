@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -15,6 +16,13 @@ _STANDARD_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {
     "message",
     "asctime",
 }
+_SENSITIVE_LOG_KEY = re.compile(
+    r"(?i)(?:api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|token)"
+)
+_SENSITIVE_LOG_TEXT = re.compile(
+    r"(?i)((?:api[_-]?key|authorization|cookie|credential|password|private[_-]?key|"
+    r"secret|token)\s*[=:]\s*)[^\s,;]+"
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -27,7 +35,7 @@ class JsonFormatter(logging.Formatter):
             .replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": _redact_log_value(record.getMessage()),
         }
         request_id = request_id_context.get()
         if request_id:
@@ -35,10 +43,14 @@ class JsonFormatter(logging.Formatter):
 
         for key, value in record.__dict__.items():
             if key not in _STANDARD_RECORD_FIELDS and not key.startswith("_"):
-                payload[key] = _json_safe(value)
+                payload[key] = (
+                    "[REDACTED]"
+                    if _SENSITIVE_LOG_KEY.search(key)
+                    else _json_safe(_redact_log_value(value))
+                )
 
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            payload["exception"] = _redact_log_value(self.formatException(record.exc_info))
 
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -48,6 +60,21 @@ def _json_safe(value: Any) -> Any:
         json.dumps(value)
     except (TypeError, ValueError):
         return str(value)
+    return value
+
+
+def _redact_log_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[REDACTED]" if _SENSITIVE_LOG_KEY.search(str(key)) else _redact_log_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_redact_log_value(item) for item in value]
+    if isinstance(value, str):
+        return _SENSITIVE_LOG_TEXT.sub(r"\1[REDACTED]", value)
     return value
 
 

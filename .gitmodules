@@ -1,0 +1,3 @@
+[submodule "nico-bench"]
+	path = nico-bench
+	url = ../Nico-bench.git

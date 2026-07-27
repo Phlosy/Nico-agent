@@ -8,14 +8,17 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nico_agent.database import TenantContext
 from nico_agent.domain.errors import DomainConflict
-from nico_agent.domain.models import AuditRecord, Event, Run
+from nico_agent.domain.models import AuditRecord, Event, Run, RunToolBinding
 from nico_agent.domain.states import (
     RUN_TRANSITIONS,
     RunStatus,
+    RunToolBindingStatus,
+    ToolProviderCancelStatus,
     require_revision,
     transition_state,
 )
@@ -240,6 +243,7 @@ class RunLifecycleAuthority:
             run.started_at = run.started_at or now
         if target in _TERMINAL:
             run.ended_at = run.ended_at or now
+            await cls._finalize_tool_bindings(session, context, run, target, now)
 
         should_clear_lease = clear_lease
         if should_clear_lease is None:
@@ -308,6 +312,90 @@ class RunLifecycleAuthority:
             lifecycle_revision=run.lifecycle_revision,
             claimable=claimable,
         )
+
+    @staticmethod
+    async def _finalize_tool_bindings(
+        session: AsyncSession,
+        context: TenantContext,
+        run: Run,
+        target: RunStatus,
+        now: datetime,
+    ) -> None:
+        """Invalidate frozen bindings inside the authoritative Run transition."""
+
+        snapshot = run.tool_binding_snapshot
+        if (
+            not isinstance(snapshot, dict)
+            or not isinstance(snapshot.get("bindings"), list)
+            or not snapshot["bindings"]
+        ):
+            return
+        bindings = list(
+            await session.scalars(
+                select(RunToolBinding)
+                .where(
+                    RunToolBinding.tenant_id == run.tenant_id,
+                    RunToolBinding.run_id == run.id,
+                    RunToolBinding.status.not_in(
+                        {
+                            RunToolBindingStatus.EXPIRED.value,
+                            RunToolBindingStatus.REVOKED.value,
+                            RunToolBindingStatus.COMPLETED.value,
+                        }
+                    ),
+                )
+                .with_for_update()
+            )
+        )
+        final_status = {
+            RunStatus.CANCELLED: RunToolBindingStatus.REVOKED,
+            RunStatus.TIMED_OUT: RunToolBindingStatus.EXPIRED,
+        }.get(target, RunToolBindingStatus.COMPLETED)
+        for binding in bindings:
+            had_active_request = binding.active_provider_request_id is not None
+            binding.status = final_status.value
+            binding.completed_at = now
+            if had_active_request and target in {RunStatus.CANCELLED, RunStatus.TIMED_OUT}:
+                binding.cancel_status = ToolProviderCancelStatus.REQUESTED.value
+            binding.revision += 1
+            payload = {
+                "run_id": str(run.id),
+                "provider_id": str(binding.provider_id),
+                "binding_id": str(binding.id),
+                "binding_digest": binding.binding_digest,
+                "tool_name": binding.tool_name,
+                "tool_version": binding.tool_version,
+                "status": binding.status,
+                "cancel_status": binding.cancel_status,
+                "run_status": target.value,
+            }
+            session.add_all(
+                [
+                    Event(
+                        tenant_id=run.tenant_id,
+                        event_type=(
+                            "tool.provider.expired"
+                            if final_status is RunToolBindingStatus.EXPIRED
+                            else "tool.binding.finalized"
+                        ),
+                        aggregate_type="run_tool_binding",
+                        aggregate_id=binding.id,
+                        run_id=run.id,
+                        actor_id=context.actor_id,
+                        payload=payload,
+                        correlation_id=context.correlation_id,
+                    ),
+                    AuditRecord(
+                        tenant_id=run.tenant_id,
+                        action="tool.binding.finalize",
+                        resource_type="run_tool_binding",
+                        resource_id=binding.id,
+                        actor_id=context.actor_id,
+                        details=payload,
+                        correlation_id=context.correlation_id,
+                    ),
+                ]
+            )
 
     @staticmethod
     def clear_lease(run: Run) -> None:

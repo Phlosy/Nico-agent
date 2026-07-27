@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     tool_approval_required_risks: list[Literal["medium", "high"]] = ["medium", "high"]
     tool_approval_locked_risks: list[Literal["medium", "high"]] = []
     tool_approval_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
+    tool_provider_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    tool_provider_read_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
+    tool_provider_cancel_max_concurrency: int = Field(default=16, ge=1, le=128)
+    tool_provider_max_response_bytes: int = Field(default=1_048_576, ge=1024, le=10_485_760)
+    tool_provider_max_binding_lifetime_seconds: int = Field(default=86_400, ge=60, le=604_800)
+    tool_provider_allow_http_loopback: bool = False
+    tool_provider_trusted_private_hosts: list[str] = []
+    tool_provider_allow_http_trusted_hosts: bool = False
     database_tool_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     database_tool_statement_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     database_tool_max_rows: int = Field(default=500, ge=1, le=5_000)

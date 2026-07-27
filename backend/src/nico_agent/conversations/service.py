@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nico_agent.config import Settings
 from nico_agent.conversations.contracts import (
     DEFAULT_CONVERSATION_BUDGETS,
     ConversationCompact,
@@ -53,6 +54,7 @@ from nico_agent.domain.states import (
     conversation_auto_approved_risks,
     require_revision,
 )
+from nico_agent.tool_providers.service import ToolProviderService
 
 _TERMINAL_RUN_STATUSES = {
     RunStatus.COMPLETED.value,
@@ -69,11 +71,18 @@ class ConversationService:
         database: Database,
         *,
         approval_locked_risks: frozenset[str] = frozenset(),
+        settings: Settings | None = None,
+        tool_provider_service: ToolProviderService | None = None,
     ) -> None:
         if not approval_locked_risks <= {"medium", "high"}:
             raise ValueError("approval_locked_risks may contain only medium and high")
         self.database = database
         self.approval_locked_risks = approval_locked_risks
+        self.coordination_service = CoordinationService(
+            database,
+            settings=settings,
+            tool_provider_service=tool_provider_service,
+        )
 
     async def create(self, context: TenantContext, command: ConversationCreate) -> Conversation:
         async with self.database.tenant_transaction(context) as session:
@@ -829,7 +838,7 @@ class ConversationService:
         async with self.database.tenant_transaction(context) as session:
             turn = await self._turn(session, context, turn_id)
             run_id = turn.run_id
-        await CoordinationService(self.database).cancel_tree(
+        await self.coordination_service.cancel_tree(
             context,
             run_id,
             expected_revision=expected_run_revision,

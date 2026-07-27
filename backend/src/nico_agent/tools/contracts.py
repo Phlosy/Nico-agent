@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from copy import deepcopy
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
@@ -145,6 +146,18 @@ class ToolExecutionContext(BaseModel):
     tenant_id: UUID
     run_id: UUID
     run_step_id: UUID
+    tool_call_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
+    agent_id: UUID | None = None
+    agent_version_id: UUID | None = None
+    provider_id: UUID | None = None
+    run_tool_binding_id: UUID | None = None
+    provider_request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+    attempt: int | None = Field(default=None, ge=1)
+    deadline: datetime | None = None
+    trace_id: str | None = Field(default=None, min_length=1, max_length=200)
     actor_id: str = Field(min_length=1, max_length=200)
     correlation_id: UUID
     tool_config: dict[str, Any] = Field(default_factory=dict)

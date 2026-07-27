@@ -25,7 +25,7 @@ def get_service(request: Request) -> CoordinationService:
     database: Database | None = request.app.state.database
     if database is None:
         raise DomainError("DATABASE_UNAVAILABLE", "the coordination database is unavailable")
-    return CoordinationService(database)
+    return CoordinationService(database, settings=request.app.state.settings)
 
 
 Service = Annotated[CoordinationService, Depends(get_service)]
